@@ -182,6 +182,33 @@ describeIntegration('session manager', () => {
     bob.socket.close();
   }, 60_000);
 
+  it('does not lose a second message sent before the peer has replied', async () => {
+    // Regression, and the failure a user would hit first: message 1 opens the
+    // session and goes to the contact inbox; message 2 used to go to the
+    // per-session mailbox, which the recipient has not registered yet, so the
+    // server refused it and the message vanished.
+    //
+    // Bob's socket is deliberately not connected while Alice sends, so there
+    // is no chance he processes message 1 in between.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    bob.socket.close();
+    await new Promise((r) => setTimeout(r, 200));
+
+    await alice.manager.sendMessage(bob.accountId, 'bir');
+    await alice.manager.sendMessage(bob.accountId, 'iki');
+    await alice.manager.sendMessage(bob.accountId, 'üç');
+
+    bob.socket.connect();
+    await waitFor(() => bob.received.length === 3, 15_000);
+
+    expect(bob.received).toEqual(['bir', 'iki', 'üç']);
+    expect(bob.errors).toEqual([]);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
   it('records the conversation and message on both sides', async () => {
     const alice = await bringUp('Alice');
     const bob = await bringUp('Bob');

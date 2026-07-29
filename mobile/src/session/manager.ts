@@ -15,8 +15,10 @@ import { TildraClient } from '../api/client';
 import { IncomingEnvelope } from '../api/socket';
 import {
   KeyPair,
+  concat,
   equal,
   fromUtf8,
+  hash,
   toBase64,
   utf8,
   wipe,
@@ -82,6 +84,17 @@ export class IdentityChangedError extends Error {
 }
 
 export class NoDevicesError extends Error {}
+
+/**
+ * Identify a handshake.
+ *
+ * The ephemeral key and KEM ciphertext are unique per handshake, so hashing
+ * them is enough to tell "the sender re-sent the init we already processed"
+ * from "this is a genuinely new session".
+ */
+function initFingerprint(init: SessionInit): string {
+  return toBase64(hash(concat(init.ephemeralKey, init.kemCiphertext)));
+}
 
 export interface ManagerEvents {
   onMessage?: (message: Message, conversation: Conversation) => void;
@@ -250,16 +263,24 @@ export class SessionManager {
     text: string,
   ): Promise<void> {
     let session = await this.store.loadSession(accountId, deviceId);
-    let init: SessionInit | undefined;
+    let pendingInit: SessionInit | undefined;
 
     if (!session) {
       const established = await this.establishSession(accountId, deviceId, deviceIdentityKey);
       session = established.session;
-      init = established.init;
+      pendingInit = established.init;
     } else {
       // A key that changed since the session was created is the attack this
       // check exists for.
       await this.assertIdentityUnchanged(accountId, deviceIdentityKey);
+      if (!session.confirmed) {
+        // The peer has not replied yet, so we have no evidence they processed
+        // our handshake. Keep attaching the init and keep using the contact
+        // inbox — the per-session mailbox is one they have not registered, and
+        // the server refuses delivery to an unknown mailbox. Dropping the init
+        // here is what made a quick second message to a new contact vanish.
+        pendingInit = session.pendingInit;
+      }
     }
 
     const ratchet: RatchetState = session.ratchet;
@@ -268,22 +289,19 @@ export class SessionManager {
       senderAccountId: this.accountId,
       senderDeviceId: this.deviceId,
       senderIdentityKey: this.identity.publicKey,
-      sessionInit: init,
+      sessionInit: pendingInit,
       message,
     });
 
-    // The first message goes to the recipient's stable contact inbox, because
-    // the per-session mailbox is derived from a secret they cannot compute
-    // until they have processed this very message.
-    const mailbox = init
-      ? contactInbox(deviceIdentityKey)
-      : deliveryMailbox(
+    const mailbox = session.confirmed
+      ? deliveryMailbox(
           deriveMailboxSecret(session.mailboxSecret, accountId, deviceId),
           new Date(this.now()),
-        );
+        )
+      : contactInbox(deviceIdentityKey);
 
     await this.client.sendEnvelope(mailbox, envelope);
-    await this.store.saveSession({ ...session, ratchet });
+    await this.store.saveSession({ ...session, ratchet, pendingInit });
   }
 
   private async establishSession(
@@ -308,6 +326,8 @@ export class SessionManager {
       ratchet: established.ratchet,
       associatedData: established.associatedData,
       mailboxSecret: established.sessionSecret,
+      confirmed: false,
+      pendingInit: established.init,
     };
     await this.store.saveSession(session);
     await this.ensureConversation(accountId, bundle.identityKey);
@@ -375,17 +395,28 @@ export class SessionManager {
   async receiveEnvelope(envelope: IncomingEnvelope): Promise<Message | null> {
     const content = openEnvelope(this.identity, envelope.ciphertext);
 
-    let session = await this.store.loadSession(content.senderAccountId, content.senderDeviceId);
+    const session = await this.store.loadSession(content.senderAccountId, content.senderDeviceId);
+    const fingerprint = content.sessionInit && initFingerprint(content.sessionInit);
+
     let associatedData: Uint8Array;
     let ratchet: RatchetState;
     let mailboxSecret: Uint8Array;
+    let newSession = false;
 
-    if (content.sessionInit) {
+    if (content.sessionInit && session && session.initFingerprint === fingerprint) {
+      // A repeat of the handshake we already accepted: the sender had not yet
+      // seen a reply and re-attached it. Re-running acceptSession would fail,
+      // because the one-time prekeys it names are gone — and it would throw
+      // away a session that is working.
+      ratchet = session.ratchet;
+      associatedData = session.associatedData;
+      mailboxSecret = session.mailboxSecret;
+    } else if (content.sessionInit) {
       const accepted = acceptSession(this.preKeys, content.sessionInit);
       ratchet = accepted.ratchet;
       associatedData = accepted.associatedData;
       mailboxSecret = accepted.sessionSecret;
-      // Consumed prekeys must not be reused, and the pool needs topping up.
+      newSession = true;
       await this.topUpPreKeysIfLow();
     } else if (session) {
       ratchet = session.ratchet;
@@ -413,18 +444,25 @@ export class SessionManager {
     };
 
     await this.store.insertMessage(message);
+    // Receiving over a session is the only proof the peer processed our
+    // handshake, so this is where a session becomes confirmed — and where the
+    // pending init is dropped.
     await this.store.saveSession({
       accountId: content.senderAccountId,
       deviceId: content.senderDeviceId,
       ratchet,
       associatedData,
       mailboxSecret,
+      confirmed: true,
+      pendingInit: undefined,
+      initFingerprint: fingerprint ?? session?.initFingerprint,
     });
     await this.rememberActiveAccount(content.senderAccountId);
 
-    // A session that was just created needs its mailboxes published before
-    // the peer's next message, which will go to the rotating address.
-    if (content.sessionInit) {
+    // A session that was just created needs its mailboxes published, and its
+    // socket subscribed, before the peer's next message goes to the rotating
+    // address.
+    if (newSession) {
       await this.publishMailboxes();
     }
 

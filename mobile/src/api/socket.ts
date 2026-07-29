@@ -37,6 +37,8 @@ export class TildraSocket {
   private readonly pendingAcks = new Map<string, Set<string>>();
   /** Mailboxes added since connect, replayed after a reconnect. */
   private readonly subscribed = new Set<string>();
+  /** Tail of the envelope-processing chain; see onmessage. */
+  private queue: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly baseUrl: string,
@@ -78,10 +80,21 @@ export class TildraSocket {
     };
 
     ws.onmessage = (event: WebSocketMessageEvent) => {
-      void this.handleMessage(event.data);
+      // Serialized, not fired in parallel. Each envelope advances a ratchet
+      // and writes the result back, so two handlers running concurrently read
+      // the same state and one of them overwrites the other — the message is
+      // lost and the session can end up wedged. Ordering also matters on its
+      // own: the ratchet expects the chain in sequence.
+      this.queue = this.queue.then(() => this.handleMessage(event.data)).catch((err) => {
+        this.handlers.onError?.(err instanceof Error ? err : new Error(String(err)));
+      });
     };
 
     ws.onerror = () => {
+      // A socket we closed on purpose still fires this, and reporting it would
+      // surface a spurious error every time the user logs out or the app is
+      // backgrounded.
+      if (this.closedByUs) return;
       // The error event carries nothing useful in React Native; onclose
       // follows immediately and carries the reason.
       this.handlers.onError?.(new Error('Tildra: socket error'));

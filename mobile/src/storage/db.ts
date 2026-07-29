@@ -15,6 +15,7 @@ import * as SQLite from 'expo-sqlite';
 
 import { Vault } from './vault';
 import { fromBase64, toBase64 } from '../crypto/primitives';
+import { SessionInit } from '../crypto/pqxdh';
 import {
   RatchetState,
   SerializedRatchet,
@@ -51,6 +52,27 @@ export interface StoredSession {
   ratchet: RatchetState;
   associatedData: Uint8Array;
   mailboxSecret: Uint8Array;
+  /**
+   * True once we have received a message over this session, which is the only
+   * proof that the peer processed our handshake.
+   *
+   * Until then the initiator keeps addressing the stable contact inbox and
+   * keeps attaching the session init — the peer has not yet registered the
+   * per-session mailbox, so anything sent there is refused and lost.
+   */
+  confirmed: boolean;
+  /**
+   * Initiator side: the handshake header to keep attaching until the session
+   * is confirmed, because the peer may not have received the first copy.
+   */
+  pendingInit?: SessionInit;
+  /**
+   * Responder side: identifies the handshake this session came from, so a
+   * repeated init from the same handshake is recognised rather than
+   * re-accepted. Re-accepting would fail — the one-time prekeys it names are
+   * already consumed — and would discard a working session.
+   */
+  initFingerprint?: string;
 }
 
 interface ConversationRow {
@@ -91,6 +113,17 @@ interface SessionBlob {
   ratchet: SerializedRatchet;
   associatedData: string;
   mailboxSecret: string;
+  confirmed: boolean;
+  initFingerprint?: string;
+  pendingInit?: {
+    identityKey: string;
+    ephemeralKey: string;
+    kemCiphertext: string;
+    signedPreKeyId: number;
+    pqPreKeyId: number;
+    oneTimePreKeyId?: number;
+    usedOneTimePq: boolean;
+  };
 }
 
 const SCHEMA = `
@@ -332,6 +365,14 @@ export class Database {
       ratchet: serializeRatchet(session.ratchet),
       associatedData: toBase64(session.associatedData),
       mailboxSecret: toBase64(session.mailboxSecret),
+      confirmed: session.confirmed,
+      initFingerprint: session.initFingerprint,
+      pendingInit: session.pendingInit && {
+        ...session.pendingInit,
+        identityKey: toBase64(session.pendingInit.identityKey),
+        ephemeralKey: toBase64(session.pendingInit.ephemeralKey),
+        kemCiphertext: toBase64(session.pendingInit.kemCiphertext),
+      },
     };
     await this.db.runAsync(
       `INSERT INTO sessions (id, account_ref, state_blob, updated_at) VALUES (?, ?, ?, ?)
@@ -363,6 +404,14 @@ export class Database {
       ratchet: deserializeRatchet(blob.ratchet),
       associatedData: fromBase64(blob.associatedData),
       mailboxSecret: fromBase64(blob.mailboxSecret),
+      confirmed: blob.confirmed ?? false,
+      initFingerprint: blob.initFingerprint,
+      pendingInit: blob.pendingInit && {
+        ...blob.pendingInit,
+        identityKey: fromBase64(blob.pendingInit.identityKey),
+        ephemeralKey: fromBase64(blob.pendingInit.ephemeralKey),
+        kemCiphertext: fromBase64(blob.pendingInit.kemCiphertext),
+      },
     };
   }
 
