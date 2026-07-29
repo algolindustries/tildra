@@ -19,6 +19,28 @@ jobs:
     defaults:
       run:
         working-directory: server
+
+    # The store conformance suite runs against both implementations. Without a
+    # real database the Postgres half skips itself, and the two would be free
+    # to drift apart in exactly the environment that matters.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tildra
+          POSTGRES_PASSWORD: tildra
+          POSTGRES_DB: tildra
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tildra"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TILDRA_TEST_DATABASE_URL: postgres://tildra:tildra@localhost:5432/tildra?sslmode=disable
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

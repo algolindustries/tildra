@@ -21,6 +21,7 @@ import (
 	"github.com/tildra/tildra/server/internal/gateway"
 	"github.com/tildra/tildra/server/internal/store"
 	"github.com/tildra/tildra/server/internal/store/memory"
+	"github.com/tildra/tildra/server/internal/store/postgres"
 )
 
 func main() {
@@ -32,14 +33,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	var st store.Store
 	if cfg.DatabaseURL == "" {
 		log.Warn("TILDRA_DATABASE_URL is unset — using the in-memory store. " +
 			"Accounts and messages will be lost on restart. Do not run this in production.")
 		st = memory.New()
 	} else {
-		log.Error("postgres store is not wired up yet; set TILDRA_DATABASE_URL='' to use memory")
-		os.Exit(1)
+		openCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		pg, err := postgres.Open(openCtx, cfg.DatabaseURL)
+		cancel()
+		if err != nil {
+			log.Error("postgres", "err", err)
+			os.Exit(1)
+		}
+		log.Info("connected to postgres, migrations applied")
+		st = pg
 	}
 	defer st.Close()
 
@@ -55,9 +66,6 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	go sweepLoop(ctx, st, cfg, log)
 
