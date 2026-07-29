@@ -68,6 +68,8 @@ export interface AppState {
   openConversation: (accountId: string) => Promise<void>;
   closeConversation: () => void;
   send: (text: string) => Promise<void>;
+  sendPhoto: () => Promise<void>;
+  loadAttachment: (messageId: string) => Promise<Uint8Array | null>;
   startConversation: (input: string) => Promise<string>;
   markVerified: (accountId: string) => Promise<void>;
   claimHandle: (handle: string) => Promise<void>;
@@ -246,6 +248,50 @@ export const useApp = create<AppState>((set, get) => ({
       // Reload either way: a failed send still leaves a message row, marked
       // failed, so the user can see what did not go out.
       await get().openConversation(accountId);
+    }
+  },
+
+  /**
+   * Pick a photo and send it to the open conversation.
+   *
+   * Reuses the avatar pipeline's downscale-and-compress step, with a larger
+   * budget: a photo message should look like a photo, while an avatar only
+   * ever renders at 88pt.
+   */
+  async sendPhoto() {
+    const accountId = get().activeAccountId;
+    if (!runtime?.manager || !accountId) return;
+
+    try {
+      const { pickPhoto } = await import('../media/photo');
+      const picked = await pickPhoto();
+      if (!picked) return;
+
+      await runtime.manager.sendAttachment(
+        accountId,
+        {
+          bytes: picked.bytes,
+          mimeType: picked.mimeType,
+          width: picked.width,
+          height: picked.height,
+        },
+        '',
+      );
+    } catch (err) {
+      set({ error: describeError(err, get().t) });
+    } finally {
+      await get().openConversation(accountId);
+    }
+  },
+
+  async loadAttachment(messageId) {
+    const message = get().messages.find((m) => m.id === messageId);
+    if (!runtime?.manager || !message?.attachment) return null;
+    try {
+      return await runtime.manager.fetchAttachment(message.attachment);
+    } catch (err) {
+      set({ error: describeError(err, get().t) });
+      return null;
     }
   },
 

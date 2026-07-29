@@ -37,6 +37,7 @@ import {
   Content,
   ContentType,
   Profile,
+  attachmentContent,
   decodeContent,
   decodeProfile,
   encodeContent,
@@ -44,6 +45,13 @@ import {
   senderKeyContent,
   textContent,
 } from '../crypto/content';
+import {
+  AttachmentRef,
+  decryptAttachment,
+  deserializeAttachmentRef,
+  encryptAttachment,
+  serializeAttachmentRef,
+} from '../crypto/attachment';
 import {
   ReceiverKeyState,
   SenderKeyState,
@@ -669,10 +677,109 @@ export class SessionManager {
       createdAt: Date.parse(envelope.serverTs) || this.now(),
       state: 'delivered',
     };
+
+    if (decoded.type === ContentType.Attachment) {
+      // A malformed reference must not take down the message: the caption is
+      // still worth showing, and the file can be reported as unavailable.
+      try {
+        message.attachment = deserializeAttachmentRef(JSON.parse(fromUtf8(decoded.payload!)));
+      } catch (err) {
+        this.events.onError?.(err instanceof Error ? err : new Error(String(err)));
+      }
+    }
+
     await this.store.insertMessage(message);
 
     this.events.onMessage?.(message, conversation);
     return message;
+  }
+
+  // -------------------------------------------------------------------------
+  // Attachments
+  // -------------------------------------------------------------------------
+
+  /**
+   * Encrypt a file, upload the ciphertext, and send the reference.
+   *
+   * The upload happens once no matter how many devices the recipient has: the
+   * blob is keyed independently of any session, and every device gets the same
+   * reference through its own encrypted message. The server holds a blob it
+   * cannot decrypt and has no record of who uploaded it.
+   */
+  async sendAttachment(
+    accountId: string,
+    file: { bytes: Uint8Array; mimeType: string; fileName?: string; width?: number; height?: number },
+    caption = '',
+  ): Promise<Message> {
+    const conversation = await this.store.getConversation(accountId);
+    if (conversation?.identityChanged) {
+      throw new IdentityChangedError(accountId, conversation.identityKey, conversation.identityKey);
+    }
+
+    const devices = await this.client.listDevices(accountId);
+    if (devices.length === 0) {
+      throw new NoDevicesError(`Tildra: ${accountId} has no registered devices`);
+    }
+    const target = await this.ensureConversation(accountId, devices[0].identityKey);
+
+    const { ciphertext, key } = encryptAttachment(file.bytes);
+    const uploaded = await this.client.uploadAttachment(ciphertext);
+    const ref: AttachmentRef = {
+      ...key,
+      id: uploaded.id,
+      mimeType: file.mimeType,
+      fileName: file.fileName,
+      width: file.width,
+      height: file.height,
+    };
+
+    const message: Message = {
+      id: this.randomId(),
+      conversationId: target.id,
+      text: caption,
+      outgoing: true,
+      createdAt: this.now(),
+      state: 'pending',
+      attachment: ref,
+    };
+    await this.store.insertMessage(message);
+
+    const payload = utf8(JSON.stringify(serializeAttachmentRef(ref)));
+    let delivered = 0;
+    for (const device of devices) {
+      try {
+        await this.sendToDevice(
+          accountId,
+          device.deviceId,
+          device.identityKey,
+          attachmentContent(payload, caption),
+        );
+        delivered += 1;
+      } catch (err) {
+        if (err instanceof IdentityChangedError) {
+          await this.store.setMessageState(message.id, 'failed');
+          throw err;
+        }
+        this.events.onError?.(err instanceof Error ? err : new Error(String(err)));
+      }
+    }
+
+    const state: MessageState = delivered > 0 ? 'sent' : 'failed';
+    await this.store.setMessageState(message.id, state);
+    await this.rememberActiveAccount(accountId);
+    return { ...message, state };
+  }
+
+  /**
+   * Fetch and decrypt an attachment a message referenced.
+   *
+   * Kept separate from receiving the message so a large download never blocks
+   * message delivery, and so a failed or cancelled download can be retried
+   * without the message being lost.
+   */
+  async fetchAttachment(ref: AttachmentRef): Promise<Uint8Array> {
+    const ciphertext = await this.client.downloadAttachment(ref.id);
+    return decryptAttachment(ciphertext, ref);
   }
 
   // -------------------------------------------------------------------------

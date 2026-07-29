@@ -21,6 +21,8 @@ export enum ContentType {
   GroupRotation = 2,
   /** Who I am: display name and picture, sent to people I talk to. */
   Profile = 3,
+  /** A file: caption plus the reference needed to fetch and decrypt it. */
+  Attachment = 4,
 }
 
 export interface Content {
@@ -87,6 +89,10 @@ export function decodeContent(data: Uint8Array): Content {
       return { type, groupId };
     case ContentType.Profile:
       return { type, payload };
+    case ContentType.Attachment:
+      // The caption rides in `text` so a client that renders the message has
+      // something to show even before the blob is fetched.
+      return { type, text: groupId, payload };
     default:
       // A newer client sending a type we do not understand must not be
       // rendered as anything. Refusing is the only safe reading.
@@ -104,6 +110,17 @@ export function senderKeyContent(groupId: string, payload: Uint8Array): Content 
 
 export function rotationContent(groupId: string): Content {
   return { type: ContentType.GroupRotation, groupId };
+}
+
+/**
+ * A file message.
+ *
+ * The caption reuses the group-id slot in the frame, which is otherwise unused
+ * for this type — the wire format stays three fields wide rather than growing
+ * a fourth that is empty for every other content type.
+ */
+export function attachmentContent(reference: Uint8Array, caption: string): Content {
+  return { type: ContentType.Attachment, groupId: caption, payload: reference };
 }
 
 export function profileContent(profile: Profile): Content {

@@ -28,6 +28,12 @@ import {
 } from '../crypto/group';
 import type { StoredGroup } from '../session/manager';
 import {
+  AttachmentRef,
+  SerializedAttachmentRef,
+  deserializeAttachmentRef,
+  serializeAttachmentRef,
+} from '../crypto/attachment';
+import {
   RatchetState,
   SerializedRatchet,
   deserializeRatchet,
@@ -57,10 +63,13 @@ export interface Conversation {
 export interface Message {
   id: string;
   conversationId: string;
+  /** Caption for an attachment, or the message body. */
   text: string;
   outgoing: boolean;
   createdAt: number;
   state: MessageState;
+  /** Present when the message carries a file. */
+  attachment?: AttachmentRef;
 }
 
 export interface StoredSession {
@@ -349,7 +358,10 @@ export class Database {
         [
           message.id,
           message.conversationId,
-          this.vault.encryptJson('message', message.id, { text: message.text }),
+          this.vault.encryptJson('message', message.id, {
+          text: message.text,
+          attachment: message.attachment ? serializeAttachmentRef(message.attachment) : undefined,
+        }),
           message.outgoing ? 1 : 0,
           message.createdAt,
           message.state,
@@ -379,14 +391,21 @@ export class Database {
         );
 
     return rows
-      .map((row) => ({
-        id: row.id,
-        conversationId: row.conversation_id,
-        text: this.vault.decryptJson<{ text: string }>('message', row.id, row.body_blob).text,
-        outgoing: row.outgoing === 1,
-        createdAt: row.created_at,
-        state: row.state,
-      }))
+      .map((row) => {
+        const body = this.vault.decryptJson<{
+          text: string;
+          attachment?: SerializedAttachmentRef;
+        }>('message', row.id, row.body_blob);
+        return {
+          id: row.id,
+          conversationId: row.conversation_id,
+          text: body.text,
+          attachment: body.attachment ? deserializeAttachmentRef(body.attachment) : undefined,
+          outgoing: row.outgoing === 1,
+          createdAt: row.created_at,
+          state: row.state,
+        };
+      })
       .reverse();
   }
 

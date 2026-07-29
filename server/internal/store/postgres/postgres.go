@@ -498,6 +498,36 @@ func (s *Store) GetBackup(ctx context.Context, accountID string) ([]byte, error)
 }
 
 // ---------------------------------------------------------------------------
+// Attachments
+// ---------------------------------------------------------------------------
+
+func (s *Store) PutAttachment(ctx context.Context, a *model.Attachment) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO attachments (id, ciphertext, size_bytes, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5)`,
+		a.ID, a.Ciphertext, a.Size, a.CreatedAt, a.ExpiresAt)
+	if isUniqueViolation(err) {
+		return store.ErrAlreadyExists
+	}
+	return err
+}
+
+func (s *Store) GetAttachment(ctx context.Context, id string) (*model.Attachment, error) {
+	var a model.Attachment
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, ciphertext, size_bytes, created_at, expires_at
+		FROM attachments WHERE id = $1 AND expires_at > now()`, id).
+		Scan(&a.ID, &a.Ciphertext, &a.Size, &a.CreatedAt, &a.ExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// ---------------------------------------------------------------------------
 // Auth tokens
 // ---------------------------------------------------------------------------
 
@@ -544,6 +574,9 @@ func (s *Store) Sweep(ctx context.Context, now time.Time, envelopeTTL time.Durat
 		return destroyed, err
 	}
 	if _, err := s.pool.Exec(ctx, `DELETE FROM auth_tokens WHERE expires_at < $1`, now); err != nil {
+		return destroyed, err
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM attachments WHERE expires_at < $1`, now); err != nil {
 		return destroyed, err
 	}
 	return destroyed, nil

@@ -56,14 +56,18 @@ type Store interface {
 	PutBackup(ctx context.Context, accountID string, blob []byte) error
 	GetBackup(ctx context.Context, accountID string) ([]byte, error)
 
+	// Attachments. Ciphertext only; no owner is recorded, on purpose.
+	PutAttachment(ctx context.Context, a *model.Attachment) error
+	GetAttachment(ctx context.Context, id string) (*model.Attachment, error)
+
 	// Auth tokens. The stored value is a hash; the plaintext token never
 	// touches disk.
 	PutAuthToken(ctx context.Context, tokenHash []byte, accountID, deviceID string, expires time.Time) error
 	LookupAuthToken(ctx context.Context, tokenHash []byte) (accountID, deviceID string, err error)
 	RevokeAuthToken(ctx context.Context, tokenHash []byte) error
 
-	// Housekeeping: drop expired envelopes, mailboxes and tokens. Called on a
-	// timer; returns how many envelopes were destroyed.
+	// Housekeeping: drop expired envelopes, mailboxes, tokens and attachments.
+	// Called on a timer; returns how many envelopes were destroyed.
 	Sweep(ctx context.Context, now time.Time, envelopeTTL time.Duration) (int, error)
 
 	Close() error

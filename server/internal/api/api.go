@@ -8,9 +8,11 @@ package api
 import (
 	"crypto/ed25519"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +60,8 @@ func (s *Server) Handler() http.Handler {
 	authed.HandleFunc("POST /v1/messages", s.sendMessage)
 	authed.HandleFunc("PUT /v1/backup", s.putBackup)
 	authed.HandleFunc("GET /v1/backup", s.getBackup)
+	authed.HandleFunc("POST /v1/attachments", s.uploadAttachment)
+	authed.HandleFunc("GET /v1/attachments/{id}", s.downloadAttachment)
 	authed.HandleFunc("POST /v1/auth/logout", s.logout)
 	mux.Handle("/v1/", s.auth.Middleware(authed))
 
@@ -414,6 +418,58 @@ func (s *Server) getBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond(w, http.StatusOK, map[string][]byte{"blob": blob})
+}
+
+// ---------- attachments ----------
+
+// uploadAttachment stores an encrypted blob and returns an ID.
+//
+// The body is raw ciphertext, not JSON: base64 would inflate a photo by a
+// third for no benefit, since the server treats the bytes as opaque either
+// way. No owner is recorded — see the note on model.Attachment.
+func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxAttachmentBytes)
+	ciphertext, err := io.ReadAll(r.Body)
+	if err != nil {
+		fail(w, http.StatusRequestEntityTooLarge, "attachment exceeds the size limit")
+		return
+	}
+	if len(ciphertext) == 0 {
+		fail(w, http.StatusBadRequest, "attachment is empty")
+		return
+	}
+
+	now := time.Now().UTC()
+	a := &model.Attachment{
+		ID:         id.New(),
+		Ciphertext: ciphertext,
+		Size:       int64(len(ciphertext)),
+		CreatedAt:  now,
+		ExpiresAt:  now.Add(s.cfg.AttachmentTTL),
+	}
+	if err := s.store.PutAttachment(r.Context(), a); err != nil {
+		s.fail500(w, "put attachment", err)
+		return
+	}
+	respond(w, http.StatusCreated, map[string]any{
+		"id":        a.ID,
+		"size":      a.Size,
+		"expiresAt": a.ExpiresAt,
+	})
+}
+
+func (s *Server) downloadAttachment(w http.ResponseWriter, r *http.Request) {
+	a, err := s.store.GetAttachment(r.Context(), r.PathValue("id"))
+	if err != nil {
+		// Expired and never-existed are the same answer on purpose: telling
+		// them apart would confirm that a given ID was once real.
+		fail(w, http.StatusNotFound, "no such attachment")
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", strconv.FormatInt(a.Size, 10))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(a.Ciphertext)
 }
 
 // ---------- websocket ----------

@@ -74,3 +74,20 @@ type Mailbox struct {
 	DeviceID  string    `json:"deviceId"`
 	ExpiresAt time.Time `json:"expiresAt"`
 }
+
+// Attachment is an encrypted blob held for retrieval.
+//
+// The server stores ciphertext and a size, and nothing else. It does not know
+// the type of the file, its name, who uploaded it, or who will fetch it — the
+// decryption key travels inside the message that references the attachment,
+// so possession of the blob without that message is useless.
+//
+// Deliberately not linked to an account: an uploader-to-blob mapping would
+// recreate exactly the metadata sealed sender exists to remove.
+type Attachment struct {
+	ID         string    `json:"id"`
+	Ciphertext []byte    `json:"-"`
+	Size       int64     `json:"size"`
+	CreatedAt  time.Time `json:"createdAt"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+}

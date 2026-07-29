@@ -37,6 +37,7 @@ func Run(t *testing.T, newStore Factory) {
 		{"Envelopes", testEnvelopes},
 		{"AckIsScopedToMailbox", testAckIsScopedToMailbox},
 		{"Backups", testBackups},
+		{"Attachments", testAttachments},
 		{"AuthTokens", testAuthTokens},
 		{"Sweep", testSweep},
 	}
@@ -448,6 +449,56 @@ func testBackups(t *testing.T, s store.Store) {
 	}
 }
 
+func testAttachments(t *testing.T, s store.Store) {
+	now := time.Now().UTC()
+
+	if _, err := s.GetAttachment(ctx(), "nope"); err != store.ErrNotFound {
+		t.Errorf("unknown attachment: got %v, want ErrNotFound", err)
+	}
+
+	ciphertext := bytesOf(4096, 0xAB)
+	a := &model.Attachment{
+		ID:         "att-1",
+		Ciphertext: ciphertext,
+		Size:       int64(len(ciphertext)),
+		CreatedAt:  now,
+		ExpiresAt:  now.Add(time.Hour),
+	}
+	if err := s.PutAttachment(ctx(), a); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	got, err := s.GetAttachment(ctx(), "att-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got.Ciphertext) != len(ciphertext) || got.Ciphertext[0] != 0xAB {
+		t.Error("ciphertext was altered in storage")
+	}
+	if got.Size != int64(len(ciphertext)) {
+		t.Errorf("size: got %d, want %d", got.Size, len(ciphertext))
+	}
+
+	// IDs are server-generated and unique; a collision would let one upload
+	// overwrite another's blob.
+	if err := s.PutAttachment(ctx(), a); err != store.ErrAlreadyExists {
+		t.Errorf("duplicate id: got %v, want ErrAlreadyExists", err)
+	}
+
+	// An expired blob is gone as far as callers are concerned, even before the
+	// sweeper runs.
+	expired := &model.Attachment{
+		ID: "att-old", Ciphertext: bytesOf(16, 1), Size: 16,
+		CreatedAt: now.Add(-48 * time.Hour), ExpiresAt: now.Add(-time.Hour),
+	}
+	if err := s.PutAttachment(ctx(), expired); err != nil {
+		t.Fatalf("put expired: %v", err)
+	}
+	if _, err := s.GetAttachment(ctx(), "att-old"); err != store.ErrNotFound {
+		t.Errorf("expired attachment: got %v, want ErrNotFound", err)
+	}
+}
+
 func testAuthTokens(t *testing.T, s store.Store) {
 	seed(t, s, "ACCOUNT1", "DEVICE1")
 	hash := bytesOf(32, 7)
@@ -494,6 +545,14 @@ func testSweep(t *testing.T, s store.Store) {
 	_ = s.Enqueue(ctx(), &model.Envelope{ID: "old", Mailbox: "mb_live", Ciphertext: []byte("stale"), ServerTS: now.Add(-48 * time.Hour)})
 	_ = s.Enqueue(ctx(), &model.Envelope{ID: "new", Mailbox: "mb_live", Ciphertext: []byte("recent"), ServerTS: now})
 	_ = s.PutAuthToken(ctx(), bytesOf(32, 9), "ACCOUNT1", "DEVICE1", now.Add(-time.Hour))
+	_ = s.PutAttachment(ctx(), &model.Attachment{
+		ID: "att-live", Ciphertext: bytesOf(8, 1), Size: 8,
+		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+	})
+	_ = s.PutAttachment(ctx(), &model.Attachment{
+		ID: "att-dead", Ciphertext: bytesOf(8, 2), Size: 8,
+		CreatedAt: now.Add(-48 * time.Hour), ExpiresAt: now.Add(-time.Hour),
+	})
 
 	destroyed, err := s.Sweep(ctx(), now, 24*time.Hour)
 	if err != nil {
@@ -515,5 +574,11 @@ func testSweep(t *testing.T, s store.Store) {
 	}
 	if _, _, err := s.LookupAuthToken(ctx(), bytesOf(32, 9)); err != store.ErrNotFound {
 		t.Errorf("expired token survived: %v", err)
+	}
+	if _, err := s.GetAttachment(ctx(), "att-dead"); err != store.ErrNotFound {
+		t.Errorf("expired attachment survived the sweep: %v", err)
+	}
+	if _, err := s.GetAttachment(ctx(), "att-live"); err != nil {
+		t.Errorf("live attachment was swept: %v", err)
 	}
 }

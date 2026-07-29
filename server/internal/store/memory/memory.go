@@ -41,6 +41,7 @@ type Store struct {
 	queue     map[string][]*model.Envelope // mailboxID -> envelopes
 	backups   map[string][]byte
 	tokens    map[string]tokenEntry // hex(tokenHash) -> entry
+	blobs     map[string]*model.Attachment
 }
 
 // New returns an empty in-memory store.
@@ -54,6 +55,7 @@ func New() *Store {
 		queue:     map[string][]*model.Envelope{},
 		backups:   map[string][]byte{},
 		tokens:    map[string]tokenEntry{},
+		blobs:     map[string]*model.Attachment{},
 	}
 }
 
@@ -330,6 +332,30 @@ func (s *Store) GetBackup(_ context.Context, accountID string) ([]byte, error) {
 	return append([]byte(nil), b...), nil
 }
 
+func (s *Store) PutAttachment(_ context.Context, a *model.Attachment) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.blobs[a.ID]; exists {
+		return store.ErrAlreadyExists
+	}
+	cp := *a
+	cp.Ciphertext = append([]byte(nil), a.Ciphertext...)
+	s.blobs[a.ID] = &cp
+	return nil
+}
+
+func (s *Store) GetAttachment(_ context.Context, id string) (*model.Attachment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	a, ok := s.blobs[id]
+	if !ok || time.Now().After(a.ExpiresAt) {
+		return nil, store.ErrNotFound
+	}
+	cp := *a
+	cp.Ciphertext = append([]byte(nil), a.Ciphertext...)
+	return &cp, nil
+}
+
 func (s *Store) PutAuthToken(_ context.Context, tokenHash []byte, accountID, deviceID string, expires time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -385,6 +411,14 @@ func (s *Store) Sweep(_ context.Context, now time.Time, envelopeTTL time.Duratio
 	for h, t := range s.tokens {
 		if now.After(t.expires) {
 			delete(s.tokens, h)
+		}
+	}
+	for id, a := range s.blobs {
+		if now.After(a.ExpiresAt) {
+			for i := range a.Ciphertext {
+				a.Ciphertext[i] = 0
+			}
+			delete(s.blobs, id)
 		}
 	}
 	return destroyed, nil

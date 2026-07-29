@@ -228,6 +228,33 @@ Consequences that are the point of doing it this way:
 This is what makes Tildra non-anonymous without being non-private: the people
 you talk to know exactly who you are, and the operator does not.
 
+### 5.4 Attachments
+
+A file gets its own key, generated per attachment and never reused:
+
+```
+padded      = plaintext ‖ random_padding   (to the next size bucket)
+ciphertext  = XChaCha20-Poly1305(key, nonce, padded, ad = "Tildra_Attachment_v1")
+digest      = SHA-256(ciphertext)
+```
+
+The ciphertext is uploaded and the server returns an ID. The reference —
+`{id, key, nonce, digest, size, mimeType, ...}` — travels inside the message
+that mentions the file, encrypted with everything else. So the server holds a
+blob it cannot decrypt, and holding every blob it ever received gains it
+nothing.
+
+- The digest is over the **ciphertext**, so a substituted or corrupted download
+  is rejected before its bytes reach the cipher.
+- Padding is applied before encryption, because encrypted length is plaintext
+  length otherwise, and file size alone identifies a great deal — a specific
+  photo, or whether a voice note was two seconds or two minutes.
+- No uploader is recorded. An account-to-blob mapping would recreate precisely
+  the metadata sealed sender exists to remove, so the attachments table has no
+  owner column.
+- Blobs expire after 7 days. An attachment nobody fetched in a week is one
+  nobody is going to.
+
 ## 6. Transport
 
 - TLS 1.3 only. No downgrade, no TLS 1.2.
@@ -259,6 +286,8 @@ MITM attacks succeed; we refuse to make that quiet.
 | Social graph / contact list | **no** | client-side; encrypted backup blob only |
 | Group membership | **no** | distributed inside pairwise ciphertext |
 | Display name, photo, about | **no** | sent to contacts, never uploaded |
+| Attachment contents | **no** | per-file key, held only in the message |
+| Who uploaded an attachment | **no** | no owner column, by design |
 | IP addresses | in memory only | never written to disk or logs |
 
 ## 9. Cryptographic primitives

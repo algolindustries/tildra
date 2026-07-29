@@ -226,6 +226,31 @@ export class TildraClient {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Attachments
+  // -------------------------------------------------------------------------
+
+  /**
+   * Upload an encrypted blob. The body is raw bytes rather than JSON: base64
+   * would inflate a photo by a third, and the server treats it as opaque
+   * either way.
+   */
+  async uploadAttachment(ciphertext: Uint8Array): Promise<{ id: string; expiresAt: string }> {
+    const response = await this.raw('POST', '/v1/attachments', ciphertext);
+    if (!response.ok) {
+      throw new ApiError(response.status, await this.errorDetail(response));
+    }
+    return (await response.json()) as { id: string; expiresAt: string };
+  }
+
+  async downloadAttachment(id: string): Promise<Uint8Array> {
+    const response = await this.raw('GET', `/v1/attachments/${encodeURIComponent(id)}`);
+    if (!response.ok) {
+      throw new ApiError(response.status, await this.errorDetail(response));
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
   async health(): Promise<boolean> {
     try {
       await this.request('GET', '/healthz', { authenticated: false });
@@ -238,6 +263,40 @@ export class TildraClient {
   // -------------------------------------------------------------------------
   // Transport
   // -------------------------------------------------------------------------
+
+  /** Bytes in, bytes out — used by the attachment endpoints. */
+  private async raw(method: string, path: string, body?: Uint8Array): Promise<Response> {
+    if (!this.credentials) throw new ApiError(401, 'not authenticated');
+
+    const controller = new AbortController();
+    // Attachments are far larger than an API call, so they get their own,
+    // longer deadline; the request timeout would abort a legitimate upload.
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs * 8);
+    try {
+      return await this.doFetch(`${this.baseUrl}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.credentials.token}`,
+          ...(body ? { 'Content-Type': 'application/octet-stream' } : {}),
+        },
+        body: body as BodyInit | undefined,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      throw new ApiError(0, err instanceof Error ? err.message : 'network request failed');
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async errorDetail(response: Response): Promise<string> {
+    try {
+      const parsed = (await response.json()) as { error?: string };
+      return parsed.error ?? response.statusText;
+    } catch {
+      return response.statusText;
+    }
+  }
 
   private async request<T>(
     method: string,

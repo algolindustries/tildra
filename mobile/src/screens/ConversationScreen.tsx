@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Avatar, Banner } from '../ui/components';
+import { AttachmentBubble } from '../ui/AttachmentBubble';
 import { palette, radius, spacing, typography } from '../ui/theme';
 import { Row, buildRows, formatAccountId, messageTime } from '../ui/format';
 import { useApp } from '../state/app';
@@ -31,6 +32,7 @@ export function ConversationScreen({
   const messages = useApp((s) => s.messages);
   const conversations = useApp((s) => s.conversations);
   const send = useApp((s) => s.send);
+  const sendPhoto = useApp((s) => s.sendPhoto);
 
   const conversation = conversations.find((c) => c.accountId === accountId);
   const [draft, setDraft] = useState('');
@@ -116,6 +118,15 @@ export function ConversationScreen({
         />
 
         <View style={styles.composer}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t.attachPhoto}
+            onPress={() => void sendPhoto()}
+            disabled={blocked}
+            style={[styles.attachButton, blocked && styles.sendButtonInert]}
+          >
+            <Text style={styles.attachText}>+</Text>
+          </Pressable>
           <TextInput
             style={styles.input}
             value={draft}
@@ -178,7 +189,10 @@ function Bubble({
           failed && styles.bubbleFailed,
         ]}
       >
-        <Text style={[styles.bubbleText, outgoing && styles.bubbleTextOut]}>{message.text}</Text>
+        {message.attachment ? <AttachmentBubble message={message} /> : null}
+        {message.text ? (
+          <Text style={[styles.bubbleText, outgoing && styles.bubbleTextOut]}>{message.text}</Text>
+        ) : null}
         <View style={styles.bubbleMeta}>
           <Text style={[styles.bubbleTime, outgoing && styles.bubbleTimeOut]}>
             {messageTime(message.createdAt, locale)}
@@ -285,5 +299,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   sendButtonInert: { opacity: 0.35 },
+  attachButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: palette.surfaceRaised,
+    borderWidth: 1,
+    borderColor: palette.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachText: { color: palette.accent, fontSize: 24, lineHeight: 26, fontWeight: '600' },
   sendText: { color: palette.onAccent, fontSize: 22, lineHeight: 24, fontWeight: '700' },
 });

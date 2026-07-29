@@ -29,6 +29,9 @@ export interface Strings {
   save: string;
   profileSaved: string;
   profile: string;
+  attachPhoto: string;
+  attachment: string;
+  attachmentFailed: string;
   recoveryTitle: string;
   recoveryBody: string;
   recoveryConfirm: string;
@@ -112,6 +115,9 @@ const en: Strings = {
   save: 'Save',
   profileSaved: 'Saved',
   profile: 'Profile',
+  attachPhoto: 'Send a photo',
+  attachment: 'Attachment',
+  attachmentFailed: 'Could not load this attachment.',
   recoveryTitle: 'Write down your recovery phrase',
   recoveryBody:
     'These 24 words are the only way back into your account. We cannot reset them for you — the server has nothing to reset. Store them somewhere physical.',
@@ -193,6 +199,9 @@ const tr: Strings = {
   save: 'Kaydet',
   profileSaved: 'Kaydedildi',
   profile: 'Profil',
+  attachPhoto: 'Fotoğraf gönder',
+  attachment: 'Ek dosya',
+  attachmentFailed: 'Bu ek dosya yüklenemedi.',
   recoveryTitle: 'Kurtarma kelimelerinizi yazın',
   recoveryBody:
     'Bu 24 kelime hesabınıza dönmenin tek yolu. Sizin için sıfırlayamayız — sunucuda sıfırlanacak bir şey yok. Fiziksel bir yerde saklayın.',

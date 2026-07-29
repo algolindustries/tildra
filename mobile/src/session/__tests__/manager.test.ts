@@ -17,7 +17,7 @@ import { TildraSocket } from '../../api/socket';
 import { IdentityChangedError, SessionManager } from '../manager';
 import { MemorySessionStore } from './memory-store';
 import { generateIdentity, generatePreKeys } from '../../crypto/identity';
-import { randomBytes, toBase64 } from '../../crypto/primitives';
+import { equal, fromUtf8, randomBytes, toBase64, utf8 } from '../../crypto/primitives';
 
 const SERVER_DIR = join(__dirname, '../../../../server');
 const PORT = 8792;
@@ -372,6 +372,123 @@ describeIntegration('session manager', () => {
     ).rejects.toThrow();
     alice.socket.close();
   }, 30_000);
+});
+
+describeIntegration('attachments', () => {
+  it('sends a file the recipient can fetch and decrypt', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    const file = randomBytes(20_000);
+    await alice.manager.sendAttachment(
+      bob.accountId,
+      { bytes: file, mimeType: 'image/jpeg', fileName: 'photo.jpg', width: 1024, height: 768 },
+      'bak buna',
+    );
+    await waitFor(() => bob.received.length > 0, 20_000);
+
+    const message = bob.store.messages.find((m) => !m.outgoing);
+    expect(message?.text).toBe('bak buna');
+    expect(message?.attachment).toBeDefined();
+    expect(message!.attachment!.mimeType).toBe('image/jpeg');
+    expect(message!.attachment!.fileName).toBe('photo.jpg');
+    expect(message!.attachment!.width).toBe(1024);
+
+    const fetched = await bob.manager.fetchAttachment(message!.attachment!);
+    expect(equal(fetched, file)).toBe(true);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+
+  it('stores a blob the server cannot decrypt', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    const secret = utf8('this text must never appear in the stored blob');
+    await alice.manager.sendAttachment(bob.accountId, { bytes: secret, mimeType: 'text/plain' });
+    await waitFor(() => bob.received.length > 0, 20_000);
+
+    const ref = bob.store.messages.find((m) => !m.outgoing)?.attachment;
+    expect(ref).toBeDefined();
+
+    // Fetch the raw blob the way the server holds it. The plaintext must not
+    // be in it, and it must not decrypt without the key from the message.
+    const raw = await bob.client.downloadAttachment(ref!.id);
+    expect(fromUtf8(raw)).not.toContain('must never appear');
+    expect(raw.length).toBeGreaterThan(secret.length);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+
+  it('rejects a blob that was substituted in transit', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.sendAttachment(bob.accountId, {
+      bytes: randomBytes(4000),
+      mimeType: 'application/octet-stream',
+    });
+    await waitFor(() => bob.received.length > 0, 20_000);
+    const ref = bob.store.messages.find((m) => !m.outgoing)!.attachment!;
+
+    // A hostile server hands back a different blob under the same ID. The
+    // digest in the message is what catches it.
+    const decoy = await alice.manager.sendAttachment(bob.accountId, {
+      bytes: randomBytes(4000),
+      mimeType: 'application/octet-stream',
+    });
+    await waitFor(() => bob.received.length > 1, 20_000);
+    const otherId = bob.store.messages.filter((m) => !m.outgoing).at(-1)!.attachment!.id;
+    expect(otherId).not.toBe(ref.id);
+    void decoy;
+
+    await expect(bob.manager.fetchAttachment({ ...ref, id: otherId })).rejects.toThrow(/digest/);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 120_000);
+
+  it('reports a missing attachment rather than hanging', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.sendAttachment(bob.accountId, {
+      bytes: randomBytes(1000),
+      mimeType: 'image/png',
+    });
+    await waitFor(() => bob.received.length > 0, 20_000);
+    const ref = bob.store.messages.find((m) => !m.outgoing)!.attachment!;
+
+    await expect(
+      bob.manager.fetchAttachment({ ...ref, id: '0000000000000000000000000Z' }),
+    ).rejects.toThrow();
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+
+  it('uploads once and delivers the same reference to the recipient', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    const file = randomBytes(8000);
+    const sent = await alice.manager.sendAttachment(bob.accountId, {
+      bytes: file,
+      mimeType: 'image/webp',
+    });
+    await waitFor(() => bob.received.length > 0, 20_000);
+
+    const received = bob.store.messages.find((m) => !m.outgoing)!;
+    // Sender and receiver reference the same blob, so a multi-device recipient
+    // never causes a second upload.
+    expect(received.attachment!.id).toBe(sent.attachment!.id);
+    expect(equal(received.attachment!.digest, sent.attachment!.digest)).toBe(true);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
 });
 
 describeIntegration('profiles', () => {

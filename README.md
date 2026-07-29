@@ -95,7 +95,8 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 | Sealed sender with rotating mailboxes | ✅ |
 | Postgres-backed server, migrations on startup | ✅ |
 | Encrypted local storage (keys, sessions, messages) | ✅ |
-| Attachments, voice, calls | ⬜ not yet |
+| Encrypted photo and file attachments | ✅ |
+| Voice messages, calls | ⬜ not yet |
 | Key transparency for the handle directory | ⬜ not yet |
 | Independent security audit | ⬜ **not yet** |
 
