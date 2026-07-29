@@ -83,6 +83,10 @@ jobs:
         run: npm run typecheck
       - name: Test
         run: npm test
+      # Typechecking does not prove the app bundles: a missing native module
+      # or an unresolvable import only shows up when Metro walks the graph.
+      - name: Bundle
+        run: npm run bundle
 
   # The crypto core is the part where a silent regression is most expensive, so
   # it runs its own job against the published test vectors rather than hiding

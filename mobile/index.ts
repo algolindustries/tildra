@@ -1,3 +1,9 @@
+// The CSPRNG polyfill must be installed before anything that generates a key
+// is imported. React Native has no crypto.getRandomValues of its own, and
+// @noble reads it at call time — so this import has to come first, and it has
+// to come before App.
+import 'react-native-get-random-values';
+
 import { registerRootComponent } from 'expo';
 
 import App from './App';

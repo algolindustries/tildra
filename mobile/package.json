@@ -12,6 +12,7 @@
     "expo": "~57.0.8",
     "expo-clipboard": "^57.0.1",
     "expo-crypto": "^57.0.1",
+    "expo-localization": "^57.0.1",
     "expo-secure-store": "^57.0.1",
     "expo-sqlite": "^57.0.1",
     "expo-status-bar": "~57.0.1",
@@ -36,7 +37,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:vectors": "vitest run src/crypto"
+    "test:vectors": "vitest run src/crypto",
+    "bundle": "expo export --platform ios --output-dir .expo-export"
   },
   "private": true
 }

@@ -32,3 +32,6 @@ mobile/android/app/build/
 .idea/
 .vscode/
 *.swp
+
+# Bundle output from the CI bundle check
+.expo-export/
