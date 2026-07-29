@@ -50,6 +50,13 @@ export class TildraSocket {
   private open(): void {
     this.setState(this.attempt === 0 ? 'connecting' : 'reconnecting');
 
+    if (typeof WebSocket === 'undefined') {
+      // React Native always provides one. Node only does from v22 — worth
+      // saying out loud, because the alternative is a bare ReferenceError
+      // from inside a reconnect timer.
+      throw new Error('Tildra: no WebSocket implementation available (Node 22+ or React Native required)');
+    }
+
     const url = `${this.baseUrl.replace(/^http/, 'ws').replace(/\/+$/, '')}/v1/ws`;
     // Two subprotocols: the version the server negotiates, and the credential
     // it reads but does not select.
