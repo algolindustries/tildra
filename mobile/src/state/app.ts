@@ -52,6 +52,8 @@ export interface AppState {
   accountId: string | null;
   handle: string | null;
   displayName: string | null;
+  about: string | null;
+  avatar: Uint8Array | null;
   socketState: SocketState;
 
   conversations: (Conversation & { id: string })[];
@@ -101,6 +103,8 @@ export const useApp = create<AppState>((set, get) => ({
   accountId: null,
   handle: null,
   displayName: null,
+  about: null,
+  avatar: null,
   socketState: 'closed',
 
   conversations: [],
@@ -156,6 +160,8 @@ export const useApp = create<AppState>((set, get) => ({
         phase: 'ready',
         accountId: credentials.accountId,
         displayName: profile?.displayName ?? null,
+        about: profile?.about ?? null,
+        avatar: profile?.avatar ?? null,
       });
       await get().refreshConversations();
     } catch (err) {
@@ -281,7 +287,11 @@ export const useApp = create<AppState>((set, get) => ({
   async setProfile(profile) {
     if (!runtime?.manager) return;
     const saved = await runtime.manager.setProfile(profile);
-    set({ displayName: saved.displayName });
+    set({
+      displayName: saved.displayName,
+      about: saved.about ?? null,
+      avatar: saved.avatar ?? null,
+    });
   },
 
   async claimHandle(handle) {
@@ -307,6 +317,8 @@ export const useApp = create<AppState>((set, get) => ({
       accountId: null,
       handle: null,
       displayName: null,
+      about: null,
+      avatar: null,
       conversations: [],
       messages: [],
       activeAccountId: null,

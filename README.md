@@ -9,6 +9,11 @@ Post-quantum key agreement. No phone number. Fully self-hostable server.
 
 [![CI](https://github.com/tildra/tildra/actions/workflows/ci.yml/badge.svg)](https://github.com/tildra/tildra/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![Go 1.24](https://img.shields.io/badge/go-1.24-00ADD8.svg?logo=go&logoColor=white)](server/go.mod)
+[![React Native](https://img.shields.io/badge/react%20native-Expo%20SDK%2057-000020.svg?logo=expo&logoColor=white)](mobile/package.json)
+[![Post-quantum](https://img.shields.io/badge/key%20agreement-X25519%20%2B%20ML--KEM--768-3DD6C0.svg)](docs/PROTOCOL.md)
+[![Audit status](https://img.shields.io/badge/audit-not%20yet%20audited-orange.svg)](SECURITY.md)
+[![Status](https://img.shields.io/badge/status-pre--alpha-lightgrey.svg)](#)
 
 </div>
 
@@ -39,11 +44,23 @@ that doesn't feel like homework) and rebuilds the parts that aren't.
 | E2EE on every device/platform | ❌ no desktop secret chats | ✅ | ✅ |
 | Post-quantum key agreement | ❌ | ✅ (PQXDH) | ✅ (X25519 + ML-KEM-768) |
 | Works without a phone number | ❌ | ❌ | ✅ |
+| Profile name and photo hidden from the server | ❌ | ⚠️ stored encrypted | ✅ never uploaded |
 | Server source available | ❌ | ✅ | ✅ |
 | Self-hostable / federated-ready | ❌ | ⚠️ hard | ✅ |
 | Sealed sender (server can't see who sent what) | ❌ | ✅ | ✅ |
 | Message retention on server | ♾️ indefinite | until delivered | until delivered, hard TTL |
 | Reproducible builds | ⚠️ partial | ✅ | ✅ (goal, tracked in CI) |
+
+## Not anonymous — private
+
+These are different things, and conflating them makes for a worse messenger.
+
+You have a name and a photo, and the people you talk to see them. What is
+different is where they live: your profile is sent to each contact over their
+own encrypted session, exactly like a message. The server has no profile
+endpoint, stores no name, no photo, and no contact list — it cannot tell you
+who anyone is or who knows whom. Your account is a key; your name is something
+you hand to specific people rather than something you publish.
 
 ## Security design in one paragraph
 
@@ -66,6 +83,22 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 > yet for anything where being wrong has consequences. We'll say clearly, here,
 > when that changes.
 
+## What works today
+
+| | |
+|---|---|
+| Account creation without a phone number | ✅ |
+| 1:1 messaging, multi-device | ✅ |
+| Encrypted group chats with membership rotation | ✅ |
+| Encrypted profiles (name, photo, about) | ✅ |
+| Safety numbers and identity-change blocking | ✅ |
+| Sealed sender with rotating mailboxes | ✅ |
+| Postgres-backed server, migrations on startup | ✅ |
+| Encrypted local storage (keys, sessions, messages) | ✅ |
+| Attachments, voice, calls | ⬜ not yet |
+| Key transparency for the handle directory | ⬜ not yet |
+| Independent security audit | ⬜ **not yet** |
+
 ## Repository layout
 
 ```
@@ -78,22 +111,43 @@ tildra/
 
 ## Quick start
 
-**Server** (Go 1.24+, Postgres 16+):
+**Server** (Go 1.24+; Postgres 16+ optional):
 
 ```bash
 cd server
 cp .env.example .env
-make dev          # runs migrations + starts on :8080
-make test
+make dev            # in-memory store, starts on :8080
+make test           # unit + store conformance
+make test-postgres  # brings up Postgres in Docker and runs the same suite
 ```
 
-**Mobile** (Node 20+):
+With `TILDRA_DATABASE_URL` set, migrations are applied on startup.
+
+**Mobile** (Node 22+):
 
 ```bash
 cd mobile
 npm install
-npm start         # Expo — press i for iOS, a for Android
+npm start           # Expo — press i for iOS, a for Android
+npm test            # includes end-to-end tests against a real Go server
 ```
+
+To point the app at a local server:
+
+```bash
+EXPO_PUBLIC_TILDRA_SERVER=http://localhost:8080 npm start
+```
+
+## Testing
+
+The client test suite builds and runs the **actual Go server** and pushes real
+sealed messages through it. That is deliberate: unit tests on either side prove
+each half is self-consistent, and have twice passed while real delivery was
+completely broken. Anything that claims two components agree is tested by
+making them agree.
+
+The store has one conformance suite that both the in-memory and Postgres
+implementations must pass, and it fails rather than skips in CI.
 
 ## Contributing
 

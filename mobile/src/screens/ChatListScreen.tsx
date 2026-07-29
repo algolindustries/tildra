@@ -8,12 +8,21 @@ import { formatAccountId, relativeTime } from '../ui/format';
 import { useApp } from '../state/app';
 import { Conversation } from '../storage/db';
 
-export function ChatListScreen({ onOpen }: { onOpen: (accountId: string) => void }) {
+export function ChatListScreen({
+  onOpen,
+  onOpenProfile,
+}: {
+  onOpen: (accountId: string) => void;
+  onOpenProfile: () => void;
+}) {
   const t = useApp((s) => s.t);
   const locale = useApp((s) => s.locale);
   const conversations = useApp((s) => s.conversations);
   const socketState = useApp((s) => s.socketState);
   const startConversation = useApp((s) => s.startConversation);
+  const myAccountId = useApp((s) => s.accountId);
+  const myName = useApp((s) => s.displayName);
+  const myAvatar = useApp((s) => s.avatar);
 
   const [adding, setAdding] = useState(false);
   const [input, setInput] = useState('');
@@ -50,14 +59,28 @@ export function ChatListScreen({ onOpen }: { onOpen: (accountId: string) => void
     <SafeAreaView style={styles.screen} edges={['top', 'left', 'right']}>
       <ScreenTitle
         right={
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t.newChat}
-            onPress={() => setAdding(true)}
-            style={styles.newButton}
-          >
-            <Text style={styles.newButtonText}>+</Text>
-          </Pressable>
+          <View style={styles.titleActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t.newChat}
+              onPress={() => setAdding(true)}
+              style={styles.newButton}
+            >
+              <Text style={styles.newButtonText}>+</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t.profile}
+              onPress={onOpenProfile}
+            >
+              <Avatar
+                seed={myAccountId ?? '?'}
+                label={myName ?? myAccountId ?? '?'}
+                image={myAvatar ?? undefined}
+                size={40}
+              />
+            </Pressable>
+          </View>
         }
       >
         {t.chats}
@@ -191,6 +214,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   newButtonText: { color: palette.accent, fontSize: 24, lineHeight: 28, fontWeight: '600' },
+  titleActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
 
   connection: {
     flexDirection: 'row',

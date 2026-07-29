@@ -22,6 +22,13 @@ export interface Strings {
   yourNameLabel: string;
   yourNamePlaceholder: string;
   yourNameHelp: string;
+  aboutLabel: string;
+  aboutPlaceholder: string;
+  changePhoto: string;
+  removePhoto: string;
+  save: string;
+  profileSaved: string;
+  profile: string;
   recoveryTitle: string;
   recoveryBody: string;
   recoveryConfirm: string;
@@ -98,6 +105,13 @@ const en: Strings = {
   yourNamePlaceholder: 'What people should call you',
   yourNameHelp:
     'Only people you talk to see this. It is sent to them encrypted — the server never stores your name or picture.',
+  aboutLabel: 'About',
+  aboutPlaceholder: 'A line about you',
+  changePhoto: 'Choose a photo',
+  removePhoto: 'Remove photo',
+  save: 'Save',
+  profileSaved: 'Saved',
+  profile: 'Profile',
   recoveryTitle: 'Write down your recovery phrase',
   recoveryBody:
     'These 24 words are the only way back into your account. We cannot reset them for you — the server has nothing to reset. Store them somewhere physical.',
@@ -172,6 +186,13 @@ const tr: Strings = {
   yourNamePlaceholder: 'İnsanlar size nasıl seslensin',
   yourNameHelp:
     'Bunu yalnızca konuştuğunuz kişiler görür. Onlara şifreli olarak gönderilir — sunucu adınızı ve fotoğrafınızı hiçbir zaman saklamaz.',
+  aboutLabel: 'Hakkında',
+  aboutPlaceholder: 'Kendinizle ilgili bir satır',
+  changePhoto: 'Fotoğraf seç',
+  removePhoto: 'Fotoğrafı kaldır',
+  save: 'Kaydet',
+  profileSaved: 'Kaydedildi',
+  profile: 'Profil',
   recoveryTitle: 'Kurtarma kelimelerinizi yazın',
   recoveryBody:
     'Bu 24 kelime hesabınıza dönmenin tek yolu. Sizin için sıfırlayamayız — sunucuda sıfırlanacak bir şey yok. Fiziksel bir yerde saklayın.',

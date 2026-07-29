@@ -200,6 +200,34 @@ verifies ownership against its own mailbox table — a client's claim to own an
 address is never taken at face value — and then drains anything already queued
 there.
 
+### 5.3 Profiles
+
+A profile — display name, photo, and a short about — is **not** a server-side
+record. It is a typed message (`ContentType.Profile`) sent to each contact over
+their pairwise Double Ratchet session, encrypted exactly like chat text.
+
+```
+profile = frame(display_name, about, updated_at_seconds, avatar_bytes)
+```
+
+Consequences that are the point of doing it this way:
+
+- The server has no profile endpoint and stores no name or picture. It cannot
+  answer "who is account X" for anyone, including itself.
+- A profile is sent automatically just before the first message to a new
+  contact, and receiving one from a new contact sends ours back — so an
+  introduction is mutual without a round trip the user has to think about.
+- `updated_at` lets a receiver ignore a stale profile. Multi-device fanout plus
+  redelivery means an older update can arrive after a newer one.
+- Received names are sanitized: C0/C1 controls become spaces, and zero-width
+  and bidirectional formatting characters are stripped. A display name renders
+  next to a stranger's messages, so an RTL override there is impersonation.
+- Avatars are capped at 96 KiB and bounded again on receipt, because the bytes
+  came from someone else.
+
+This is what makes Tildra non-anonymous without being non-private: the people
+you talk to know exactly who you are, and the operator does not.
+
 ## 6. Transport
 
 - TLS 1.3 only. No downgrade, no TLS 1.2.
@@ -229,7 +257,8 @@ MITM attacks succeed; we refuse to make that quiet.
 | Message ciphertext | temporarily | deleted on delivery; hard TTL 30 days |
 | Sender of a message | **no** | sealed sender |
 | Social graph / contact list | **no** | client-side; encrypted backup blob only |
-| Group membership | **no** | encrypted blob |
+| Group membership | **no** | distributed inside pairwise ciphertext |
+| Display name, photo, about | **no** | sent to contacts, never uploaded |
 | IP addresses | in memory only | never written to disk or logs |
 
 ## 9. Cryptographic primitives

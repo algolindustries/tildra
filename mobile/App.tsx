@@ -16,13 +16,15 @@ import { OnboardingScreen } from './src/screens/OnboardingScreen';
 import { ChatListScreen } from './src/screens/ChatListScreen';
 import { ConversationScreen } from './src/screens/ConversationScreen';
 import { SafetyNumberScreen } from './src/screens/SafetyNumberScreen';
+import { ProfileScreen } from './src/screens/ProfileScreen';
 import { Banner, Button } from './src/ui/components';
 import { palette, spacing } from './src/ui/theme';
 
 type Route =
   | { name: 'list' }
   | { name: 'conversation'; accountId: string }
-  | { name: 'verify'; accountId: string };
+  | { name: 'verify'; accountId: string }
+  | { name: 'profile' };
 
 export default function App() {
   const phase = useApp((s) => s.phase);
@@ -70,12 +72,15 @@ export default function App() {
             accountId={route.accountId}
             onDone={() => setRoute({ name: 'conversation', accountId: route.accountId })}
           />
+        ) : route.name === 'profile' ? (
+          <ProfileScreen onClose={() => setRoute({ name: 'list' })} />
         ) : (
           <ChatListScreen
             onOpen={(accountId) => {
               void openConversation(accountId);
               setRoute({ name: 'conversation', accountId });
             }}
+            onOpenProfile={() => setRoute({ name: 'profile' })}
           />
         )}
       </View>
