@@ -282,6 +282,45 @@ If a contact's identity key changes, the conversation is **blocked from sending*
 until the user acknowledges the change. Silent key changes are how server-side
 MITM attacks succeed; we refuse to make that quiet.
 
+### 7.1 Key transparency
+
+Safety numbers only work if two people actually compare them. Key transparency
+is the half that works without asking anyone to do anything.
+
+Every binding of a handle to an identity key is appended to a Merkle log
+(RFC 6962 hashing, including its leaf/node domain separation). The log signs a
+tree head:
+
+```
+STH = (size, root_hash, timestamp,
+       Sig(log_key, "tildra-sth-v1:" ‖ size ‖ root_hash ‖ timestamp))
+```
+
+A handle lookup returns the binding, an **inclusion proof** against the current
+head, and a **consistency proof** from the last head the client verified. The
+client checks all three and stores the new head.
+
+That leaves a server two options if it wants to substitute a key:
+
+1. **Append it.** The substitution is then a permanent, public entry that any
+   auditor — or the victim's own next lookup — can see.
+2. **Fork the log**, showing one tree to the victim and another to everyone
+   else. This breaks the consistency proof the moment those two views meet.
+
+A client that has verified a log once will not accept a later response with no
+proof at all. Dropping the mechanism silently would undo every check made
+before it.
+
+**What this does not yet do.** Split-view detection requires clients to gossip
+tree heads, so that a fork shown to one person is noticed by another. Tildra
+does not do that yet, which means a server willing to maintain a permanent,
+consistent fork *for a specific target* is still not caught by the log alone —
+only by that target comparing safety numbers. Auditors and gossip are the
+remaining work; see `docs/THREAT_MODEL.md`.
+
+The log key must be held outside the database. A signing key sitting next to
+the log it signs can be used to rewrite the whole thing.
+
 ## 8. What the server stores
 
 | Data | Stored | Notes |
@@ -295,6 +334,7 @@ MITM attacks succeed; we refuse to make that quiet.
 | Group membership | **no** | distributed inside pairwise ciphertext |
 | Display name, photo, about | **no** | sent to contacts, never uploaded |
 | Attachment contents | **no** | per-file key, held only in the message |
+| Handle→key bindings | **yes, on purpose** | public append-only log; that is the point |
 | Who uploaded an attachment | **no** | no owner column, by design |
 | IP addresses | in memory only | never written to disk or logs |
 

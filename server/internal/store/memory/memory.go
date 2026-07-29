@@ -43,6 +43,7 @@ type Store struct {
 	tokens    map[string]tokenEntry // hex(tokenHash) -> entry
 	blobs     map[string]*model.Attachment
 	push      map[string]*model.PushToken
+	logs      []*model.LogEntry
 }
 
 // New returns an empty in-memory store.
@@ -356,6 +357,49 @@ func (s *Store) GetAttachment(_ context.Context, id string) (*model.Attachment, 
 	cp := *a
 	cp.Ciphertext = append([]byte(nil), a.Ciphertext...)
 	return &cp, nil
+}
+
+func (s *Store) AppendLogEntry(_ context.Context, e *model.LogEntry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *e
+	cp.Index = int64(len(s.logs))
+	cp.IdentityKey = append([]byte(nil), e.IdentityKey...)
+	s.logs = append(s.logs, &cp)
+	e.Index = cp.Index
+	return nil
+}
+
+func (s *Store) LogEntries(_ context.Context, from, to int64) ([]*model.LogEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if from < 0 || to > int64(len(s.logs)) || from > to {
+		return nil, store.ErrNotFound
+	}
+	out := make([]*model.LogEntry, 0, to-from)
+	for _, e := range s.logs[from:to] {
+		cp := *e
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
+func (s *Store) LogSize(_ context.Context) (int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return int64(len(s.logs)), nil
+}
+
+func (s *Store) LatestLogEntryForHandle(_ context.Context, handle string) (*model.LogEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i := len(s.logs) - 1; i >= 0; i-- {
+		if strings.EqualFold(s.logs[i].Handle, handle) {
+			cp := *s.logs[i]
+			return &cp, nil
+		}
+	}
+	return nil, store.ErrNotFound
 }
 
 func (s *Store) PutPushToken(_ context.Context, t *model.PushToken) error {

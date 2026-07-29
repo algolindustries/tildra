@@ -25,16 +25,21 @@ import (
 	"github.com/tildra/tildra/server/internal/model"
 	"github.com/tildra/tildra/server/internal/push"
 	"github.com/tildra/tildra/server/internal/store"
+	"github.com/tildra/tildra/server/internal/transparency"
 )
 
-// Server wires the store, authenticator, hub and notifier into an http.Handler.
+// Server wires the store, authenticator, hub, notifier and transparency log
+// into an http.Handler.
 type Server struct {
 	cfg   *config.Config
 	store store.Store
 	auth  *auth.Authenticator
 	hub   *gateway.Hub
 	push  push.Notifier
-	log   *slog.Logger
+	// tlog is nil when no signing key is configured. Handle lookups then carry
+	// no proof, which the client is told rather than left to assume.
+	tlog *transparency.Log
+	log  *slog.Logger
 }
 
 func New(
@@ -43,12 +48,13 @@ func New(
 	a *auth.Authenticator,
 	h *gateway.Hub,
 	notifier push.Notifier,
+	tlog *transparency.Log,
 	log *slog.Logger,
 ) *Server {
 	if notifier == nil {
 		notifier = push.Nop{}
 	}
-	return &Server{cfg: cfg, store: s, auth: a, hub: h, push: notifier, log: log}
+	return &Server{cfg: cfg, store: s, auth: a, hub: h, push: notifier, tlog: tlog, log: log}
 }
 
 // Handler builds the route table.
@@ -60,6 +66,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/auth/challenge", s.authChallenge)
 	mux.HandleFunc("POST /v1/auth/token", s.authToken)
 	mux.HandleFunc("GET /v1/handles/{handle}", s.resolveHandle)
+	mux.HandleFunc("GET /v1/transparency/head", s.transparencyHead)
 	mux.HandleFunc("GET /healthz", s.health)
 
 	// Authenticated.
@@ -305,18 +312,74 @@ func (s *Server) setHandle(w http.ResponseWriter, r *http.Request) {
 		s.fail500(w, "set handle", err)
 		return
 	}
+
+	// Record the binding in the log. A handle that resolves to a key nobody can
+	// prove was published is a handle worth nothing, so a failure here fails
+	// the request rather than being logged and ignored.
+	if s.tlog != nil {
+		device, err := s.store.GetDevice(r.Context(), p.AccountID, p.DeviceID)
+		if err != nil {
+			s.fail500(w, "get device for log entry", err)
+			return
+		}
+		if _, err := s.tlog.Append(r.Context(), h, p.AccountID, device.IdentityKey); err != nil {
+			s.fail500(w, "append log entry", err)
+			return
+		}
+	}
+
 	respond(w, http.StatusOK, map[string]string{"handle": h})
 }
 
+// resolveHandle answers with the binding *and* the proof it is in the log.
+//
+// `since` is the log size the caller last verified. Returning a consistency
+// proof from there is what stops the server from quietly rewriting history:
+// it must either show the same past, or fail.
 func (s *Server) resolveHandle(w http.ResponseWriter, r *http.Request) {
-	a, err := s.store.GetAccountByHandle(r.Context(), r.PathValue("handle"))
+	handle := r.PathValue("handle")
+	a, err := s.store.GetAccountByHandle(r.Context(), handle)
 	if err != nil {
 		fail(w, http.StatusNotFound, "no such handle")
 		return
 	}
-	// A handle resolves to an account ID and nothing else. Verifying that the
-	// ID belongs to the human you meant is the safety-number check's job.
-	respond(w, http.StatusOK, map[string]string{"accountId": a.ID, "handle": a.Handle})
+
+	response := map[string]any{"accountId": a.ID, "handle": a.Handle}
+
+	if s.tlog != nil {
+		since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+		if since < 0 {
+			since = 0
+		}
+		entry, inclusion, consistency, head, err := s.tlog.Lookup(r.Context(), a.Handle, since)
+		if err == nil {
+			response["proof"] = map[string]any{
+				"entry":       entry,
+				"inclusion":   inclusion,
+				"consistency": consistency,
+				"head":        head,
+			}
+		} else {
+			// A handle with no log entry is a server that has not caught up,
+			// not a lie. The client decides whether to accept an unproven
+			// binding; saying nothing would let it assume one was checked.
+			s.log.Warn("no transparency proof for handle", "err", err)
+		}
+	}
+
+	respond(w, http.StatusOK, response)
+}
+
+// transparencyHead publishes the current signed tree head.
+//
+// Unauthenticated on purpose: the log is only useful if anyone can watch it,
+// including people who do not have an account.
+func (s *Server) transparencyHead(w http.ResponseWriter, r *http.Request) {
+	if s.tlog == nil {
+		fail(w, http.StatusNotFound, "this server does not run a transparency log")
+		return
+	}
+	respond(w, http.StatusOK, s.tlog.Head())
 }
 
 // ---------- mailboxes & messages ----------

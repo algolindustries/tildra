@@ -13,6 +13,7 @@ import {
 } from '../crypto/primitives';
 import { KeyUploadPayload, registrationProof, signAuthChallenge } from '../crypto/identity';
 import { PreKeyBundle } from '../crypto/pqxdh';
+import { HandleProof, SignedTreeHead } from '../crypto/transparency';
 
 export interface Credentials {
   accountId: string;
@@ -187,8 +188,65 @@ export class TildraClient {
    * A handle is a convenience pointer the server controls, so this result is
    * not authority over who someone is — only a safety-number comparison is.
    */
-  async resolveHandle(handle: string): Promise<{ accountId: string; handle: string }> {
-    return this.request('GET', `/v1/handles/${encodeURIComponent(handle)}`, { authenticated: false });
+  async resolveHandle(
+    handle: string,
+    since = 0,
+  ): Promise<{ accountId: string; handle: string; proof?: HandleProof }> {
+    const raw = await this.request<{
+      accountId: string;
+      handle: string;
+      proof?: {
+        entry: { index: number; handle: string; accountId: string; identityKey: string; recordedAt: string };
+        inclusion: string[] | null;
+        consistency: string[] | null;
+        head: { size: number; rootHash: string; timestamp: string; signature: string; logKey: string };
+      };
+    }>('GET', `/v1/handles/${encodeURIComponent(handle)}?since=${since}`, { authenticated: false });
+
+    if (!raw.proof) return { accountId: raw.accountId, handle: raw.handle };
+
+    return {
+      accountId: raw.accountId,
+      handle: raw.handle,
+      proof: {
+        entry: {
+          index: raw.proof.entry.index,
+          handle: raw.proof.entry.handle,
+          accountId: raw.proof.entry.accountId,
+          identityKey: fromBase64(raw.proof.entry.identityKey),
+          // Go marshals time as RFC3339; the log hashed whole seconds.
+          recordedAt: Math.floor(Date.parse(raw.proof.entry.recordedAt) / 1000),
+        },
+        inclusion: (raw.proof.inclusion ?? []).map(fromBase64),
+        consistency: (raw.proof.consistency ?? []).map(fromBase64),
+        head: {
+          size: raw.proof.head.size,
+          rootHash: fromBase64(raw.proof.head.rootHash),
+          timestamp: Math.floor(Date.parse(raw.proof.head.timestamp) / 1000),
+          signature: fromBase64(raw.proof.head.signature),
+          logKey: fromBase64(raw.proof.head.logKey),
+        },
+      },
+    };
+  }
+
+  /** The log's current signed tree head. Unauthenticated, like the log itself. */
+  async transparencyHead(): Promise<SignedTreeHead> {
+    const raw = await this.request<{
+      size: number;
+      rootHash: string;
+      timestamp: string;
+      signature: string;
+      logKey: string;
+    }>('GET', '/v1/transparency/head', { authenticated: false });
+
+    return {
+      size: raw.size,
+      rootHash: fromBase64(raw.rootHash),
+      timestamp: Math.floor(Date.parse(raw.timestamp) / 1000),
+      signature: fromBase64(raw.signature),
+      logKey: fromBase64(raw.logKey),
+    };
   }
 
   // -------------------------------------------------------------------------

@@ -528,6 +528,63 @@ func (s *Store) GetAttachment(ctx context.Context, id string) (*model.Attachment
 }
 
 // ---------------------------------------------------------------------------
+// Key transparency log
+// ---------------------------------------------------------------------------
+
+func (s *Store) AppendLogEntry(ctx context.Context, e *model.LogEntry) error {
+	// The index comes from the database rather than the caller, so two
+	// concurrent appends cannot claim the same position — which would give two
+	// clients different trees of the same size.
+	return s.pool.QueryRow(ctx, `
+		INSERT INTO transparency_log (idx, handle, account_id, identity_key, recorded_at)
+		VALUES ((SELECT COALESCE(MAX(idx) + 1, 0) FROM transparency_log), $1, $2, $3, $4)
+		RETURNING idx`,
+		e.Handle, e.AccountID, e.IdentityKey, e.RecordedAt).Scan(&e.Index)
+}
+
+func (s *Store) LogEntries(ctx context.Context, from, to int64) ([]*model.LogEntry, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT idx, handle, account_id, identity_key, recorded_at
+		FROM transparency_log WHERE idx >= $1 AND idx < $2 ORDER BY idx`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*model.LogEntry
+	for rows.Next() {
+		var e model.LogEntry
+		if err := rows.Scan(&e.Index, &e.Handle, &e.AccountID, &e.IdentityKey, &e.RecordedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &e)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) LogSize(ctx context.Context) (int64, error) {
+	var size int64
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM transparency_log`).Scan(&size)
+	return size, err
+}
+
+func (s *Store) LatestLogEntryForHandle(ctx context.Context, handle string) (*model.LogEntry, error) {
+	var e model.LogEntry
+	err := s.pool.QueryRow(ctx, `
+		SELECT idx, handle, account_id, identity_key, recorded_at
+		FROM transparency_log WHERE lower(handle) = lower($1)
+		ORDER BY idx DESC LIMIT 1`, handle).
+		Scan(&e.Index, &e.Handle, &e.AccountID, &e.IdentityKey, &e.RecordedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
+// ---------------------------------------------------------------------------
 // Push tokens
 // ---------------------------------------------------------------------------
 

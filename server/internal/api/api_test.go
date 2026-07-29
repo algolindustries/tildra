@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"github.com/tildra/tildra/server/internal/push"
 	"github.com/tildra/tildra/server/internal/store"
 	"github.com/tildra/tildra/server/internal/store/memory"
+	"github.com/tildra/tildra/server/internal/transparency"
 )
 
 type harness struct {
@@ -30,6 +32,62 @@ type harness struct {
 	store    *memory.Store
 	client   *http.Client
 	notifier *push.Recording
+	tlog     *transparency.Log
+}
+
+// logStorage adapts the Store to the transparency log, mirroring cmd/tildrad.
+type logStorage struct{ st store.Store }
+
+func (l *logStorage) AppendEntry(ctx context.Context, e *transparency.Entry) error {
+	m := &model.LogEntry{
+		Handle: e.Handle, AccountID: e.AccountID,
+		IdentityKey: e.IdentityKey, RecordedAt: e.RecordedAt,
+	}
+	if err := l.st.AppendLogEntry(ctx, m); err != nil {
+		return err
+	}
+	e.Index = m.Index
+	return nil
+}
+
+func (l *logStorage) Entries(ctx context.Context, from, to int64) ([]*transparency.Entry, error) {
+	rows, err := l.st.LogEntries(ctx, from, to)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*transparency.Entry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, &transparency.Entry{
+			Index: r.Index, Handle: r.Handle, AccountID: r.AccountID,
+			IdentityKey: r.IdentityKey, RecordedAt: r.RecordedAt,
+		})
+	}
+	return out, nil
+}
+
+func (l *logStorage) Size(ctx context.Context) (int64, error) { return l.st.LogSize(ctx) }
+
+func (l *logStorage) LatestForHandle(ctx context.Context, handle string) (*transparency.Entry, error) {
+	r, err := l.st.LatestLogEntryForHandle(ctx, handle)
+	if err != nil {
+		return nil, err
+	}
+	return &transparency.Entry{
+		Index: r.Index, Handle: r.Handle, AccountID: r.AccountID,
+		IdentityKey: r.IdentityKey, RecordedAt: r.RecordedAt,
+	}, nil
+}
+
+// handleProof is the proof shape returned alongside a handle lookup.
+type handleProof struct {
+	AccountID string `json:"accountId"`
+	Handle    string `json:"handle"`
+	Proof     *struct {
+		Entry       transparency.Entry          `json:"entry"`
+		Inclusion   [][]byte                    `json:"inclusion"`
+		Consistency [][]byte                    `json:"consistency"`
+		Head        transparency.SignedTreeHead `json:"head"`
+	} `json:"proof"`
 }
 
 func newHarness(t *testing.T) *harness {
@@ -40,11 +98,16 @@ func newHarness(t *testing.T) *harness {
 	authn := auth.New(st)
 	hub := gateway.NewHub(st, log)
 	notifier := &push.Recording{}
-	s := api.New(cfg, st, authn, hub, notifier, log)
+	_, signKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("log key: %v", err)
+	}
+	tlog := transparency.NewLog(&logStorage{st}, signKey)
+	s := api.New(cfg, st, authn, hub, notifier, tlog, log)
 
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
-	return &harness{t: t, srv: srv, store: st, client: srv.Client(), notifier: notifier}
+	return &harness{t: t, srv: srv, store: st, client: srv.Client(), notifier: notifier, tlog: tlog}
 }
 
 func (h *harness) do(method, path, token string, body any) (*http.Response, []byte) {
@@ -631,6 +694,137 @@ func TestNoPushWithoutARegisteredToken(t *testing.T) {
 
 	if sent := h.notifier.Sent(); len(sent) != 0 {
 		t.Errorf("sent %d notifications for a device with no token", len(sent))
+	}
+}
+
+func TestHandleLookupCarriesAVerifiableProof(t *testing.T) {
+	h := newHarness(t)
+	a := h.register("Ayse")
+
+	if resp, body := h.do(http.MethodPut, "/v1/handle", a.token, map[string]any{"handle": "ayse"}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("claim handle: %d %s", resp.StatusCode, body)
+	}
+
+	resp, body := h.do(http.MethodGet, "/v1/handles/ayse", "", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resolve: %d %s", resp.StatusCode, body)
+	}
+	var got handleProof
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Proof == nil {
+		t.Fatal("no proof was returned")
+	}
+
+	// Everything a client checks, checked here: the tree head is signed by the
+	// log key, and the entry is genuinely in the tree that head commits to.
+	if err := got.Proof.Head.Verify(h.tlog.PublicKey()); err != nil {
+		t.Fatalf("tree head signature: %v", err)
+	}
+
+	leaf := transparency.HashLeaf(got.Proof.Entry.Encode())
+	err := transparency.VerifyInclusion(
+		leaf, int(got.Proof.Entry.Index), int(got.Proof.Head.Size),
+		got.Proof.Inclusion, got.Proof.Head.RootHash,
+	)
+	if err != nil {
+		t.Fatalf("inclusion proof: %v", err)
+	}
+
+	// The binding must be the account's real identity key, not something else.
+	if !bytes.Equal(got.Proof.Entry.IdentityKey, a.pub) {
+		t.Error("the logged identity key is not the device's")
+	}
+	if got.Proof.Entry.AccountID != a.accountID {
+		t.Error("the logged account is not the one that claimed the handle")
+	}
+}
+
+func TestTreeHeadIsPublicAndSigned(t *testing.T) {
+	h := newHarness(t)
+	a := h.register("Ayse")
+	h.do(http.MethodPut, "/v1/handle", a.token, map[string]any{"handle": "ayse"})
+
+	// Unauthenticated: a log only anyone can watch is worth watching.
+	resp, body := h.do(http.MethodGet, "/v1/transparency/head", "", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("head: %d %s", resp.StatusCode, body)
+	}
+	var head transparency.SignedTreeHead
+	if err := json.Unmarshal(body, &head); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if head.Size < 1 {
+		t.Fatalf("tree is empty after a handle was claimed")
+	}
+	if err := head.Verify(h.tlog.PublicKey()); err != nil {
+		t.Fatalf("published head does not verify: %v", err)
+	}
+
+	// A forged head must not verify under the real key.
+	forged := head
+	forged.Size += 1
+	if err := forged.Verify(h.tlog.PublicKey()); err == nil {
+		t.Error("a head with an altered size verified")
+	}
+}
+
+func TestLogGrowsConsistentlyAcrossClaims(t *testing.T) {
+	h := newHarness(t)
+
+	var sizes []int64
+	var roots [][]byte
+	for i := 0; i < 5; i++ {
+		a := h.register(fmt.Sprintf("Device%d", i))
+		h.do(http.MethodPut, "/v1/handle", a.token, map[string]any{
+			"handle": fmt.Sprintf("user%d", i),
+		})
+		head := h.tlog.Head()
+		sizes = append(sizes, head.Size)
+		roots = append(roots, head.RootHash)
+	}
+
+	// Every earlier view of the log must remain a prefix of every later one.
+	// This is the property that makes a silent key swap impossible.
+	entries, err := h.store.LogEntries(context.Background(), 0, sizes[len(sizes)-1])
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	hashes := make([][]byte, 0, len(entries))
+	for _, e := range entries {
+		hashes = append(hashes, transparency.HashLeaf(transparency.Entry{
+			Index: e.Index, Handle: e.Handle, AccountID: e.AccountID,
+			IdentityKey: e.IdentityKey, RecordedAt: e.RecordedAt,
+		}.Encode()))
+	}
+
+	for i := range sizes {
+		for j := i; j < len(sizes); j++ {
+			path, err := transparency.ConsistencyProof(hashes, int(sizes[i]), int(sizes[j]))
+			if err != nil {
+				t.Fatalf("proof %d->%d: %v", sizes[i], sizes[j], err)
+			}
+			if err := transparency.VerifyConsistency(
+				int(sizes[i]), int(sizes[j]), path, roots[i], roots[j],
+			); err != nil {
+				t.Fatalf("consistency %d->%d: %v", sizes[i], sizes[j], err)
+			}
+		}
+	}
+}
+
+func TestReclaimingTheSameHandleDoesNotGrowTheLog(t *testing.T) {
+	// A log that grows on every no-op re-registration is one nobody can audit.
+	h := newHarness(t)
+	a := h.register("Ayse")
+
+	h.do(http.MethodPut, "/v1/handle", a.token, map[string]any{"handle": "ayse"})
+	first := h.tlog.Size()
+	h.do(http.MethodPut, "/v1/handle", a.token, map[string]any{"handle": "ayse"})
+
+	if h.tlog.Size() != first {
+		t.Errorf("log grew from %d to %d on an unchanged re-registration", first, h.tlog.Size())
 	}
 }
 

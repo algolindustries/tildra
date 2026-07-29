@@ -92,6 +92,7 @@ export interface Strings {
   errorNetwork: string;
   errorNoDevices: string;
   errorGeneric: string;
+  errorTransparency: string;
   retry: string;
   cancel: string;
   copy: string;
@@ -180,6 +181,8 @@ const en: Strings = {
   errorNetwork: 'Can’t reach the server. Check your connection.',
   errorNoDevices: 'That account has no devices registered yet.',
   errorGeneric: 'Something went wrong.',
+  errorTransparency:
+    'This server’s key transparency log did not check out, so the lookup was refused.',
   retry: 'Try again',
   cancel: 'Cancel',
   copy: 'Copy',
@@ -268,6 +271,8 @@ const tr: Strings = {
   errorNetwork: 'Sunucuya ulaşılamıyor. Bağlantınızı kontrol edin.',
   errorNoDevices: 'Bu hesabın kayıtlı cihazı yok.',
   errorGeneric: 'Bir şeyler ters gitti.',
+  errorTransparency:
+    'Bu sunucunun anahtar şeffaflık kaydı doğrulanamadı, arama reddedildi.',
   retry: 'Tekrar dene',
   cancel: 'Vazgeç',
   copy: 'Kopyala',

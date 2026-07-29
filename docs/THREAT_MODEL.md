@@ -27,9 +27,24 @@ verification. Tildra's mitigation is that identity-key changes **block sending**
 until acknowledged, so the attack cannot be silent — Alice sees a state change
 she has to dismiss, and the safety-number comparison catches it.
 
-We consider undetectable MITM the most serious possible failure. Key
-transparency (an auditable append-only log of the handle directory) is the
-planned structural fix; today the defence is user-visible and manual.
+We consider undetectable MITM the most serious possible failure, so there are
+now two defences rather than one.
+
+The manual one: an identity-key change blocks sending until acknowledged.
+
+The structural one: **key transparency**. Every handle→key binding is appended
+to a signed, append-only Merkle log, and every lookup carries an inclusion
+proof plus a consistency proof from the last tree head the client verified. A
+server that swaps a key must either publish that swap where anyone can see it,
+or fork the log — which fails consistency as soon as the two views meet. See
+`docs/PROTOCOL.md` §7.1.
+
+**What is still missing**: split-view detection needs clients to gossip tree
+heads with each other or with independent auditors. Without that, a server
+willing to maintain a permanent, consistent fork aimed at one specific person
+is not caught by the log alone — only by that person comparing safety numbers.
+That is the remaining work, and until it lands the log raises the cost of an
+attack rather than closing it.
 
 ### A2 — A network observer (ISP, coffee-shop Wi-Fi, national firewall)
 
@@ -114,9 +129,11 @@ isn't there:
   or cover traffic; see `docs/PROTOCOL.md` §5.1 for why the simpler fixes do
   not work.
 
-- **The handle directory being trusted.** Until key transparency ships, a
-  hostile server can lie about which account ID a handle maps to. Verify safety
-  numbers with people who matter to you.
+- **A targeted split view of the transparency log.** The log catches a server
+  that rewrites history or that substitutes a key for everyone. It does not yet
+  catch one that maintains a separate, internally consistent log for a single
+  target, because clients do not gossip tree heads. Verify safety numbers with
+  people who matter to you.
 - **Malicious client builds.** Reproducible builds are a project goal, tracked in
   CI, not yet achieved. Until then, "open source" means auditable source, not
   verified binaries.

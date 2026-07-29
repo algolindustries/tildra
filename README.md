@@ -48,6 +48,7 @@ that doesn't feel like homework) and rebuilds the parts that aren't.
 | Server source available | ❌ | ✅ | ✅ |
 | Self-hostable / federated-ready | ❌ | ⚠️ hard | ✅ |
 | Sealed sender (server can't see who sent what) | ❌ | ✅ | ✅ |
+| Key transparency log | ❌ | ⚠️ in progress | ✅ proofs verified per lookup |
 | Message retention on server | ♾️ indefinite | until delivered | until delivered, hard TTL |
 | Reproducible builds | ⚠️ partial | ✅ | ✅ (goal, tracked in CI) |
 
@@ -99,7 +100,8 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 | Push notifications (content-free payload) | ✅ |
 | Voice messages with waveforms | ✅ |
 | Voice and video calls | ⬜ not yet |
-| Key transparency for the handle directory | ⬜ not yet |
+| Key transparency for the handle directory | ✅ log, proofs verified by the client |
+| Gossip / auditors for split-view detection | ⬜ not yet |
 | Independent security audit | ⬜ **not yet** |
 
 ## Repository layout

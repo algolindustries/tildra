@@ -38,6 +38,10 @@ type Config struct {
 	// reconnect — so this is a deployment choice, not a required one.
 	PushProvider string
 
+	// TransparencyKey is the base64 Ed25519 seed the log signs tree heads with.
+	// Empty disables the log; handle lookups then carry no proof.
+	TransparencyKey string
+
 	SweepInterval time.Duration
 }
 
@@ -50,6 +54,7 @@ func Load() (*Config, error) {
 		MaxAttachmentBytes: 32 << 20,  // 32 MiB
 		AttachmentTTL:      7 * 24 * time.Hour,
 		PushProvider:       env("TILDRA_PUSH_PROVIDER", "none"),
+		TransparencyKey:    os.Getenv("TILDRA_TRANSPARENCY_KEY"),
 		SweepInterval:      10 * time.Minute,
 	}
 	if v := os.Getenv("TILDRA_ENVELOPE_TTL"); v != "" {

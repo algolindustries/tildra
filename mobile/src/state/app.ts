@@ -28,6 +28,7 @@ import { generateIdentity, generatePreKeys } from '../crypto/identity';
 import { PreKeySecrets } from '../crypto/pqxdh';
 import { IdentityChangedError, NoDevicesError, SessionManager } from '../session/manager';
 import { Locale, Strings, resolveLocale, strings } from '../i18n';
+import { LogCheckpoint, TransparencyError, verifyHandleProof } from '../crypto/transparency';
 import {
   dismissWakeNotifications,
   presentLocalNotification,
@@ -364,10 +365,30 @@ export const useApp = create<AppState>((set, get) => ({
     const { parseContactInput } = await import('../ui/format');
     const parsed = parseContactInput(input);
 
-    const accountId =
-      parsed.kind === 'accountId'
-        ? parsed.value
-        : (await runtime.client.resolveHandle(parsed.value)).accountId;
+    let accountId: string;
+    if (parsed.kind === 'accountId') {
+      accountId = parsed.value;
+    } else {
+      // A handle is a pointer the server controls, so it is only worth
+      // following if the server can prove what it published. Verifying the
+      // proof — and that today's log extends the one we saw last time — is
+      // what makes a silent key swap impossible rather than merely rude.
+      const checkpoint = await loadCheckpoint(runtime.db);
+      const resolved = await runtime.client.resolveHandle(parsed.value, checkpoint?.size ?? 0);
+
+      if (resolved.proof) {
+        const next = verifyHandleProof(resolved.proof, parsed.value, checkpoint);
+        await saveCheckpoint(runtime.db, next);
+      } else if (checkpoint) {
+        // We have verified this log before and the server has stopped
+        // answering with proofs. That is a downgrade, and taking it silently
+        // would undo every check made so far.
+        throw new TransparencyError(
+          'the server stopped providing key transparency proofs for handle lookups',
+        );
+      }
+      accountId = resolved.accountId;
+    }
 
     // Learn the identity key up front so the conversation row is created with
     // the real key rather than a placeholder.
@@ -500,9 +521,42 @@ async function startSession(
   void registerForPush(parts.client).catch(() => undefined);
 }
 
+const CHECKPOINT_META_KEY = 'transparency.checkpoint.v1';
+
+/**
+ * The last verified tree head.
+ *
+ * Stored unencrypted on purpose: it is a public commitment the server already
+ * published, and there is nothing about it worth hiding from someone holding
+ * the device. What matters is that it cannot be *changed* without the vault,
+ * which is why it lives in the same database as everything else.
+ */
+async function loadCheckpoint(db: Database): Promise<LogCheckpoint | null> {
+  const raw = await db.getMeta(CHECKPOINT_META_KEY);
+  if (!raw) return null;
+  const parsed = JSON.parse(raw) as { size: number; rootHash: string; logKey: string };
+  return {
+    size: parsed.size,
+    rootHash: fromBase64(parsed.rootHash),
+    logKey: fromBase64(parsed.logKey),
+  };
+}
+
+async function saveCheckpoint(db: Database, checkpoint: LogCheckpoint): Promise<void> {
+  await db.setMeta(
+    CHECKPOINT_META_KEY,
+    JSON.stringify({
+      size: checkpoint.size,
+      rootHash: toBase64(checkpoint.rootHash),
+      logKey: toBase64(checkpoint.logKey),
+    }),
+  );
+}
+
 function describeError(err: unknown, t: Strings): string {
   if (err instanceof IdentityChangedError) return t.identityChangedTitle;
   if (err instanceof NoDevicesError) return t.errorNoDevices;
+  if (err instanceof TransparencyError) return `${t.errorTransparency} ${err.message}`;
   if (err instanceof ApiError) return err.status === 0 ? t.errorNetwork : err.detail;
   if (err instanceof Error) return err.message;
   return t.errorGeneric;

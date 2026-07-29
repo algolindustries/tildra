@@ -75,6 +75,19 @@ type Mailbox struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
+// LogEntry is one binding recorded in the key transparency log.
+//
+// Unlike everything else the server stores, this is deliberately permanent and
+// public: the point is that a client can prove what the server said about a
+// handle in the past, and the server cannot take it back.
+type LogEntry struct {
+	Index       int64     `json:"index"`
+	Handle      string    `json:"handle"`
+	AccountID   string    `json:"accountId"`
+	IdentityKey []byte    `json:"identityKey"`
+	RecordedAt  time.Time `json:"recordedAt"`
+}
+
 // PushToken is how a device is woken when a message arrives while it is not
 // connected.
 //

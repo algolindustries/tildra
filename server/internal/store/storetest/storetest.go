@@ -39,6 +39,7 @@ func Run(t *testing.T, newStore Factory) {
 		{"Backups", testBackups},
 		{"Attachments", testAttachments},
 		{"PushTokens", testPushTokens},
+		{"TransparencyLog", testTransparencyLog},
 		{"AuthTokens", testAuthTokens},
 		{"Sweep", testSweep},
 	}
@@ -541,6 +542,85 @@ func testPushTokens(t *testing.T, s store.Store) {
 	}
 	if _, err := s.GetPushToken(ctx(), "ACCOUNT1", "DEVICE1"); err != store.ErrNotFound {
 		t.Errorf("token survived deletion: %v", err)
+	}
+}
+
+func testTransparencyLog(t *testing.T, s store.Store) {
+	if size, err := s.LogSize(ctx()); err != nil || size != 0 {
+		t.Fatalf("empty log: %v, size %d", err, size)
+	}
+	if _, err := s.LatestLogEntryForHandle(ctx(), "nobody"); err != store.ErrNotFound {
+		t.Errorf("unknown handle: got %v, want ErrNotFound", err)
+	}
+
+	// Indices must be assigned by the store, densely and in order. A gap or a
+	// duplicate would give two clients different trees of the same size.
+	for i := 0; i < 5; i++ {
+		e := &model.LogEntry{
+			Handle:      fmt.Sprintf("user%d", i),
+			AccountID:   fmt.Sprintf("ACCOUNT%d", i),
+			IdentityKey: bytesOf(32, byte(i)),
+			RecordedAt:  time.Now().UTC().Truncate(time.Second),
+		}
+		if err := s.AppendLogEntry(ctx(), e); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+		if e.Index != int64(i) {
+			t.Fatalf("entry %d was assigned index %d", i, e.Index)
+		}
+	}
+
+	size, err := s.LogSize(ctx())
+	if err != nil || size != 5 {
+		t.Fatalf("size: %v, %d", err, size)
+	}
+
+	entries, err := s.LogEntries(ctx(), 0, 5)
+	if err != nil || len(entries) != 5 {
+		t.Fatalf("entries: %v, %d", err, len(entries))
+	}
+	for i, e := range entries {
+		if e.Index != int64(i) {
+			t.Errorf("position %d has index %d", i, e.Index)
+		}
+		if len(e.IdentityKey) != 32 {
+			t.Errorf("identity key did not round-trip at %d", i)
+		}
+	}
+
+	// A rebinding appends rather than replacing: the old entry has to stay
+	// visible, because being able to see that a key changed is the point.
+	rebind := &model.LogEntry{
+		Handle: "user2", AccountID: "ACCOUNT_NEW",
+		IdentityKey: bytesOf(32, 99), RecordedAt: time.Now().UTC().Truncate(time.Second),
+	}
+	if err := s.AppendLogEntry(ctx(), rebind); err != nil {
+		t.Fatalf("rebind: %v", err)
+	}
+	if rebind.Index != 5 {
+		t.Errorf("rebind got index %d, want 5", rebind.Index)
+	}
+
+	latest, err := s.LatestLogEntryForHandle(ctx(), "user2")
+	if err != nil {
+		t.Fatalf("latest: %v", err)
+	}
+	if latest.AccountID != "ACCOUNT_NEW" {
+		t.Errorf("latest for user2 is %q", latest.AccountID)
+	}
+
+	// The superseded entry is still there.
+	all, _ := s.LogEntries(ctx(), 0, 6)
+	if len(all) != 6 {
+		t.Fatalf("log has %d entries after a rebind, want 6", len(all))
+	}
+	if all[2].AccountID != "ACCOUNT2" {
+		t.Error("the superseded entry was overwritten; the log is not append-only")
+	}
+
+	// Handles resolve case-insensitively, matching the account directory.
+	if _, err := s.LatestLogEntryForHandle(ctx(), "USER2"); err != nil {
+		t.Errorf("case-insensitive lookup failed: %v", err)
 	}
 }
 
