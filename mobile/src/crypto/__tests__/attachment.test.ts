@@ -7,7 +7,7 @@ import {
   encryptAttachment,
   serializeAttachmentRef,
 } from '../attachment';
-import { equal, randomBytes, utf8 } from '../primitives';
+import { equal, randomBytes, toBase64, utf8 } from '../primitives';
 import { bucketSize } from '../wire';
 
 describe('attachment encryption', () => {
@@ -116,5 +116,41 @@ describe('attachment references', () => {
     const haystack = Array.from(ciphertext).join(',');
     expect(haystack).not.toContain(Array.from(key.key).join(','));
     expect(haystack).not.toContain(Array.from(key.nonce).join(','));
+  });
+});
+
+describe('voice metadata', () => {
+  it('round-trips duration and waveform', () => {
+    const { key } = encryptAttachment(randomBytes(500));
+    const waveform = new Uint8Array([0, 5, 15, 9, 2]);
+    const ref = { ...key, id: 'V1', mimeType: 'audio/m4a', durationMs: 4200, waveform };
+
+    const revived = deserializeAttachmentRef(
+      JSON.parse(JSON.stringify(serializeAttachmentRef(ref))),
+    );
+    expect(revived.durationMs).toBe(4200);
+    expect(equal(revived.waveform!, waveform)).toBe(true);
+  });
+
+  it('leaves them undefined for a non-voice attachment', () => {
+    const { key } = encryptAttachment(randomBytes(100));
+    const revived = deserializeAttachmentRef(
+      serializeAttachmentRef({ ...key, id: 'P1', mimeType: 'image/jpeg' }),
+    );
+    expect(revived.durationMs).toBeUndefined();
+    expect(revived.waveform).toBeUndefined();
+  });
+
+  it('rejects a hostile duration or waveform', () => {
+    // These come from the sender and are rendered directly, so they are
+    // bounded on receipt rather than trusted.
+    const { key } = encryptAttachment(randomBytes(10));
+    const good = serializeAttachmentRef({ ...key, id: 'V', mimeType: 'audio/m4a' });
+
+    expect(() =>
+      deserializeAttachmentRef({ ...good, waveform: toBase64(new Uint8Array(500)) }),
+    ).toThrow(/waveform/);
+    expect(() => deserializeAttachmentRef({ ...good, durationMs: -1 })).toThrow(/duration/);
+    expect(() => deserializeAttachmentRef({ ...good, durationMs: 1e12 })).toThrow(/duration/);
   });
 });

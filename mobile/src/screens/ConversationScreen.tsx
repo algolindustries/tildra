@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Avatar, Banner } from '../ui/components';
 import { AttachmentBubble } from '../ui/AttachmentBubble';
+import { VoiceBubble } from '../ui/VoiceBubble';
 import { palette, radius, spacing, typography } from '../ui/theme';
 import { Row, buildRows, formatAccountId, messageTime } from '../ui/format';
 import { useApp } from '../state/app';
@@ -33,6 +34,9 @@ export function ConversationScreen({
   const conversations = useApp((s) => s.conversations);
   const send = useApp((s) => s.send);
   const sendPhoto = useApp((s) => s.sendPhoto);
+  const startVoice = useApp((s) => s.startVoice);
+  const finishVoice = useApp((s) => s.finishVoice);
+  const recording = useApp((s) => s.recording);
 
   const conversation = conversations.find((c) => c.accountId === accountId);
   const [draft, setDraft] = useState('');
@@ -76,6 +80,16 @@ export function ConversationScreen({
           </Text>
         </Pressable>
       </View>
+
+      {recording ? (
+        <View style={styles.recordingBar}>
+          <View style={styles.recordingDot} />
+          <Text style={styles.recordingText}>{t.recording}</Text>
+          <Pressable accessibilityRole="button" onPress={() => void finishVoice(false)}>
+            <Text style={styles.recordingCancel}>{t.cancel}</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       {blocked ? (
         <View style={styles.bannerWrap}>
@@ -137,15 +151,36 @@ export function ConversationScreen({
             editable={!blocked}
             maxLength={4000}
           />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t.send}
-            accessibilityState={{ disabled: blocked || !draft.trim() }}
-            onPress={onSend}
-            style={[styles.sendButton, (blocked || !draft.trim()) && styles.sendButtonInert]}
-          >
-            <Text style={styles.sendText}>↑</Text>
-          </Pressable>
+          {draft.trim() ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t.send}
+              accessibilityState={{ disabled: blocked }}
+              onPress={onSend}
+              style={[styles.sendButton, blocked && styles.sendButtonInert]}
+            >
+              <Text style={styles.sendText}>↑</Text>
+            </Pressable>
+          ) : (
+            // Hold to record, release to send, slide away to cancel. The
+            // composer swaps rather than showing both, so the primary action
+            // is never ambiguous.
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t.recordVoice}
+              accessibilityState={{ disabled: blocked, busy: recording }}
+              onPressIn={() => void startVoice()}
+              onPressOut={() => void finishVoice(true)}
+              disabled={blocked}
+              style={[
+                styles.sendButton,
+                recording && styles.recordingButton,
+                blocked && styles.sendButtonInert,
+              ]}
+            >
+              <Text style={styles.sendText}>{recording ? '●' : '🎙'}</Text>
+            </Pressable>
+          )}
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -189,7 +224,11 @@ function Bubble({
           failed && styles.bubbleFailed,
         ]}
       >
-        {message.attachment ? <AttachmentBubble message={message} /> : null}
+        {message.attachment?.mimeType.startsWith('audio/') ? (
+          <VoiceBubble message={message} outgoing={outgoing} />
+        ) : message.attachment ? (
+          <AttachmentBubble message={message} />
+        ) : null}
         {message.text ? (
           <Text style={[styles.bubbleText, outgoing && styles.bubbleTextOut]}>{message.text}</Text>
         ) : null}
@@ -299,6 +338,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   sendButtonInert: { opacity: 0.35 },
+  recordingButton: { backgroundColor: palette.danger },
+  recordingBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    backgroundColor: palette.surface,
+  },
+  recordingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: palette.danger },
+  recordingText: { ...typography.small, color: palette.text, flex: 1 },
+  recordingCancel: { ...typography.small, color: palette.accent, fontWeight: '600' },
   attachButton: {
     width: 44,
     height: 44,

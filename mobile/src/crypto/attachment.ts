@@ -46,7 +46,19 @@ export interface AttachmentRef extends AttachmentKey {
   fileName?: string;
   width?: number;
   height?: number;
+  /**
+   * Voice notes only. Duration and waveform ride in the message rather than
+   * inside the blob so a bubble can render its shape and length immediately —
+   * having to download a file to learn whether it is three seconds or three
+   * minutes makes the feature feel broken.
+   */
+  durationMs?: number;
+  waveform?: Uint8Array;
 }
+
+/** Bounds on the waveform, checked on the way in as well as out. */
+const MAX_WAVEFORM_BYTES = 128;
+const MAX_DURATION_MS = 60 * 60 * 1000;
 
 /** Nonce is 24 bytes for XChaCha20; random is safe at that width. */
 const NONCE_BYTES = 24;
@@ -119,6 +131,8 @@ export interface SerializedAttachmentRef {
   fileName?: string;
   width?: number;
   height?: number;
+  durationMs?: number;
+  waveform?: string;
 }
 
 export function serializeAttachmentRef(ref: AttachmentRef): SerializedAttachmentRef {
@@ -132,6 +146,8 @@ export function serializeAttachmentRef(ref: AttachmentRef): SerializedAttachment
     fileName: ref.fileName,
     width: ref.width,
     height: ref.height,
+    durationMs: ref.durationMs,
+    waveform: ref.waveform ? toBase64(ref.waveform) : undefined,
   };
 }
 
@@ -146,6 +162,8 @@ export function deserializeAttachmentRef(data: SerializedAttachmentRef): Attachm
     fileName: data.fileName,
     width: data.width,
     height: data.height,
+    durationMs: data.durationMs,
+    waveform: data.waveform ? fromBase64(data.waveform) : undefined,
   };
   if (ref.key.length !== AEAD_KEY_BYTES || ref.nonce.length !== NONCE_BYTES) {
     throw new AttachmentError('attachment reference has malformed key material');
@@ -155,6 +173,17 @@ export function deserializeAttachmentRef(data: SerializedAttachmentRef): Attachm
   }
   if (!Number.isInteger(ref.size) || ref.size < 0) {
     throw new AttachmentError('attachment reference has an invalid size');
+  }
+  // The sender controls these, so they are bounded here too. A waveform of a
+  // million bars or a duration of a century is not a voice note.
+  if (ref.waveform && ref.waveform.length > MAX_WAVEFORM_BYTES) {
+    throw new AttachmentError('attachment reference has an oversized waveform');
+  }
+  if (
+    ref.durationMs !== undefined &&
+    (!Number.isFinite(ref.durationMs) || ref.durationMs < 0 || ref.durationMs > MAX_DURATION_MS)
+  ) {
+    throw new AttachmentError('attachment reference has an invalid duration');
   }
   return ref;
 }

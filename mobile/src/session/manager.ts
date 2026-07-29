@@ -708,7 +708,16 @@ export class SessionManager {
    */
   async sendAttachment(
     accountId: string,
-    file: { bytes: Uint8Array; mimeType: string; fileName?: string; width?: number; height?: number },
+    file: {
+      bytes: Uint8Array;
+      mimeType: string;
+      fileName?: string;
+      width?: number;
+      height?: number;
+      /** Voice notes: rendered from the message, before any download. */
+      durationMs?: number;
+      waveform?: Uint8Array;
+    },
     caption = '',
   ): Promise<Message> {
     const conversation = await this.store.getConversation(accountId);
@@ -731,6 +740,8 @@ export class SessionManager {
       fileName: file.fileName,
       width: file.width,
       height: file.height,
+      durationMs: file.durationMs,
+      waveform: file.waveform,
     };
 
     const message: Message = {

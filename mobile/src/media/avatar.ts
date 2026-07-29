@@ -62,7 +62,11 @@ export async function compressToBudget(
 export async function pickAvatar(): Promise<Uint8Array | null> {
   const ImagePicker = await import('expo-image-picker');
   const ImageManipulator = await import('expo-image-manipulator');
-  const FileSystem = await import('expo-file-system');
+  // expo-file-system's modern File API is not typed for reads and writes yet,
+  // and its top-level readAsStringAsync/writeAsStringAsync now throw at
+  // runtime with a pointer here. The legacy entrypoint is Expo's documented
+  // path and is fully typed, so that is what this uses.
+  const FileSystem = await import('expo-file-system/legacy');
 
   const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
   if (!permission.granted) {

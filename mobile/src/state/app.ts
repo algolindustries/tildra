@@ -61,6 +61,7 @@ export interface AppState {
   about: string | null;
   avatar: Uint8Array | null;
   socketState: SocketState;
+  recording: boolean;
 
   conversations: (Conversation & { id: string })[];
   activeAccountId: string | null;
@@ -75,6 +76,8 @@ export interface AppState {
   closeConversation: () => void;
   send: (text: string) => Promise<void>;
   sendPhoto: () => Promise<void>;
+  startVoice: () => Promise<void>;
+  finishVoice: (send: boolean) => Promise<void>;
   loadAttachment: (messageId: string) => Promise<Uint8Array | null>;
   startConversation: (input: string) => Promise<string>;
   markVerified: (accountId: string) => Promise<void>;
@@ -98,6 +101,9 @@ interface Runtime {
 
 let runtime: Runtime | null = null;
 
+/** The in-flight voice recorder, if any. Not store state: it is a live handle. */
+let activeRecording: import('../media/voice').Recording | null = null;
+
 export function currentRuntime(): Runtime | null {
   return runtime;
 }
@@ -114,6 +120,7 @@ export const useApp = create<AppState>((set, get) => ({
   about: null,
   avatar: null,
   socketState: 'closed',
+  recording: false,
 
   conversations: [],
   activeAccountId: null,
@@ -283,6 +290,57 @@ export const useApp = create<AppState>((set, get) => ({
         },
         '',
       );
+    } catch (err) {
+      set({ error: describeError(err, get().t) });
+    } finally {
+      await get().openConversation(accountId);
+    }
+  },
+
+  /**
+   * Begin recording. Held in module scope rather than store state because a
+   * recorder handle is not serialisable and must not trigger re-renders.
+   */
+  async startVoice() {
+    if (!runtime?.manager || !get().activeAccountId || activeRecording) return;
+    try {
+      const { startRecording } = await import('../media/voice');
+      activeRecording = await startRecording();
+      set({ recording: true });
+    } catch (err) {
+      activeRecording = null;
+      set({ recording: false, error: describeError(err, get().t) });
+    }
+  },
+
+  /**
+   * Stop recording, and send unless the user cancelled.
+   *
+   * Cancelling still stops the recorder — a released microphone matters more
+   * than a discarded file.
+   */
+  async finishVoice(send) {
+    const accountId = get().activeAccountId;
+    const current = activeRecording;
+    activeRecording = null;
+    set({ recording: false });
+    if (!current || !runtime?.manager || !accountId) return;
+
+    try {
+      if (!send) {
+        await current.cancel();
+        return;
+      }
+      const note = await current.stop();
+      // A mis-tap produces nothing rather than a half-second of silence.
+      if (!note) return;
+
+      await runtime.manager.sendAttachment(accountId, {
+        bytes: note.bytes,
+        mimeType: note.mimeType,
+        durationMs: note.durationMs,
+        waveform: note.waveform,
+      });
     } catch (err) {
       set({ error: describeError(err, get().t) });
     } finally {

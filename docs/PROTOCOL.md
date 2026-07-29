@@ -255,6 +255,14 @@ nothing.
 - Blobs expire after 7 days. An attachment nobody fetched in a week is one
   nobody is going to.
 
+**Voice notes** are attachments with two extra fields in the reference: a
+duration and a 48-byte waveform, 4 bits of loudness per bar. Both ride in the
+message rather than inside the blob, so a bubble shows its shape and length
+the moment it arrives — needing a download to learn whether a note is three
+seconds or three minutes makes the feature feel broken. Both are bounded on
+receipt as well as on send, because they come from the sender and are rendered
+directly.
+
 ## 6. Transport
 
 - TLS 1.3 only. No downgrade, no TLS 1.2.

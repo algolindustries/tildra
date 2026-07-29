@@ -469,6 +469,34 @@ describeIntegration('attachments', () => {
     bob.socket.close();
   }, 90_000);
 
+  it('carries a voice note with its waveform visible before download', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    const audio = randomBytes(30_000);
+    const waveform = new Uint8Array(48).map((_, i) => i % 16);
+    await alice.manager.sendAttachment(bob.accountId, {
+      bytes: audio,
+      mimeType: 'audio/m4a',
+      durationMs: 7_400,
+      waveform,
+    });
+    await waitFor(() => bob.received.length > 0, 20_000);
+
+    const received = bob.store.messages.find((m) => !m.outgoing)!;
+    // The shape and length arrive with the message, so the bubble is complete
+    // before a byte of audio is fetched.
+    expect(received.attachment!.durationMs).toBe(7_400);
+    expect(equal(received.attachment!.waveform!, waveform)).toBe(true);
+    expect(received.attachment!.mimeType).toBe('audio/m4a');
+
+    const fetched = await bob.manager.fetchAttachment(received.attachment!);
+    expect(equal(fetched, audio)).toBe(true);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+
   it('uploads once and delivers the same reference to the recipient', async () => {
     const alice = await bringUp('Alice');
     const bob = await bringUp('Bob');

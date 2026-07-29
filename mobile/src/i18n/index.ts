@@ -32,6 +32,10 @@ export interface Strings {
   attachPhoto: string;
   attachment: string;
   attachmentFailed: string;
+  recordVoice: string;
+  recording: string;
+  play: string;
+  pause: string;
   recoveryTitle: string;
   recoveryBody: string;
   recoveryConfirm: string;
@@ -118,6 +122,10 @@ const en: Strings = {
   attachPhoto: 'Send a photo',
   attachment: 'Attachment',
   attachmentFailed: 'Could not load this attachment.',
+  recordVoice: 'Hold to record a voice message',
+  recording: 'Recording…',
+  play: 'Play',
+  pause: 'Stop',
   recoveryTitle: 'Write down your recovery phrase',
   recoveryBody:
     'These 24 words are the only way back into your account. We cannot reset them for you — the server has nothing to reset. Store them somewhere physical.',
@@ -202,6 +210,10 @@ const tr: Strings = {
   attachPhoto: 'Fotoğraf gönder',
   attachment: 'Ek dosya',
   attachmentFailed: 'Bu ek dosya yüklenemedi.',
+  recordVoice: 'Sesli mesaj için basılı tutun',
+  recording: 'Kaydediliyor…',
+  play: 'Oynat',
+  pause: 'Durdur',
   recoveryTitle: 'Kurtarma kelimelerinizi yazın',
   recoveryBody:
     'Bu 24 kelime hesabınıza dönmenin tek yolu. Sizin için sıfırlayamayız — sunucuda sıfırlanacak bir şey yok. Fiziksel bir yerde saklayın.',

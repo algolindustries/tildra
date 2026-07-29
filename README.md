@@ -97,7 +97,8 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 | Encrypted local storage (keys, sessions, messages) | ✅ |
 | Encrypted photo and file attachments | ✅ |
 | Push notifications (content-free payload) | ✅ |
-| Voice messages, calls | ⬜ not yet |
+| Voice messages with waveforms | ✅ |
+| Voice and video calls | ⬜ not yet |
 | Key transparency for the handle directory | ⬜ not yet |
 | Independent security audit | ⬜ **not yet** |
 
