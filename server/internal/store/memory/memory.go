@@ -42,6 +42,7 @@ type Store struct {
 	backups   map[string][]byte
 	tokens    map[string]tokenEntry // hex(tokenHash) -> entry
 	blobs     map[string]*model.Attachment
+	push      map[string]*model.PushToken
 }
 
 // New returns an empty in-memory store.
@@ -56,6 +57,7 @@ func New() *Store {
 		backups:   map[string][]byte{},
 		tokens:    map[string]tokenEntry{},
 		blobs:     map[string]*model.Attachment{},
+		push:      map[string]*model.PushToken{},
 	}
 }
 
@@ -354,6 +356,35 @@ func (s *Store) GetAttachment(_ context.Context, id string) (*model.Attachment, 
 	cp := *a
 	cp.Ciphertext = append([]byte(nil), a.Ciphertext...)
 	return &cp, nil
+}
+
+func (s *Store) PutPushToken(_ context.Context, t *model.PushToken) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.devices[dk(t.AccountID, t.DeviceID)]; !ok {
+		return store.ErrNotFound
+	}
+	cp := *t
+	s.push[dk(t.AccountID, t.DeviceID)] = &cp
+	return nil
+}
+
+func (s *Store) GetPushToken(_ context.Context, accountID, deviceID string) (*model.PushToken, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, ok := s.push[dk(accountID, deviceID)]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	cp := *t
+	return &cp, nil
+}
+
+func (s *Store) DeletePushToken(_ context.Context, accountID, deviceID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.push, dk(accountID, deviceID))
+	return nil
 }
 
 func (s *Store) PutAuthToken(_ context.Context, tokenHash []byte, accountID, deviceID string, expires time.Time) error {

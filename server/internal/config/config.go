@@ -33,6 +33,11 @@ type Config struct {
 	// an attachment nobody fetched in a week is one nobody is going to.
 	AttachmentTTL time.Duration
 
+	// PushProvider selects how devices are woken: "expo", or "none" (the
+	// default). A server without push still works — clients receive on
+	// reconnect — so this is a deployment choice, not a required one.
+	PushProvider string
+
 	SweepInterval time.Duration
 }
 
@@ -44,6 +49,7 @@ func Load() (*Config, error) {
 		MaxEnvelopeBytes:   256 << 10, // 256 KiB
 		MaxAttachmentBytes: 32 << 20,  // 32 MiB
 		AttachmentTTL:      7 * 24 * time.Hour,
+		PushProvider:       env("TILDRA_PUSH_PROVIDER", "none"),
 		SweepInterval:      10 * time.Minute,
 	}
 	if v := os.Getenv("TILDRA_ENVELOPE_TTL"); v != "" {

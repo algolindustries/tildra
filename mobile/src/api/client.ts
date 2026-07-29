@@ -227,6 +227,18 @@ export class TildraClient {
   }
 
   // -------------------------------------------------------------------------
+  // Push
+  // -------------------------------------------------------------------------
+
+  async registerPushToken(platform: 'expo' | 'apns' | 'fcm', token: string): Promise<void> {
+    await this.request('PUT', '/v1/push', { body: { platform, token }, expectEmpty: true });
+  }
+
+  async deletePushToken(): Promise<void> {
+    await this.request('DELETE', '/v1/push', { expectEmpty: true });
+  }
+
+  // -------------------------------------------------------------------------
   // Attachments
   // -------------------------------------------------------------------------
 

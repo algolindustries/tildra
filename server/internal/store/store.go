@@ -60,6 +60,11 @@ type Store interface {
 	PutAttachment(ctx context.Context, a *model.Attachment) error
 	GetAttachment(ctx context.Context, id string) (*model.Attachment, error)
 
+	// Push tokens, one per device.
+	PutPushToken(ctx context.Context, t *model.PushToken) error
+	GetPushToken(ctx context.Context, accountID, deviceID string) (*model.PushToken, error)
+	DeletePushToken(ctx context.Context, accountID, deviceID string) error
+
 	// Auth tokens. The stored value is a hash; the plaintext token never
 	// touches disk.
 	PutAuthToken(ctx context.Context, tokenHash []byte, accountID, deviceID string, expires time.Time) error

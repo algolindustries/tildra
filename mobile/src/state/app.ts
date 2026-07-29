@@ -28,6 +28,12 @@ import { generateIdentity, generatePreKeys } from '../crypto/identity';
 import { PreKeySecrets } from '../crypto/pqxdh';
 import { IdentityChangedError, NoDevicesError, SessionManager } from '../session/manager';
 import { Locale, Strings, resolveLocale, strings } from '../i18n';
+import {
+  dismissWakeNotifications,
+  presentLocalNotification,
+  registerForPush,
+  unregisterForPush,
+} from '../push/register';
 
 const IDENTITY_META_KEY = 'identity.v1';
 const PREKEYS_META_KEY = 'prekeys.v1';
@@ -349,6 +355,7 @@ export const useApp = create<AppState>((set, get) => ({
   async signOut() {
     // Order matters: revoke the token first, then destroy the keys. Doing it
     // the other way round leaves a live session nobody can revoke.
+    if (runtime?.client) await unregisterForPush(runtime.client);
     try {
       await runtime?.client.logout();
     } catch {
@@ -393,10 +400,22 @@ async function startSession(
     preKeys: parts.preKeys,
     onMailboxesChanged: (mailboxes) => socket?.subscribe(mailboxes),
     events: {
-      onMessage: () => {
+      onMessage: (message, conversation) => {
         void get().refreshConversations();
         const active = get().activeAccountId;
         if (active) void get().openConversation(active);
+
+        // The server's notification said only that something arrived. Now that
+        // the message is decrypted, replace it with one that names the sender —
+        // which the device can do because the name never left it.
+        if (!message.outgoing && active !== conversation.accountId) {
+          void presentLocalNotification({
+            title: conversation.displayName ?? get().t.appName,
+            body: message.text || get().t.attachment,
+            data: { accountId: conversation.accountId },
+          }).catch(() => undefined);
+          void dismissWakeNotifications().catch(() => undefined);
+        }
       },
       onIdentityChange: () => {
         void get().refreshConversations();
@@ -417,6 +436,10 @@ async function startSession(
   socket.connect();
 
   runtime = { ...parts, manager, socket };
+
+  // Best effort, and after the socket is up: a device that declines push still
+  // receives everything while the app is open.
+  void registerForPush(parts.client).catch(() => undefined);
 }
 
 function describeError(err: unknown, t: Strings): string {

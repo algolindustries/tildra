@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,15 +19,17 @@ import (
 	"github.com/tildra/tildra/server/internal/config"
 	"github.com/tildra/tildra/server/internal/gateway"
 	"github.com/tildra/tildra/server/internal/model"
+	"github.com/tildra/tildra/server/internal/push"
 	"github.com/tildra/tildra/server/internal/store"
 	"github.com/tildra/tildra/server/internal/store/memory"
 )
 
 type harness struct {
-	t      *testing.T
-	srv    *httptest.Server
-	store  *memory.Store
-	client *http.Client
+	t        *testing.T
+	srv      *httptest.Server
+	store    *memory.Store
+	client   *http.Client
+	notifier *push.Recording
 }
 
 func newHarness(t *testing.T) *harness {
@@ -36,11 +39,12 @@ func newHarness(t *testing.T) *harness {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	authn := auth.New(st)
 	hub := gateway.NewHub(st, log)
-	s := api.New(cfg, st, authn, hub, log)
+	notifier := &push.Recording{}
+	s := api.New(cfg, st, authn, hub, notifier, log)
 
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
-	return &harness{t: t, srv: srv, store: st, client: srv.Client()}
+	return &harness{t: t, srv: srv, store: st, client: srv.Client(), notifier: notifier}
 }
 
 func (h *harness) do(method, path, token string, body any) (*http.Response, []byte) {
@@ -528,6 +532,101 @@ func TestLogoutRevokesToken(t *testing.T) {
 	}
 	if resp, _ := h.do(http.MethodGet, "/v1/keys/count", a.token, nil); resp.StatusCode != http.StatusUnauthorized {
 		t.Error("revoked token still works")
+	}
+}
+
+func TestPushTokenRegistration(t *testing.T) {
+	h := newHarness(t)
+	a := h.register("Phone")
+
+	for _, tc := range []struct {
+		name     string
+		body     map[string]any
+		wantCode int
+	}{
+		{"valid expo token", map[string]any{"platform": "expo", "token": "ExponentPushToken[abc]"}, http.StatusNoContent},
+		{"unknown platform", map[string]any{"platform": "carrier-pigeon", "token": "x"}, http.StatusBadRequest},
+		{"empty token", map[string]any{"platform": "expo", "token": ""}, http.StatusBadRequest},
+		{"oversized token", map[string]any{"platform": "fcm", "token": strings.Repeat("x", 513)}, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, body := h.do(http.MethodPut, "/v1/push", a.token, tc.body)
+			if resp.StatusCode != tc.wantCode {
+				t.Fatalf("status %d body %s, want %d", resp.StatusCode, body, tc.wantCode)
+			}
+		})
+	}
+
+	stored, err := h.store.GetPushToken(context.Background(), a.accountID, a.deviceID)
+	if err != nil {
+		t.Fatalf("token was not stored: %v", err)
+	}
+	if stored.Token != "ExponentPushToken[abc]" {
+		t.Errorf("stored token is %q", stored.Token)
+	}
+
+	if resp, _ := h.do(http.MethodDelete, "/v1/push", a.token, nil); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete: status %d", resp.StatusCode)
+	}
+	if _, err := h.store.GetPushToken(context.Background(), a.accountID, a.deviceID); err == nil {
+		t.Error("token survived deletion")
+	}
+}
+
+func TestPushWakesAnOfflineDevice(t *testing.T) {
+	h := newHarness(t)
+	bob := h.register("Bob")
+	alice := h.register("Alice")
+
+	const mailbox = "mb_0123456789abcdef0123456789abcdef"
+	h.do(http.MethodPost, "/v1/mailboxes", bob.token, map[string]any{"mailboxes": []string{mailbox}})
+	h.do(http.MethodPut, "/v1/push", bob.token, map[string]any{
+		"platform": "expo", "token": "ExponentPushToken[bob]",
+	})
+
+	// Bob has no socket open, so the envelope queues and a wake is sent.
+	resp, _ := h.do(http.MethodPost, "/v1/messages", alice.token, map[string]any{
+		"mailbox": mailbox, "ciphertext": []byte("sealed"),
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("send: status %d", resp.StatusCode)
+	}
+
+	// The wake runs detached from the request, so give it a moment.
+	deadline := time.Now().Add(3 * time.Second)
+	for len(h.notifier.Sent) == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if len(h.notifier.Sent) != 1 {
+		t.Fatalf("sent %d notifications, want 1", len(h.notifier.Sent))
+	}
+	if h.notifier.Sent[0].Token != "ExponentPushToken[bob]" {
+		t.Errorf("woke the wrong device: %q", h.notifier.Sent[0].Token)
+	}
+	// The notifier is handed a token and nothing about the message. If this
+	// ever carried a sender or a preview, Apple and Google would learn who is
+	// talking to whom.
+	if h.notifier.Sent[0].AccountID != bob.accountID {
+		t.Errorf("token belongs to %q, want Bob", h.notifier.Sent[0].AccountID)
+	}
+}
+
+func TestNoPushWithoutARegisteredToken(t *testing.T) {
+	h := newHarness(t)
+	bob := h.register("Bob")
+	alice := h.register("Alice")
+
+	const mailbox = "mb_0123456789abcdef0123456789abcdef"
+	h.do(http.MethodPost, "/v1/mailboxes", bob.token, map[string]any{"mailboxes": []string{mailbox}})
+
+	h.do(http.MethodPost, "/v1/messages", alice.token, map[string]any{
+		"mailbox": mailbox, "ciphertext": []byte("sealed"),
+	})
+	time.Sleep(300 * time.Millisecond)
+
+	if len(h.notifier.Sent) != 0 {
+		t.Errorf("sent %d notifications for a device with no token", len(h.notifier.Sent))
 	}
 }
 

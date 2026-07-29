@@ -94,8 +94,17 @@ isn't there:
 - **A compromised endpoint.** Malware with your device's key material reads your
   messages. Nothing in a protocol fixes this.
 - **Push notification metadata.** APNs and FCM learn that a device received a
-  wake signal and when. Payloads carry no content, but delivery timing leaks to
-  Apple and Google. Self-hosted deployments can use a WebSocket-only mode.
+  wake signal and when. The payload carries no sender, no preview and no
+  conversation — the client decrypts locally and replaces the placeholder with
+  a real notification — so what leaks is timing, not who is talking to whom.
+
+  The push token itself is a second cost, and a real one: it is a stable
+  identifier issued by Apple or Google, so the operator holds a value those
+  companies can link to a device. It is the only durable device-linked datum
+  the server keeps beyond routing. Deployments can run with
+  `TILDRA_PUSH_PROVIDER=none`, in which case no token is ever collected and
+  clients receive on reconnect; users who decline the permission are in the
+  same position individually.
 - **First-contact timing.** A device's contact inbox is derived from its public
   identity key, which the server holds. So the server can observe that someone
   started a conversation with a given device, and when — though not who. Every

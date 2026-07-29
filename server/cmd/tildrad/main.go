@@ -19,6 +19,7 @@ import (
 	"github.com/tildra/tildra/server/internal/auth"
 	"github.com/tildra/tildra/server/internal/config"
 	"github.com/tildra/tildra/server/internal/gateway"
+	"github.com/tildra/tildra/server/internal/push"
 	"github.com/tildra/tildra/server/internal/store"
 	"github.com/tildra/tildra/server/internal/store/memory"
 	"github.com/tildra/tildra/server/internal/store/postgres"
@@ -56,7 +57,20 @@ func main() {
 
 	authn := auth.New(st)
 	hub := gateway.NewHub(st, log)
-	srv := api.New(cfg, st, authn, hub, log)
+
+	var notifier push.Notifier = push.Nop{}
+	switch cfg.PushProvider {
+	case "expo":
+		notifier = push.NewExpo(log)
+		log.Info("push notifications enabled", "provider", "expo")
+	case "", "none":
+		log.Info("push notifications disabled; devices receive on reconnect")
+	default:
+		log.Error("unknown TILDRA_PUSH_PROVIDER", "value", cfg.PushProvider)
+		os.Exit(1)
+	}
+
+	srv := api.New(cfg, st, authn, hub, notifier, log)
 
 	httpSrv := &http.Server{
 		Addr:    cfg.Addr,

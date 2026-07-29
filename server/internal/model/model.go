@@ -75,6 +75,24 @@ type Mailbox struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
+// PushToken is how a device is woken when a message arrives while it is not
+// connected.
+//
+// This is the one piece of durable, device-linked metadata the server keeps
+// beyond the routing tables, and it is worth being explicit about the cost:
+// the token is a stable identifier issued by Apple or Google, so the operator
+// holds a value that those companies can link to a device. In exchange the app
+// works in the background at all. The mitigation is that the notification
+// payload carries no content, no sender, and no conversation — see
+// docs/THREAT_MODEL.md.
+type PushToken struct {
+	AccountID string    `json:"accountId"`
+	DeviceID  string    `json:"deviceId"`
+	Platform  string    `json:"platform"` // "expo", "apns", "fcm"
+	Token     string    `json:"token"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
 // Attachment is an encrypted blob held for retrieval.
 //
 // The server stores ciphertext and a size, and nothing else. It does not know

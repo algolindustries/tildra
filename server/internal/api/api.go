@@ -6,6 +6,7 @@
 package api
 
 import (
+	"context"
 	"crypto/ed25519"
 	"errors"
 	"io"
@@ -22,20 +23,32 @@ import (
 	"github.com/tildra/tildra/server/internal/gateway"
 	"github.com/tildra/tildra/server/internal/id"
 	"github.com/tildra/tildra/server/internal/model"
+	"github.com/tildra/tildra/server/internal/push"
 	"github.com/tildra/tildra/server/internal/store"
 )
 
-// Server wires the store, authenticator and hub into an http.Handler.
+// Server wires the store, authenticator, hub and notifier into an http.Handler.
 type Server struct {
 	cfg   *config.Config
 	store store.Store
 	auth  *auth.Authenticator
 	hub   *gateway.Hub
+	push  push.Notifier
 	log   *slog.Logger
 }
 
-func New(cfg *config.Config, s store.Store, a *auth.Authenticator, h *gateway.Hub, log *slog.Logger) *Server {
-	return &Server{cfg: cfg, store: s, auth: a, hub: h, log: log}
+func New(
+	cfg *config.Config,
+	s store.Store,
+	a *auth.Authenticator,
+	h *gateway.Hub,
+	notifier push.Notifier,
+	log *slog.Logger,
+) *Server {
+	if notifier == nil {
+		notifier = push.Nop{}
+	}
+	return &Server{cfg: cfg, store: s, auth: a, hub: h, push: notifier, log: log}
 }
 
 // Handler builds the route table.
@@ -60,6 +73,8 @@ func (s *Server) Handler() http.Handler {
 	authed.HandleFunc("POST /v1/messages", s.sendMessage)
 	authed.HandleFunc("PUT /v1/backup", s.putBackup)
 	authed.HandleFunc("GET /v1/backup", s.getBackup)
+	authed.HandleFunc("PUT /v1/push", s.registerPushToken)
+	authed.HandleFunc("DELETE /v1/push", s.deletePushToken)
 	authed.HandleFunc("POST /v1/attachments", s.uploadAttachment)
 	authed.HandleFunc("GET /v1/attachments/{id}", s.downloadAttachment)
 	authed.HandleFunc("POST /v1/auth/logout", s.logout)
@@ -384,8 +399,10 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Deliver to any live socket. If nobody is listening the envelope waits in
-	// the queue; a push notification (content-free) wakes the device.
-	s.hub.Deliver(e)
+	// the queue and the device is woken with a content-free notification.
+	if !s.hub.Deliver(e) {
+		s.wake(req.Mailbox)
+	}
 	respond(w, http.StatusAccepted, map[string]string{"id": e.ID})
 }
 
@@ -418,6 +435,80 @@ func (s *Server) getBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond(w, http.StatusOK, map[string][]byte{"blob": blob})
+}
+
+// ---------- push ----------
+
+func (s *Server) registerPushToken(w http.ResponseWriter, r *http.Request) {
+	p, _ := auth.FromContext(r.Context())
+	var req struct {
+		Platform string `json:"platform"`
+		Token    string `json:"token"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	switch req.Platform {
+	case "expo", "apns", "fcm":
+	default:
+		fail(w, http.StatusBadRequest, "platform must be expo, apns or fcm")
+		return
+	}
+	if len(req.Token) == 0 || len(req.Token) > 512 {
+		fail(w, http.StatusBadRequest, "token must be between 1 and 512 characters")
+		return
+	}
+
+	err := s.store.PutPushToken(r.Context(), &model.PushToken{
+		AccountID: p.AccountID,
+		DeviceID:  p.DeviceID,
+		Platform:  req.Platform,
+		Token:     req.Token,
+		UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		s.fail500(w, "put push token", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deletePushToken stops notifications for this device. Sign-out calls it, and
+// so should any "mute this device" affordance — a user who turns off push
+// should stop being a row in the table, not merely stop being notified.
+func (s *Server) deletePushToken(w http.ResponseWriter, r *http.Request) {
+	p, _ := auth.FromContext(r.Context())
+	if err := s.store.DeletePushToken(r.Context(), p.AccountID, p.DeviceID); err != nil {
+		s.fail500(w, "delete push token", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// wake sends a content-free notification to the device that owns a mailbox.
+//
+// Runs detached from the request: a slow or unreachable push provider must not
+// hold up the sender, who has already done their part. A failure here costs a
+// delayed notification, not a lost message — the envelope is queued either way.
+func (s *Server) wake(mailboxID string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		m, err := s.store.ResolveMailbox(ctx, mailboxID)
+		if err != nil {
+			return
+		}
+		token, err := s.store.GetPushToken(ctx, m.AccountID, m.DeviceID)
+		if err != nil {
+			// No token registered is the normal case for a desktop or a
+			// device that declined notifications.
+			return
+		}
+		if err := s.push.Notify(ctx, token); err != nil {
+			s.log.Warn("push notify failed", "err", err)
+		}
+	}()
 }
 
 // ---------- attachments ----------

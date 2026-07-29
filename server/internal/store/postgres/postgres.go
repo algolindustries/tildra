@@ -528,6 +528,44 @@ func (s *Store) GetAttachment(ctx context.Context, id string) (*model.Attachment
 }
 
 // ---------------------------------------------------------------------------
+// Push tokens
+// ---------------------------------------------------------------------------
+
+func (s *Store) PutPushToken(ctx context.Context, t *model.PushToken) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO push_tokens (account_id, device_id, platform, token, updated_at)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (account_id, device_id) DO UPDATE
+		SET platform = EXCLUDED.platform, token = EXCLUDED.token, updated_at = EXCLUDED.updated_at`,
+		t.AccountID, t.DeviceID, t.Platform, t.Token, t.UpdatedAt)
+	if isForeignKeyViolation(err) {
+		return store.ErrNotFound
+	}
+	return err
+}
+
+func (s *Store) GetPushToken(ctx context.Context, accountID, deviceID string) (*model.PushToken, error) {
+	var t model.PushToken
+	err := s.pool.QueryRow(ctx, `
+		SELECT account_id, device_id, platform, token, updated_at
+		FROM push_tokens WHERE account_id = $1 AND device_id = $2`, accountID, deviceID).
+		Scan(&t.AccountID, &t.DeviceID, &t.Platform, &t.Token, &t.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (s *Store) DeletePushToken(ctx context.Context, accountID, deviceID string) error {
+	_, err := s.pool.Exec(ctx,
+		`DELETE FROM push_tokens WHERE account_id = $1 AND device_id = $2`, accountID, deviceID)
+	return err
+}
+
+// ---------------------------------------------------------------------------
 // Auth tokens
 // ---------------------------------------------------------------------------
 

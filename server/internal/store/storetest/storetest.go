@@ -38,6 +38,7 @@ func Run(t *testing.T, newStore Factory) {
 		{"AckIsScopedToMailbox", testAckIsScopedToMailbox},
 		{"Backups", testBackups},
 		{"Attachments", testAttachments},
+		{"PushTokens", testPushTokens},
 		{"AuthTokens", testAuthTokens},
 		{"Sweep", testSweep},
 	}
@@ -496,6 +497,50 @@ func testAttachments(t *testing.T, s store.Store) {
 	}
 	if _, err := s.GetAttachment(ctx(), "att-old"); err != store.ErrNotFound {
 		t.Errorf("expired attachment: got %v, want ErrNotFound", err)
+	}
+}
+
+func testPushTokens(t *testing.T, s store.Store) {
+	seed(t, s, "ACCOUNT1", "DEVICE1")
+
+	if _, err := s.GetPushToken(ctx(), "ACCOUNT1", "DEVICE1"); err != store.ErrNotFound {
+		t.Errorf("no token yet: got %v, want ErrNotFound", err)
+	}
+
+	token := &model.PushToken{
+		AccountID: "ACCOUNT1", DeviceID: "DEVICE1",
+		Platform: "expo", Token: "ExponentPushToken[abc]", UpdatedAt: time.Now().UTC(),
+	}
+	if err := s.PutPushToken(ctx(), token); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	got, err := s.GetPushToken(ctx(), "ACCOUNT1", "DEVICE1")
+	if err != nil || got.Token != token.Token {
+		t.Fatalf("get: %v, %+v", err, got)
+	}
+
+	// A device that re-registers replaces its row rather than accumulating a
+	// history of every token it has ever held.
+	token.Token = "ExponentPushToken[replaced]"
+	if err := s.PutPushToken(ctx(), token); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	got, _ = s.GetPushToken(ctx(), "ACCOUNT1", "DEVICE1")
+	if got.Token != "ExponentPushToken[replaced]" {
+		t.Errorf("token was not replaced: %q", got.Token)
+	}
+
+	if err := s.PutPushToken(ctx(), &model.PushToken{
+		AccountID: "NOSUCH", DeviceID: "DEVICE1", Platform: "expo", Token: "x", UpdatedAt: time.Now(),
+	}); err != store.ErrNotFound {
+		t.Errorf("token for a missing device: got %v, want ErrNotFound", err)
+	}
+
+	if err := s.DeletePushToken(ctx(), "ACCOUNT1", "DEVICE1"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := s.GetPushToken(ctx(), "ACCOUNT1", "DEVICE1"); err != store.ErrNotFound {
+		t.Errorf("token survived deletion: %v", err)
 	}
 }
 
