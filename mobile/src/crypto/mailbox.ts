@@ -49,11 +49,47 @@ export function deliveryMailbox(sharedMailboxSecret: Uint8Array, at: Date = new 
 }
 
 /**
- * Derive the per-contact mailbox secret from a session's root secret.
+ * Derive the mailbox secret for one side of a session.
+ *
+ * Both parties can compute both directions from the same session secret: the
+ * sender needs the recipient's mailbox to deliver, and the recipient needs its
+ * own to register. `owner` names whose mailbox is being derived.
  *
  * Separate from the message keys so that learning a mailbox secret — which the
  * sender necessarily knows — reveals nothing about message content.
  */
-export function deriveMailboxSecret(sessionSecret: Uint8Array, contactId: string): Uint8Array {
-  return kdf(concat(sessionSecret, utf8(contactId)), undefined, INFO.mailbox, 32);
+export function deriveMailboxSecret(
+  sessionSecret: Uint8Array,
+  ownerAccountId: string,
+  ownerDeviceId: string,
+): Uint8Array {
+  return kdf(
+    concat(sessionSecret, utf8(`${ownerAccountId}/${ownerDeviceId}`)),
+    undefined,
+    INFO.mailbox,
+    32,
+  );
+}
+
+/**
+ * The mailbox a device listens on for first contact.
+ *
+ * There is a bootstrapping problem that no amount of key rotation solves: to
+ * deliver the first message, the sender needs a mailbox the recipient is
+ * already watching — but a per-session mailbox is derived from a secret the
+ * recipient cannot compute until that first message arrives.
+ *
+ * So a device also publishes one stable inbox derived from its identity key.
+ * Anyone holding that public key can compute it, which includes the server,
+ * so the server can tell that *someone* opened a conversation with this device
+ * and when. It cannot tell who, and it learns nothing further: from the reply
+ * onwards the conversation moves to per-session mailboxes that rotate daily
+ * and are unlinkable both across days and across contacts.
+ *
+ * This is documented as a known limitation in docs/THREAT_MODEL.md rather than
+ * papered over — first-contact timing is real metadata, and closing it needs
+ * something closer to a mixnet than to a key derivation.
+ */
+export function contactInbox(identityKey: Uint8Array): string {
+  return `mb_${toHex(kdf(identityKey, undefined, INFO.contactInbox, 16))}`;
 }

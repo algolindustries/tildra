@@ -45,11 +45,19 @@ export interface PreKeyBundle {
   oneTimePqPreKey?: OneTimePreKey;
 }
 
-/** Our own secret material for a published bundle. Never leaves the device. */
+/**
+ * Our own secret material for a published bundle. Never leaves the device.
+ *
+ * The signed prekeys keep their signature alongside the key pair: republishing
+ * the bundle (to top up one-time keys, say) must send the *same* public key
+ * and the *same* signature. Re-signing is not equivalent — the pair has to
+ * match, and generating a fresh signature for an old key is how you end up
+ * publishing a bundle the server rejects.
+ */
 export interface PreKeySecrets {
   identity: KeyPair;
-  signedPreKey: KeyPair & { id: number };
-  signedPqPreKey: KeyPair & { id: number };
+  signedPreKey: KeyPair & { id: number; signature: Uint8Array };
+  signedPqPreKey: KeyPair & { id: number; signature: Uint8Array };
   oneTimePreKeys: Map<number, Uint8Array>;
   oneTimePqPreKeys: Map<number, Uint8Array>;
 }
@@ -104,7 +112,12 @@ export function associatedData(
 export function initiateSession(
   identity: KeyPair,
   bundle: PreKeyBundle,
-): { ratchet: RatchetState; init: SessionInit; associatedData: Uint8Array } {
+): {
+  ratchet: RatchetState;
+  init: SessionInit;
+  associatedData: Uint8Array;
+  sessionSecret: Uint8Array;
+} {
   verifyBundle(bundle);
 
   const ephemeral = generateDhKeyPair();
@@ -141,6 +154,7 @@ export function initiateSession(
       usedOneTimePq: bundle.oneTimePqPreKey !== undefined,
     },
     associatedData: associatedData(identity.publicKey, bundle.identityKey),
+    sessionSecret: deriveSessionSecret(sharedSecret),
   };
 }
 
@@ -152,7 +166,7 @@ export function initiateSession(
 export function acceptSession(
   secrets: PreKeySecrets,
   init: SessionInit,
-): { ratchet: RatchetState; associatedData: Uint8Array } {
+): { ratchet: RatchetState; associatedData: Uint8Array; sessionSecret: Uint8Array } {
   if (init.signedPreKeyId !== secrets.signedPreKey.id) {
     throw new BundleVerificationError(
       'initial message references a signed prekey this device does not hold',
@@ -211,7 +225,20 @@ export function acceptSession(
   return {
     ratchet,
     associatedData: associatedData(init.identityKey, secrets.identity.publicKey),
+    sessionSecret: deriveSessionSecret(sharedSecret),
   };
+}
+
+/**
+ * A secret both sides derive identically from the handshake, used for mailbox
+ * addressing and nothing else.
+ *
+ * Kept distinct from the ratchet's root key so that a mailbox secret — which
+ * is shared with the sender by necessity — can never be walked back into
+ * message keys.
+ */
+function deriveSessionSecret(sharedSecret: Uint8Array): Uint8Array {
+  return kdf(sharedSecret, undefined, INFO.sessionSecret, 32);
 }
 
 /**

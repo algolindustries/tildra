@@ -34,6 +34,8 @@ export const INFO = {
   headerKeys: 'Tildra_HeaderKeys_v1',
   safetyNumber: 'Tildra_SafetyNumber_v1',
   mailbox: 'Tildra_Mailbox_v1',
+  contactInbox: 'Tildra_ContactInbox_v1',
+  sessionSecret: 'Tildra_SessionSecret_v1',
   sealedSender: 'Tildra_SealedSender_v1',
   groupSender: 'Tildra_GroupSenderKey_v1',
 } as const;

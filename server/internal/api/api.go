@@ -311,8 +311,11 @@ func (s *Server) registerMailboxes(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if len(req.Mailboxes) == 0 || len(req.Mailboxes) > 8 {
-		fail(w, http.StatusBadRequest, "between 1 and 8 mailboxes per call")
+	// A device listens on one mailbox per active session per day, plus a
+	// stable contact inbox. An account with many conversations legitimately
+	// registers hundreds; the client batches, and this is the batch size.
+	if len(req.Mailboxes) == 0 || len(req.Mailboxes) > 64 {
+		fail(w, http.StatusBadRequest, "between 1 and 64 mailboxes per call")
 		return
 	}
 	ttl := 48 * time.Hour

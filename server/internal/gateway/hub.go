@@ -36,11 +36,31 @@ type Conn struct {
 	ws        *websocket.Conn
 	accountID string
 	deviceID  string
-	mailboxes []string
+
+	// mu guards mailboxes, which the read loop extends while Deliver reads it.
+	mu        sync.RWMutex
+	mailboxes map[string]struct{}
 
 	send chan []byte
 	once sync.Once
 	done chan struct{}
+}
+
+func (c *Conn) owns(mailbox string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	_, ok := c.mailboxes[mailbox]
+	return ok
+}
+
+func (c *Conn) mailboxList() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]string, 0, len(c.mailboxes))
+	for mb := range c.mailboxes {
+		out = append(out, mb)
+	}
+	return out
 }
 
 // Frame is the envelope pushed down the socket. `type` discriminates:
@@ -53,10 +73,16 @@ type Frame struct {
 	ID       string          `json:"id,omitempty"`
 }
 
-func (h *Hub) register(c *Conn) {
+func (h *Hub) register(c *Conn, mailboxes []string) {
+	c.mu.Lock()
+	for _, mb := range mailboxes {
+		c.mailboxes[mb] = struct{}{}
+	}
+	c.mu.Unlock()
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for _, mb := range c.mailboxes {
+	for _, mb := range mailboxes {
 		set := h.byMailbx[mb]
 		if set == nil {
 			set = map[*Conn]struct{}{}
@@ -67,9 +93,10 @@ func (h *Hub) register(c *Conn) {
 }
 
 func (h *Hub) unregister(c *Conn) {
+	mailboxes := c.mailboxList()
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for _, mb := range c.mailboxes {
+	for _, mb := range mailboxes {
 		if set := h.byMailbx[mb]; set != nil {
 			delete(set, c)
 			if len(set) == 0 {
@@ -127,17 +154,24 @@ func (h *Hub) Serve(ctx context.Context, ws *websocket.Conn, accountID, deviceID
 		ws:        ws,
 		accountID: accountID,
 		deviceID:  deviceID,
-		mailboxes: mailboxes,
+		mailboxes: map[string]struct{}{},
 		send:      make(chan []byte, sendBuffer),
 		done:      make(chan struct{}),
 	}
-	h.register(c)
+	h.register(c, mailboxes)
 	defer h.unregister(c)
 	defer c.close()
 
 	// Drain anything that arrived while this device was away, before going
 	// live. Ordering matters: a client that sees a new message before its
 	// backlog would ratchet out of order.
+	h.drain(ctx, c, mailboxes)
+
+	go c.writeLoop(ctx, h.log)
+	c.readLoop(ctx, h)
+}
+
+func (h *Hub) drain(ctx context.Context, c *Conn, mailboxes []string) {
 	for _, mb := range mailboxes {
 		queued, err := h.store.Dequeue(ctx, mb, 500)
 		if err != nil {
@@ -152,13 +186,42 @@ func (h *Hub) Serve(ctx context.Context, ws *websocket.Conn, accountID, deviceID
 			select {
 			case c.send <- payload:
 			default:
-				h.log.Warn("backlog exceeds send buffer", "device", deviceID)
+				h.log.Warn("backlog exceeds send buffer", "device", c.deviceID)
 			}
 		}
 	}
+}
 
-	go c.writeLoop(ctx, h.log)
-	c.readLoop(ctx, h)
+// subscribe adds mailboxes to a live connection.
+//
+// Without this a socket is frozen to whatever mailboxes existed when it was
+// opened. Since a mailbox is derived per session, every new conversation
+// creates one — so a long-lived socket would silently stop receiving from
+// anyone it met after connecting, and the messages would only surface on the
+// next reconnect.
+func (h *Hub) subscribe(ctx context.Context, c *Conn, mailboxes []string) {
+	owned := make([]string, 0, len(mailboxes))
+	for _, mb := range mailboxes {
+		if c.owns(mb) {
+			continue
+		}
+		// Ownership comes from the store, never from the client's claim.
+		m, err := h.store.ResolveMailbox(ctx, mb)
+		if err != nil {
+			continue
+		}
+		if m.AccountID != c.accountID || m.DeviceID != c.deviceID {
+			h.log.Warn("subscribe to unowned mailbox refused",
+				"account", c.accountID, "device", c.deviceID)
+			continue
+		}
+		owned = append(owned, mb)
+	}
+	if len(owned) == 0 {
+		return
+	}
+	h.register(c, owned)
+	h.drain(ctx, c, owned)
 }
 
 func (c *Conn) writeLoop(ctx context.Context, log *slog.Logger) {
@@ -191,13 +254,14 @@ func (c *Conn) writeLoop(ctx context.Context, log *slog.Logger) {
 	}
 }
 
-// clientFrame is what a device may send up the socket. Sending messages goes
-// over HTTP; the socket is for acking delivery, which must be fast and
-// frequent.
+// clientFrame is what a device may send up the socket: acks, and subscriptions
+// to mailboxes created after the socket opened. Sending messages goes over
+// HTTP.
 type clientFrame struct {
-	Type    string   `json:"type"`
-	Mailbox string   `json:"mailbox"`
-	IDs     []string `json:"ids"`
+	Type      string   `json:"type"`
+	Mailbox   string   `json:"mailbox"`
+	IDs       []string `json:"ids"`
+	Mailboxes []string `json:"mailboxes"`
 }
 
 func (c *Conn) readLoop(ctx context.Context, h *Hub) {
@@ -210,24 +274,27 @@ func (c *Conn) readLoop(ctx context.Context, h *Hub) {
 		if err := json.Unmarshal(data, &f); err != nil {
 			continue
 		}
-		if f.Type != "ack" || len(f.IDs) == 0 {
-			continue
-		}
-		// A device may only ack mailboxes it owns. Without this check, any
-		// authenticated account could delete anyone else's undelivered mail.
-		owned := false
-		for _, mb := range c.mailboxes {
-			if mb == f.Mailbox {
-				owned = true
-				break
+
+		switch f.Type {
+		case "ack":
+			if len(f.IDs) == 0 {
+				continue
 			}
-		}
-		if !owned {
-			h.log.Warn("ack for unowned mailbox", "account", c.accountID, "mailbox", f.Mailbox)
-			continue
-		}
-		if err := h.store.Ack(ctx, f.Mailbox, f.IDs); err != nil {
-			h.log.Error("ack failed", "err", err)
+			// A device may only ack mailboxes it owns. Without this check, any
+			// authenticated account could delete anyone else's undelivered mail.
+			if !c.owns(f.Mailbox) {
+				h.log.Warn("ack for unowned mailbox", "account", c.accountID, "mailbox", f.Mailbox)
+				continue
+			}
+			if err := h.store.Ack(ctx, f.Mailbox, f.IDs); err != nil {
+				h.log.Error("ack failed", "err", err)
+			}
+
+		case "subscribe":
+			if len(f.Mailboxes) == 0 || len(f.Mailboxes) > 256 {
+				continue
+			}
+			h.subscribe(ctx, c, f.Mailboxes)
 		}
 	}
 }

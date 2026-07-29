@@ -35,6 +35,8 @@ export class TildraSocket {
   private closedByUs = false;
   /** Envelopes seen but not yet acked, so a drop mid-ack does not lose them. */
   private readonly pendingAcks = new Map<string, Set<string>>();
+  /** Mailboxes added since connect, replayed after a reconnect. */
+  private readonly subscribed = new Set<string>();
 
   constructor(
     private readonly baseUrl: string,
@@ -66,6 +68,9 @@ export class TildraSocket {
     ws.onopen = () => {
       this.attempt = 0;
       this.setState('open');
+      if (this.subscribed.size > 0) {
+        ws.send(JSON.stringify({ type: 'subscribe', mailboxes: [...this.subscribed] }));
+      }
       // Re-ack anything that was in flight when the previous socket died.
       for (const [mailbox, ids] of this.pendingAcks) {
         this.sendAck(mailbox, [...ids]);
@@ -142,6 +147,22 @@ export class TildraSocket {
     const set = this.pendingAcks.get(envelope.mailbox);
     set?.delete(envelope.id);
     if (set && set.size === 0) this.pendingAcks.delete(envelope.mailbox);
+  }
+
+  /**
+   * Start listening on mailboxes created after this socket opened.
+   *
+   * Every new conversation derives a new mailbox. Without this the socket
+   * keeps serving the addresses it knew at connect time, and messages from
+   * anyone met since would sit in the queue until the next reconnect.
+   *
+   * Remembered so a reconnect re-subscribes; the server also re-reads the
+   * stored list on connect, so this is belt and braces.
+   */
+  subscribe(mailboxes: string[]): void {
+    for (const mailbox of mailboxes) this.subscribed.add(mailbox);
+    if (this.ws?.readyState !== 1) return;
+    this.ws.send(JSON.stringify({ type: 'subscribe', mailboxes }));
   }
 
   /** Tell the server the envelope is safely stored, so it can destroy it. */

@@ -96,6 +96,15 @@ isn't there:
 - **Push notification metadata.** APNs and FCM learn that a device received a
   wake signal and when. Payloads carry no content, but delivery timing leaks to
   Apple and Google. Self-hosted deployments can use a WebSocket-only mode.
+- **First-contact timing.** A device's contact inbox is derived from its public
+  identity key, which the server holds. So the server can observe that someone
+  started a conversation with a given device, and when — though not who. Every
+  message after the first moves to per-session mailboxes that rotate daily and
+  are unlinkable across contacts, so this is a one-event leak per conversation,
+  not an ongoing one. Closing it entirely needs private information retrieval
+  or cover traffic; see `docs/PROTOCOL.md` §5.1 for why the simpler fixes do
+  not work.
+
 - **The handle directory being trusted.** Until key transparency ships, a
   hostile server can lie about which account ID a handle maps to. Verify safety
   numbers with people who matter to you.

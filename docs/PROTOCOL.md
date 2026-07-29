@@ -150,8 +150,55 @@ they're a real account with a **blind-signed delivery token**: the server issues
 tokens via a blind RSA signature, so it can verify a token is valid without
 linking it to who it was issued to.
 
-Mailbox IDs rotate daily, derived as
-`HKDF(shared_mailbox_secret, info = "mailbox" ‖ day_number)`.
+### 5.1 Mailbox addressing
+
+A device listens on two kinds of address.
+
+**Per-session mailboxes**, derived from the session secret and rotated daily:
+
+```
+session_secret = HKDF(SK, info = "Tildra_SessionSecret_v1")
+mailbox_secret = HKDF(session_secret ‖ owner_account ‖ "/" ‖ owner_device,
+                      info = "Tildra_Mailbox_v1")
+mailbox        = "mb_" ‖ hex(HKDF(mailbox_secret,
+                                  info = "Tildra_Mailbox_v1:" ‖ day_number)[0..16])
+```
+
+Both parties can derive both directions, so the sender knows where to deliver
+and the recipient knows where to listen. These addresses are unlinkable across
+days and across contacts — two conversations of the same user share nothing the
+server can correlate.
+
+Devices publish yesterday's, today's and tomorrow's mailbox. Clocks drift, and
+a message sent at 23:59:58 must not land somewhere nobody is watching.
+
+**A contact inbox**, stable and derived from the identity key:
+
+```
+contact_inbox = "mb_" ‖ hex(HKDF(identity_key, info = "Tildra_ContactInbox_v1")[0..16])
+```
+
+This exists because per-session addressing has a bootstrapping problem that no
+amount of key rotation fixes: to deliver the *first* message, the sender needs
+an address the recipient is already watching — but the per-session mailbox
+derives from a secret the recipient cannot compute until that first message
+arrives.
+
+The cost is stated plainly: anyone holding a device's public identity key can
+compute its contact inbox, and the server holds every identity key because it
+publishes bundles. So **the server can see that someone opened a conversation
+with a given device, and when**. It cannot see who. From the first reply
+onwards the conversation moves to per-session mailboxes and that visibility
+ends. This is listed under known limitations in `docs/THREAT_MODEL.md`.
+
+### 5.2 Live subscription
+
+Mailboxes come into existence as conversations do. A device that has been
+connected for hours must be able to start listening on an address created a
+second ago, so the delivery socket accepts a `subscribe` frame. The server
+verifies ownership against its own mailbox table — a client's claim to own an
+address is never taken at face value — and then drains anything already queued
+there.
 
 ## 6. Transport
 

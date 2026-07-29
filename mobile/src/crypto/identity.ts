@@ -92,10 +92,13 @@ export function generatePreKeys(
     uploadOneTimePq.push({ id, publicKey: toBase64(pq.publicKey) });
   }
 
+  const signedPreKeySignature = sign(identity.secretKey, signedPreKey.publicKey);
+  const signedPqPreKeySignature = sign(identity.secretKey, signedPqPreKey.publicKey);
+
   const secrets: PreKeySecrets = {
     identity,
-    signedPreKey: { ...signedPreKey, id: signedId },
-    signedPqPreKey: { ...signedPqPreKey, id: signedId },
+    signedPreKey: { ...signedPreKey, id: signedId, signature: signedPreKeySignature },
+    signedPqPreKey: { ...signedPqPreKey, id: signedId, signature: signedPqPreKeySignature },
     oneTimePreKeys,
     oneTimePqPreKeys,
   };
@@ -105,12 +108,12 @@ export function generatePreKeys(
     signedPreKey: {
       id: signedId,
       publicKey: toBase64(signedPreKey.publicKey),
-      signature: toBase64(sign(identity.secretKey, signedPreKey.publicKey)),
+      signature: toBase64(signedPreKeySignature),
     },
     signedPqPreKey: {
       id: signedId,
       publicKey: toBase64(signedPqPreKey.publicKey),
-      signature: toBase64(sign(identity.secretKey, signedPqPreKey.publicKey)),
+      signature: toBase64(signedPqPreKeySignature),
     },
     oneTimePreKeys: uploadOneTime,
     oneTimePqPreKeys: uploadOneTimePq,
