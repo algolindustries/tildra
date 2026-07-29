@@ -145,7 +145,7 @@ describeIntegration('client ↔ server integration', () => {
         const opened = openEnvelope(bob.identity, envelope.ciphertext);
         expect(opened.sessionInit).toBeDefined();
         const session = acceptSession(bob.secrets, opened.sessionInit!);
-        received.push(fromUtf8(decrypt(session.ratchet, opened.message, session.associatedData)));
+        received.push(fromUtf8(decrypt(session.ratchet, opened.message!, session.associatedData)));
       },
     });
     socket.connect();
@@ -200,7 +200,7 @@ describeIntegration('client ↔ server integration', () => {
       onEnvelope: (e) => {
         const opened = openEnvelope(bob.identity, e.ciphertext);
         const s = acceptSession(bob.secrets, opened.sessionInit!);
-        received.push(fromUtf8(decrypt(s.ratchet, opened.message, s.associatedData)));
+        received.push(fromUtf8(decrypt(s.ratchet, opened.message!, s.associatedData)));
       },
     });
     socket.connect();

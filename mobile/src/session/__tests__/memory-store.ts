@@ -7,13 +7,17 @@
  */
 
 import { Conversation, Message, MessageState, StoredSession } from '../../storage/db';
-import { SessionStore } from '../manager';
+import { ReceiverKeyState, SenderKeyState } from '../../crypto/group';
+import { SessionStore, StoredGroup } from '../manager';
 
 export class MemorySessionStore implements SessionStore {
   readonly conversations = new Map<string, Conversation & { id: string }>();
   readonly messages: Message[] = [];
   readonly sessions = new Map<string, StoredSession>();
   readonly meta = new Map<string, string>();
+  readonly groups = new Map<string, StoredGroup>();
+  readonly senderKeys = new Map<string, SenderKeyState>();
+  readonly receiverKeys = new Map<string, ReceiverKeyState>();
 
   private key(accountId: string): string {
     return `conv:${accountId}`;
@@ -69,5 +73,42 @@ export class MemorySessionStore implements SessionStore {
 
   async getMeta(key: string): Promise<string | null> {
     return this.meta.get(key) ?? null;
+  }
+
+  // Groups
+
+  async saveGroup(group: StoredGroup): Promise<void> {
+    this.groups.set(group.groupId, { ...group, members: [...group.members] });
+  }
+
+  async loadGroup(groupId: string): Promise<StoredGroup | null> {
+    return this.groups.get(groupId) ?? null;
+  }
+
+  async listGroups(): Promise<StoredGroup[]> {
+    return [...this.groups.values()];
+  }
+
+  async saveSenderKey(groupId: string, state: SenderKeyState): Promise<void> {
+    this.senderKeys.set(groupId, state);
+  }
+
+  async loadSenderKey(groupId: string): Promise<SenderKeyState | null> {
+    return this.senderKeys.get(groupId) ?? null;
+  }
+
+  async saveReceiverKey(groupId: string, memberId: string, state: ReceiverKeyState): Promise<void> {
+    this.receiverKeys.set(`${groupId}/${memberId}`, state);
+  }
+
+  async loadReceiverKey(groupId: string, memberId: string): Promise<ReceiverKeyState | null> {
+    return this.receiverKeys.get(`${groupId}/${memberId}`) ?? null;
+  }
+
+  async deleteGroupKeys(groupId: string): Promise<void> {
+    this.senderKeys.delete(groupId);
+    for (const key of [...this.receiverKeys.keys()]) {
+      if (key.startsWith(`${groupId}/`)) this.receiverKeys.delete(key);
+    }
   }
 }

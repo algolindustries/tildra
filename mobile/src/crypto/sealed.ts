@@ -36,7 +36,17 @@ export interface SealedContent {
   senderIdentityKey: Uint8Array;
   /** Present only on the first message of a session. */
   sessionInit?: SessionInit;
-  message: RatchetMessage;
+  /**
+   * A pairwise Double Ratchet message. Carries chat text and, for groups, the
+   * sender-key distribution that has to reach each member individually.
+   */
+  message?: RatchetMessage;
+  /**
+   * An encoded group message. Encrypted once with the sender's group chain and
+   * fanned out unchanged, so it deliberately does not go through the pairwise
+   * ratchet — that is the whole economy of sender keys.
+   */
+  groupMessage?: Uint8Array;
 }
 
 /**
@@ -97,24 +107,30 @@ export function openEnvelope(identity: KeyPair, envelope: Uint8Array): SealedCon
 // ---------------------------------------------------------------------------
 
 function encodeContent(c: SealedContent): Uint8Array {
+  if (!c.message && !c.groupMessage) {
+    throw new SealedEnvelopeError('envelope carries neither a pairwise nor a group message');
+  }
   return frame(
     utf8(c.senderAccountId),
     utf8(c.senderDeviceId),
     c.senderIdentityKey,
     c.sessionInit ? encodeSessionInit(c.sessionInit) : new Uint8Array(0),
-    c.message.header,
-    c.message.body,
+    c.message?.header ?? new Uint8Array(0),
+    c.message?.body ?? new Uint8Array(0),
+    c.groupMessage ?? new Uint8Array(0),
   );
 }
 
 function decodeContent(data: Uint8Array): SealedContent {
-  const [accountId, deviceId, identityKey, sessionInit, header, body] = unframe(data, 6);
+  const [accountId, deviceId, identityKey, sessionInit, header, body, groupMessage] = unframe(data, 7);
   return {
     senderAccountId: fromUtf8(accountId),
     senderDeviceId: fromUtf8(deviceId),
     senderIdentityKey: identityKey,
     sessionInit: sessionInit.length > 0 ? decodeSessionInit(sessionInit) : undefined,
-    message: { header, body },
+    // A pairwise message always has a header; a group-only envelope has none.
+    message: header.length > 0 ? { header, body } : undefined,
+    groupMessage: groupMessage.length > 0 ? groupMessage : undefined,
   };
 }
 

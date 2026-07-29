@@ -17,6 +17,17 @@ import { Vault } from './vault';
 import { fromBase64, toBase64 } from '../crypto/primitives';
 import { SessionInit } from '../crypto/pqxdh';
 import {
+  ReceiverKeyState,
+  SenderKeyState,
+  SerializedReceiverKey,
+  SerializedSenderKey,
+  deserializeReceiverKey,
+  deserializeSenderKey,
+  serializeReceiverKey,
+  serializeSenderKey,
+} from '../crypto/group';
+import type { StoredGroup } from '../session/manager';
+import {
   RatchetState,
   SerializedRatchet,
   deserializeRatchet,
@@ -170,6 +181,30 @@ CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Group state. Membership lives here and nowhere else: the server is told how
+-- many mailboxes to fan out to and never who is in the group.
+CREATE TABLE IF NOT EXISTS groups (
+  id         TEXT PRIMARY KEY,
+  meta_blob  TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+-- Our sending chain for a group. One row per group.
+CREATE TABLE IF NOT EXISTS group_sender_keys (
+  id         TEXT PRIMARY KEY,
+  state_blob TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- A receiving chain per (group, member).
+CREATE TABLE IF NOT EXISTS group_receiver_keys (
+  id         TEXT PRIMARY KEY,
+  group_ref  TEXT NOT NULL,
+  state_blob TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS group_receiver_keys_by_group ON group_receiver_keys(group_ref);
 `;
 
 export class Database {
@@ -479,6 +514,101 @@ export class Database {
     return row?.value ?? null;
   }
 
+  // -------------------------------------------------------------------------
+  // Groups
+  // -------------------------------------------------------------------------
+
+  private groupKey(groupId: string): string {
+    return this.vault.blindIndex('contact', `group:${groupId}`);
+  }
+
+  async saveGroup(group: StoredGroup): Promise<void> {
+    const id = this.groupKey(group.groupId);
+    await this.db.runAsync(
+      `INSERT INTO groups (id, meta_blob, created_at) VALUES (?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET meta_blob = excluded.meta_blob`,
+      [id, this.vault.encryptJson('contact', id, group), group.createdAt],
+    );
+  }
+
+  async loadGroup(groupId: string): Promise<StoredGroup | null> {
+    const id = this.groupKey(groupId);
+    const row = await this.db.getFirstAsync<{ meta_blob: string }>(
+      'SELECT meta_blob FROM groups WHERE id = ?',
+      [id],
+    );
+    return row ? this.vault.decryptJson<StoredGroup>('contact', id, row.meta_blob) : null;
+  }
+
+  async listGroups(): Promise<StoredGroup[]> {
+    const rows = await this.db.getAllAsync<{ id: string; meta_blob: string }>(
+      'SELECT id, meta_blob FROM groups ORDER BY created_at DESC',
+    );
+    return rows.map((r) => this.vault.decryptJson<StoredGroup>('contact', r.id, r.meta_blob));
+  }
+
+  async saveSenderKey(groupId: string, state: SenderKeyState): Promise<void> {
+    const id = this.vault.blindIndex('session', `sender:${groupId}`);
+    await this.db.runAsync(
+      `INSERT INTO group_sender_keys (id, state_blob, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET state_blob = excluded.state_blob, updated_at = excluded.updated_at`,
+      [id, this.vault.encryptJson('session', id, serializeSenderKey(state)), Date.now()],
+    );
+  }
+
+  async loadSenderKey(groupId: string): Promise<SenderKeyState | null> {
+    const id = this.vault.blindIndex('session', `sender:${groupId}`);
+    const row = await this.db.getFirstAsync<{ state_blob: string }>(
+      'SELECT state_blob FROM group_sender_keys WHERE id = ?',
+      [id],
+    );
+    return row
+      ? deserializeSenderKey(this.vault.decryptJson<SerializedSenderKey>('session', id, row.state_blob))
+      : null;
+  }
+
+  async saveReceiverKey(groupId: string, memberId: string, state: ReceiverKeyState): Promise<void> {
+    const id = this.vault.blindIndex('session', `receiver:${groupId}/${memberId}`);
+    await this.db.runAsync(
+      `INSERT INTO group_receiver_keys (id, group_ref, state_blob, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET state_blob = excluded.state_blob, updated_at = excluded.updated_at`,
+      [
+        id,
+        this.groupKey(groupId),
+        this.vault.encryptJson('session', id, serializeReceiverKey(state)),
+        Date.now(),
+      ],
+    );
+  }
+
+  async loadReceiverKey(groupId: string, memberId: string): Promise<ReceiverKeyState | null> {
+    const id = this.vault.blindIndex('session', `receiver:${groupId}/${memberId}`);
+    const row = await this.db.getFirstAsync<{ state_blob: string }>(
+      'SELECT state_blob FROM group_receiver_keys WHERE id = ?',
+      [id],
+    );
+    return row
+      ? deserializeReceiverKey(
+          this.vault.decryptJson<SerializedReceiverKey>('session', id, row.state_blob),
+        )
+      : null;
+  }
+
+  /**
+   * Destroy every key for a group.
+   *
+   * Called when a member is removed, before the replacement chain is created,
+   * so there is no window in which the old key is still usable.
+   */
+  async deleteGroupKeys(groupId: string): Promise<void> {
+    await this.db.runAsync('DELETE FROM group_sender_keys WHERE id = ?', [
+      this.vault.blindIndex('session', `sender:${groupId}`),
+    ]);
+    await this.db.runAsync('DELETE FROM group_receiver_keys WHERE group_ref = ?', [
+      this.groupKey(groupId),
+    ]);
+  }
+
   /** Wipe everything. Pairs with eraseKeystore() for a full account deletion. */
   async eraseAll(): Promise<void> {
     await this.db.execAsync(`
@@ -486,6 +616,9 @@ export class Database {
       DELETE FROM sessions;
       DELETE FROM prekeys;
       DELETE FROM conversations;
+      DELETE FROM group_receiver_keys;
+      DELETE FROM group_sender_keys;
+      DELETE FROM groups;
       DELETE FROM meta;
       VACUUM;
     `);

@@ -380,8 +380,8 @@ describe('sealed sender', () => {
     expect(opened.senderAccountId).toBe(original.senderAccountId);
     expect(opened.senderDeviceId).toBe(original.senderDeviceId);
     expect(equal(opened.senderIdentityKey, original.senderIdentityKey)).toBe(true);
-    expect(equal(opened.message.header, original.message.header)).toBe(true);
-    expect(equal(opened.message.body, original.message.body)).toBe(true);
+    expect(equal(opened.message!.header, original.message.header)).toBe(true);
+    expect(equal(opened.message!.body, original.message.body)).toBe(true);
     expect(opened.sessionInit).toBeUndefined();
   });
 

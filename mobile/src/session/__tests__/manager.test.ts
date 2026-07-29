@@ -60,6 +60,8 @@ interface Device {
   socket: TildraSocket;
   received: string[];
   errors: Error[];
+  groupReceived: { groupId: string; text: string }[];
+  member: () => { accountId: string; deviceId: string };
 }
 
 async function bringUp(name: string): Promise<Device> {
@@ -73,6 +75,7 @@ async function bringUp(name: string): Promise<Device> {
 
   const store = new MemorySessionStore();
   const received: string[] = [];
+  const groupReceived: { groupId: string; text: string }[] = [];
   const errors: Error[] = [];
 
   // The socket is created first so the manager can hand it new mailboxes as
@@ -90,6 +93,7 @@ async function bringUp(name: string): Promise<Device> {
     onMailboxesChanged: (mailboxes) => socket?.subscribe(mailboxes),
     events: {
       onMessage: (message) => received.push(message.text),
+      onGroupMessage: (groupId, message) => groupReceived.push({ groupId, text: message.text }),
       onError: (error) => errors.push(error),
     },
   });
@@ -103,7 +107,20 @@ async function bringUp(name: string): Promise<Device> {
   socket.connect();
   await new Promise((r) => setTimeout(r, 300));
 
-  return { name, accountId, deviceId, manager, store, client, identity, socket, received, errors };
+  return {
+    name,
+    accountId,
+    deviceId,
+    manager,
+    store,
+    client,
+    identity,
+    socket,
+    received,
+    errors,
+    groupReceived,
+    member: () => ({ accountId, deviceId }),
+  };
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
@@ -113,22 +130,26 @@ async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<vo
   }
 }
 
+// One server for the whole file. Starting it inside a single describe block
+// leaves every later block without one, which surfaces as an opaque
+// "fetch failed" rather than as a missing-server error.
+beforeAll(async () => {
+  if (!goAvailable()) return;
+  const binary = join(mkdtempSync(join(tmpdir(), 'tildra-mgr-')), 'tildrad');
+  execFileSync('go', ['build', '-o', binary, './cmd/tildrad'], {
+    cwd: SERVER_DIR,
+    stdio: 'inherit',
+  });
+  server = spawn(binary, [], {
+    env: { ...process.env, TILDRA_ADDR: `:${PORT}`, TILDRA_DATABASE_URL: '' },
+    stdio: 'ignore',
+  });
+  await waitForHealth();
+}, 120_000);
+
+afterAll(() => server?.kill('SIGTERM'));
+
 describeIntegration('session manager', () => {
-  beforeAll(async () => {
-    const binary = join(mkdtempSync(join(tmpdir(), 'tildra-mgr-')), 'tildrad');
-    execFileSync('go', ['build', '-o', binary, './cmd/tildrad'], {
-      cwd: SERVER_DIR,
-      stdio: 'inherit',
-    });
-    server = spawn(binary, [], {
-      env: { ...process.env, TILDRA_ADDR: `:${PORT}`, TILDRA_DATABASE_URL: '' },
-      stdio: 'ignore',
-    });
-    await waitForHealth();
-  }, 120_000);
-
-  afterAll(() => server?.kill('SIGTERM'));
-
   it('delivers a first message from a cold start', async () => {
     const alice = await bringUp('Alice');
     const bob = await bringUp('Bob');
@@ -347,4 +368,140 @@ describeIntegration('session manager', () => {
     ).rejects.toThrow();
     alice.socket.close();
   }, 30_000);
+});
+
+describeIntegration('encrypted groups', () => {
+  /** Three members with pairwise sessions and a group already distributed. */
+  async function group(groupId: string) {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    const carol = await bringUp('Carol');
+    const members = [alice.member(), bob.member(), carol.member()];
+
+    await alice.manager.createGroup(groupId, members, 'Test group');
+    // The sender key reaches each member over their pairwise session; wait for
+    // both to have stored it before anyone sends to the group.
+    await waitFor(
+      () =>
+        bob.store.receiverKeys.size > 0 && carol.store.receiverKeys.size > 0,
+      15_000,
+    );
+
+    return { alice, bob, carol, members, close: () => [alice, bob, carol].forEach((m) => m.socket.close()) };
+  }
+
+  it('delivers a group message to every member', async () => {
+    const g = await group('grp-basic');
+
+    await g.alice.manager.sendGroupMessage('grp-basic', 'herkese selam');
+    await waitFor(() => g.bob.groupReceived.length > 0 && g.carol.groupReceived.length > 0, 15_000);
+
+    expect(g.bob.groupReceived.map((m) => m.text)).toEqual(['herkese selam']);
+    expect(g.carol.groupReceived.map((m) => m.text)).toEqual(['herkese selam']);
+    g.close();
+  }, 90_000);
+
+  it('lets a member who was invited send to the whole group', async () => {
+    // Bob learned the group from Alice's distribution, including that Carol is
+    // in it. Without the member list riding along, his message would reach
+    // Alice and silently miss Carol.
+    const g = await group('grp-reply');
+
+    await g.alice.manager.sendGroupMessage('grp-reply', 'from alice');
+    await waitFor(() => g.bob.groupReceived.length > 0, 15_000);
+
+    await g.bob.manager.sendGroupMessage('grp-reply', 'from bob');
+    await waitFor(
+      () => g.alice.groupReceived.length > 0 && g.carol.groupReceived.length > 1,
+      20_000,
+    );
+
+    expect(g.alice.groupReceived.map((m) => m.text)).toContain('from bob');
+    expect(g.carol.groupReceived.map((m) => m.text)).toEqual(['from alice', 'from bob']);
+    g.close();
+  }, 120_000);
+
+  it('encrypts once regardless of group size', async () => {
+    // The economy sender keys buy: one encryption, N deliveries. If this ever
+    // became one encryption per member, large groups would stop being viable
+    // and the design would have quietly reverted to pairwise fanout.
+    const g = await group('grp-once');
+    const delivered = await g.alice.manager.sendGroupMessage('grp-once', 'one ciphertext');
+
+    expect(delivered).toBe(2);
+    await waitFor(() => g.bob.groupReceived.length > 0 && g.carol.groupReceived.length > 0, 15_000);
+    g.close();
+  }, 90_000);
+
+  it('locks a removed member out of everything sent afterwards', async () => {
+    const g = await group('grp-remove');
+
+    await g.alice.manager.sendGroupMessage('grp-remove', 'while carol is here');
+    await waitFor(() => g.carol.groupReceived.length > 0, 15_000);
+    expect(g.carol.groupReceived.map((m) => m.text)).toEqual(['while carol is here']);
+
+    // Removing rotates: Alice generates a fresh chain and distributes it only
+    // to the remaining members.
+    const bobKeyBefore = g.bob.store.receiverKeys.get(`grp-remove/${g.alice.accountId}/${g.alice.deviceId}`);
+    await g.alice.manager.removeGroupMember('grp-remove', g.carol.member());
+    await waitFor(
+      () =>
+        g.bob.store.receiverKeys.get(`grp-remove/${g.alice.accountId}/${g.alice.deviceId}`) !==
+        bobKeyBefore,
+      15_000,
+    );
+
+    const carolBefore = g.carol.groupReceived.length;
+    await g.alice.manager.sendGroupMessage('grp-remove', 'carol must not read this');
+    await waitFor(() => g.bob.groupReceived.length > 1, 15_000);
+
+    expect(g.bob.groupReceived.map((m) => m.text)).toContain('carol must not read this');
+    expect(g.carol.groupReceived).toHaveLength(carolBefore);
+    g.close();
+  }, 120_000);
+
+  it('does not let a newly added member read the backlog', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    const dave = await bringUp('Dave');
+
+    await alice.manager.createGroup('grp-add', [alice.member(), bob.member()]);
+    await waitFor(() => bob.store.receiverKeys.size > 0, 15_000);
+
+    await alice.manager.sendGroupMessage('grp-add', 'before dave arrived');
+    await waitFor(() => bob.groupReceived.length > 0, 15_000);
+
+    await alice.manager.addGroupMember('grp-add', dave.member());
+    await waitFor(() => dave.store.receiverKeys.size > 0, 15_000);
+
+    await alice.manager.sendGroupMessage('grp-add', 'after dave arrived');
+    await waitFor(() => dave.groupReceived.length > 0, 15_000);
+
+    // Dave receives the chain from its current position, so the earlier
+    // message was never derivable by him.
+    expect(dave.groupReceived.map((m) => m.text)).toEqual(['after dave arrived']);
+    expect(bob.groupReceived.map((m) => m.text)).toEqual([
+      'before dave arrived',
+      'after dave arrived',
+    ]);
+
+    [alice, bob, dave].forEach((m) => m.socket.close());
+  }, 120_000);
+
+  it('keeps group membership off the server', async () => {
+    const g = await group('grp-private');
+    await g.alice.manager.sendGroupMessage('grp-private', 'private membership');
+    await waitFor(() => g.bob.groupReceived.length > 0, 15_000);
+
+    // The server has no group endpoint at all — the only thing it ever saw was
+    // opaque envelopes addressed to mailboxes. This asserts the absence.
+    const response = await fetch(`${BASE_URL}/v1/groups/grp-private`, {
+      headers: { Authorization: `Bearer ${g.alice.client.getCredentials()!.token}` },
+    });
+    expect(response.status).toBe(404);
+
+    const stored = await g.bob.store.loadGroup('grp-private');
+    expect(stored?.members.length).toBe(3);
+    g.close();
+  }, 90_000);
 });
