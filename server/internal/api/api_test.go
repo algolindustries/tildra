@@ -594,21 +594,25 @@ func TestPushWakesAnOfflineDevice(t *testing.T) {
 
 	// The wake runs detached from the request, so give it a moment.
 	deadline := time.Now().Add(3 * time.Second)
-	for len(h.notifier.Sent) == 0 && time.Now().Before(deadline) {
+	var sent []model.PushToken
+	for time.Now().Before(deadline) {
+		if sent = h.notifier.Sent(); len(sent) > 0 {
+			break
+		}
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	if len(h.notifier.Sent) != 1 {
-		t.Fatalf("sent %d notifications, want 1", len(h.notifier.Sent))
+	if len(sent) != 1 {
+		t.Fatalf("sent %d notifications, want 1", len(sent))
 	}
-	if h.notifier.Sent[0].Token != "ExponentPushToken[bob]" {
-		t.Errorf("woke the wrong device: %q", h.notifier.Sent[0].Token)
+	if sent[0].Token != "ExponentPushToken[bob]" {
+		t.Errorf("woke the wrong device: %q", sent[0].Token)
 	}
 	// The notifier is handed a token and nothing about the message. If this
 	// ever carried a sender or a preview, Apple and Google would learn who is
 	// talking to whom.
-	if h.notifier.Sent[0].AccountID != bob.accountID {
-		t.Errorf("token belongs to %q, want Bob", h.notifier.Sent[0].AccountID)
+	if sent[0].AccountID != bob.accountID {
+		t.Errorf("token belongs to %q, want Bob", sent[0].AccountID)
 	}
 }
 
@@ -625,8 +629,8 @@ func TestNoPushWithoutARegisteredToken(t *testing.T) {
 	})
 	time.Sleep(300 * time.Millisecond)
 
-	if len(h.notifier.Sent) != 0 {
-		t.Errorf("sent %d notifications for a device with no token", len(h.notifier.Sent))
+	if sent := h.notifier.Sent(); len(sent) != 0 {
+		t.Errorf("sent %d notifications for a device with no token", len(sent))
 	}
 }
 

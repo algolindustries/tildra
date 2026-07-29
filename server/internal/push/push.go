@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/tildra/tildra/server/internal/model"
@@ -101,15 +102,36 @@ func (e *Expo) Notify(ctx context.Context, token *model.PushToken) error {
 
 // Recording is a Notifier for tests: it remembers what it was asked to send
 // and never touches the network.
+//
+// Mutex-guarded because notifications are sent from a goroutine detached from
+// the request while the test reads the result — an unsynchronised slice here
+// is a genuine data race, not a test artefact.
 type Recording struct {
-	Sent []model.PushToken
-	Err  error
+	mu   sync.Mutex
+	sent []model.PushToken
+	err  error
 }
 
 func (r *Recording) Notify(_ context.Context, token *model.PushToken) error {
-	if r.Err != nil {
-		return r.Err
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return r.err
 	}
-	r.Sent = append(r.Sent, *token)
+	r.sent = append(r.sent, *token)
 	return nil
+}
+
+// Sent returns a copy of what has been notified so far.
+func (r *Recording) Sent() []model.PushToken {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]model.PushToken(nil), r.sent...)
+}
+
+// FailWith makes every subsequent Notify return err.
+func (r *Recording) FailWith(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.err = err
 }
