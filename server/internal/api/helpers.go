@@ -1,9 +1,12 @@
 package api
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -105,5 +108,24 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
-// Unwrap lets the WebSocket upgrade reach the underlying ResponseWriter.
+// Unwrap lets http.ResponseController reach the underlying ResponseWriter.
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// Hijack forwards the WebSocket upgrade to the real connection.
+//
+// Embedding http.ResponseWriter does not carry http.Hijacker through, so
+// without this the upgrade fails with 501 and the gateway is unreachable —
+// which is exactly as broken as it sounds, and exactly as silent.
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("tildra: %T does not support hijacking", r.ResponseWriter)
+	}
+	return hijacker.Hijack()
+}
+
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
