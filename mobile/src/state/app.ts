@@ -80,6 +80,7 @@ export interface AppState {
   bootstrap: (options?: { serverUrl?: string; localeTag?: string }) => Promise<void>;
   createAccount: (deviceName: string, displayName?: string) => Promise<void>;
   setProfile: (profile: { displayName: string; about?: string; avatar?: Uint8Array }) => Promise<void>;
+  approveLink: (scanned: string) => Promise<string>;
   openConversation: (accountId: string) => Promise<void>;
   closeConversation: () => void;
   send: (text: string) => Promise<void>;
@@ -430,6 +431,28 @@ export const useApp = create<AppState>((set, get) => ({
       about: saved.about ?? null,
       avatar: saved.avatar ?? null,
     });
+  },
+
+  /**
+   * Approve a new device. Returns the pairing code for the user to compare.
+   *
+   * The code is returned rather than acted on: only the person holding both
+   * devices can say whether the digits match, and deciding on their behalf
+   * would remove the one check that catches a server in the middle.
+   */
+  async approveLink(scanned) {
+    if (!runtime?.client) throw new Error('Tildra: not ready');
+    const accountId = get().accountId;
+    if (!accountId) throw new Error('Tildra: not signed in');
+
+    const { approveDeviceLink } = await import('../session/linking');
+    const { code } = await approveDeviceLink(
+      runtime.client,
+      scanned,
+      runtime.identity,
+      accountId,
+    );
+    return code;
   },
 
   async claimHandle(handle) {

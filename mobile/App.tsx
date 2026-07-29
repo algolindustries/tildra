@@ -17,6 +17,7 @@ import { ChatListScreen } from './src/screens/ChatListScreen';
 import { ConversationScreen } from './src/screens/ConversationScreen';
 import { SafetyNumberScreen } from './src/screens/SafetyNumberScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
+import { LinkDeviceScreen } from './src/screens/LinkDeviceScreen';
 import { Banner, Button } from './src/ui/components';
 import { palette, spacing } from './src/ui/theme';
 
@@ -24,7 +25,8 @@ type Route =
   | { name: 'list' }
   | { name: 'conversation'; accountId: string }
   | { name: 'verify'; accountId: string }
-  | { name: 'profile' };
+  | { name: 'profile' }
+  | { name: 'link' };
 
 export default function App() {
   const phase = useApp((s) => s.phase);
@@ -73,7 +75,12 @@ export default function App() {
             onDone={() => setRoute({ name: 'conversation', accountId: route.accountId })}
           />
         ) : route.name === 'profile' ? (
-          <ProfileScreen onClose={() => setRoute({ name: 'list' })} />
+          <ProfileScreen
+            onClose={() => setRoute({ name: 'list' })}
+            onLinkDevice={() => setRoute({ name: 'link' })}
+          />
+        ) : route.name === 'link' ? (
+          <LinkDeviceScreen onClose={() => setRoute({ name: 'profile' })} />
         ) : (
           <ChatListScreen
             onOpen={(accountId) => {

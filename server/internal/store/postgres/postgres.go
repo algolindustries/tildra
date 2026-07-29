@@ -528,6 +528,68 @@ func (s *Store) GetAttachment(ctx context.Context, id string) (*model.Attachment
 }
 
 // ---------------------------------------------------------------------------
+// Device provisioning
+// ---------------------------------------------------------------------------
+
+func (s *Store) CreateProvisioning(ctx context.Context, p *model.Provisioning) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO provisioning (id, identity_key, ephemeral_key, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5)`,
+		p.ID, p.IdentityKey, p.EphemeralKey, p.CreatedAt, p.ExpiresAt)
+	if isUniqueViolation(err) {
+		return store.ErrAlreadyExists
+	}
+	return err
+}
+
+func (s *Store) GetProvisioning(ctx context.Context, id string) (*model.Provisioning, error) {
+	var p model.Provisioning
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, identity_key, ephemeral_key, COALESCE(approval, ''::bytea), created_at, expires_at
+		FROM provisioning WHERE id = $1 AND expires_at > now()`, id).
+		Scan(&p.ID, &p.IdentityKey, &p.EphemeralKey, &p.Approval, &p.CreatedAt, &p.ExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(p.Approval) == 0 {
+		p.Approval = nil
+	}
+	return &p, nil
+}
+
+func (s *Store) SetProvisioningApproval(ctx context.Context, id string, approval []byte) error {
+	// One approval per channel: the WHERE clause is what enforces it, so two
+	// concurrent approvals cannot both land.
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE provisioning SET approval = $2
+		WHERE id = $1 AND expires_at > now() AND approval IS NULL`, id, approval)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		var exists bool
+		if err := s.pool.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM provisioning WHERE id = $1 AND expires_at > now())`,
+			id).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			return store.ErrAlreadyExists
+		}
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) DeleteProvisioning(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM provisioning WHERE id = $1`, id)
+	return err
+}
+
+// ---------------------------------------------------------------------------
 // Key transparency log
 // ---------------------------------------------------------------------------
 
@@ -672,6 +734,9 @@ func (s *Store) Sweep(ctx context.Context, now time.Time, envelopeTTL time.Durat
 		return destroyed, err
 	}
 	if _, err := s.pool.Exec(ctx, `DELETE FROM attachments WHERE expires_at < $1`, now); err != nil {
+		return destroyed, err
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM provisioning WHERE expires_at < $1`, now); err != nil {
 		return destroyed, err
 	}
 	return destroyed, nil

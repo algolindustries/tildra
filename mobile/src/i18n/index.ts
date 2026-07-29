@@ -29,6 +29,14 @@ export interface Strings {
   save: string;
   profileSaved: string;
   profile: string;
+  linkDevice: string;
+  linkDeviceBody: string;
+  linkShowCode: string;
+  linkScanCode: string;
+  linkPairingCode: string;
+  linkConfirm: string;
+  linkWaiting: string;
+  linkDone: string;
   attachPhoto: string;
   attachment: string;
   attachmentFailed: string;
@@ -121,6 +129,15 @@ const en: Strings = {
   save: 'Save',
   profileSaved: 'Saved',
   profile: 'Profile',
+  linkDevice: 'Add a device',
+  linkDeviceBody:
+    'On the new device, choose “Add a device” and paste the code it shows here. Then check that the six digits match on both screens before you carry on.',
+  linkShowCode: 'Code for this device',
+  linkScanCode: 'Paste the new device’s code',
+  linkPairingCode: 'Pairing code',
+  linkConfirm: 'The digits match',
+  linkWaiting: 'Waiting for approval on your other device…',
+  linkDone: 'Device linked',
   attachPhoto: 'Send a photo',
   attachment: 'Attachment',
   attachmentFailed: 'Could not load this attachment.',
@@ -213,6 +230,15 @@ const tr: Strings = {
   save: 'Kaydet',
   profileSaved: 'Kaydedildi',
   profile: 'Profil',
+  linkDevice: 'Cihaz ekle',
+  linkDeviceBody:
+    'Yeni cihazda “Cihaz ekle”yi seçin ve orada görünen kodu buraya yapıştırın. Sonra devam etmeden önce altı hanenin iki ekranda da aynı olduğunu kontrol edin.',
+  linkShowCode: 'Bu cihazın kodu',
+  linkScanCode: 'Yeni cihazın kodunu yapıştırın',
+  linkPairingCode: 'Eşleştirme kodu',
+  linkConfirm: 'Haneler aynı',
+  linkWaiting: 'Diğer cihazınızda onay bekleniyor…',
+  linkDone: 'Cihaz eşleştirildi',
   attachPhoto: 'Fotoğraf gönder',
   attachment: 'Ek dosya',
   attachmentFailed: 'Bu ek dosya yüklenemedi.',

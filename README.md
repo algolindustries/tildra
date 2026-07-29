@@ -42,6 +42,7 @@ that doesn't feel like homework) and rebuilds the parts that aren't.
 | E2EE by default | ❌ opt-in, 1:1 only | ✅ | ✅ |
 | E2EE group chats | ❌ | ✅ | ✅ |
 | E2EE on every device/platform | ❌ no desktop secret chats | ✅ | ✅ |
+| Linking a device without trusting the server | ❌ | ✅ | ✅ commitment + pairing code |
 | Post-quantum key agreement | ❌ | ✅ (PQXDH) | ✅ (X25519 + ML-KEM-768) |
 | Works without a phone number | ❌ | ❌ | ✅ |
 | Profile name and photo hidden from the server | ❌ | ⚠️ stored encrypted | ✅ never uploaded |
@@ -89,7 +90,8 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 | | |
 |---|---|
 | Account creation without a phone number | ✅ |
-| 1:1 messaging, multi-device | ✅ |
+| 1:1 messaging | ✅ |
+| Multi-device: linking a second device with a pairing code | ✅ |
 | Encrypted group chats with membership rotation | ✅ |
 | Encrypted profiles (name, photo, about) | ✅ |
 | Safety numbers and identity-change blocking | ✅ |

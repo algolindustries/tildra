@@ -17,7 +17,13 @@ import { MAX_ABOUT_LENGTH, MAX_DISPLAY_NAME_LENGTH } from '../crypto/content';
  * everyone you message — and they never reach the server, which is stated on
  * the screen rather than left for the reader to discover in the docs.
  */
-export function ProfileScreen({ onClose }: { onClose: () => void }) {
+export function ProfileScreen({
+  onClose,
+  onLinkDevice,
+}: {
+  onClose: () => void;
+  onLinkDevice: () => void;
+}) {
   const t = useApp((s) => s.t);
   const accountId = useApp((s) => s.accountId);
   const handle = useApp((s) => s.handle);
@@ -158,6 +164,10 @@ export function ProfileScreen({ onClose }: { onClose: () => void }) {
 
         {status ? <Banner title={status} /> : null}
         {error ? <Banner tone="warning" title={t.errorGeneric} body={error} /> : null}
+
+        <View style={styles.divider} />
+
+        <Button label={t.linkDevice} variant="secondary" onPress={onLinkDevice} />
 
         <View style={styles.divider} />
 

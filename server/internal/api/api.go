@@ -71,6 +71,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/transparency/entries", s.transparencyEntries)
 	mux.HandleFunc("GET /healthz", s.health)
 
+	// Device linking. The new device has no account yet, so the first two
+	// steps cannot be authenticated — which is exactly why the security rests
+	// on the identity-key commitment carried over a camera and the pairing
+	// code the user compares, not on who is calling.
+	mux.HandleFunc("POST /v1/provisioning", s.createProvisioning)
+	mux.HandleFunc("GET /v1/provisioning/{id}", s.getProvisioning)
+
 	// Authenticated.
 	authed := http.NewServeMux()
 	authed.HandleFunc("PUT /v1/keys", s.putKeys)
@@ -86,6 +93,8 @@ func (s *Server) Handler() http.Handler {
 	authed.HandleFunc("DELETE /v1/push", s.deletePushToken)
 	authed.HandleFunc("POST /v1/attachments", s.uploadAttachment)
 	authed.HandleFunc("GET /v1/attachments/{id}", s.downloadAttachment)
+	authed.HandleFunc("POST /v1/devices", s.addDevice)
+	authed.HandleFunc("PUT /v1/provisioning/{id}/approval", s.approveProvisioning)
 	authed.HandleFunc("POST /v1/auth/logout", s.logout)
 	mux.Handle("/v1/", s.auth.Middleware(authed))
 
@@ -500,6 +509,136 @@ func (s *Server) getBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond(w, http.StatusOK, map[string][]byte{"blob": blob})
+}
+
+// ---------- device linking ----------
+
+// createProvisioning opens a channel for a device that has no account yet.
+func (s *Server) createProvisioning(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IdentityKey  []byte `json:"identityKey"`
+		EphemeralKey []byte `json:"ephemeralKey"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if len(req.IdentityKey) != ed25519.PublicKeySize {
+		fail(w, http.StatusBadRequest, "identityKey must be a 32-byte Ed25519 public key")
+		return
+	}
+	if len(req.EphemeralKey) != 32 {
+		fail(w, http.StatusBadRequest, "ephemeralKey must be 32 bytes")
+		return
+	}
+
+	now := time.Now().UTC()
+	p := &model.Provisioning{
+		ID:           id.New(),
+		IdentityKey:  req.IdentityKey,
+		EphemeralKey: req.EphemeralKey,
+		CreatedAt:    now,
+		// Short: the window only has to last as long as it takes to point one
+		// phone at another and compare six digits.
+		ExpiresAt: now.Add(s.cfg.ProvisioningTTL),
+	}
+	if err := s.store.CreateProvisioning(r.Context(), p); err != nil {
+		s.fail500(w, "create provisioning", err)
+		return
+	}
+	respond(w, http.StatusCreated, map[string]any{"id": p.ID, "expiresAt": p.ExpiresAt})
+}
+
+// getProvisioning is polled by both sides: the approving device reads the new
+// device's keys, and the new device waits for the approval to appear.
+func (s *Server) getProvisioning(w http.ResponseWriter, r *http.Request) {
+	p, err := s.store.GetProvisioning(r.Context(), r.PathValue("id"))
+	if err != nil {
+		fail(w, http.StatusNotFound, "no such provisioning channel")
+		return
+	}
+	respond(w, http.StatusOK, p)
+}
+
+// addDevice registers a second device under the calling account.
+//
+// Authenticated as an existing device: adding a device to an account is
+// something only that account's holder can do, and the identity key comes from
+// the provisioning channel after the caller has checked it against the
+// commitment it scanned.
+func (s *Server) addDevice(w http.ResponseWriter, r *http.Request) {
+	p, _ := auth.FromContext(r.Context())
+	var req struct {
+		IdentityKey []byte `json:"identityKey"`
+		Name        string `json:"name"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if len(req.IdentityKey) != ed25519.PublicKeySize {
+		fail(w, http.StatusBadRequest, "identityKey must be a 32-byte Ed25519 public key")
+		return
+	}
+
+	existing, err := s.store.ListDevices(r.Context(), p.AccountID)
+	if err != nil {
+		s.fail500(w, "list devices", err)
+		return
+	}
+	// A cap, because every device multiplies the fanout of every message the
+	// account receives, and an unbounded count is a way to make an account
+	// expensive to talk to.
+	if len(existing) >= 8 {
+		fail(w, http.StatusConflict, "this account already has the maximum number of devices")
+		return
+	}
+	for _, d := range existing {
+		if auth.ConstantTimeEqual(d.IdentityKey, req.IdentityKey) {
+			// Idempotent: a retried approval must not create a second device
+			// for the same key.
+			respond(w, http.StatusOK, map[string]string{"deviceId": d.DeviceID})
+			return
+		}
+	}
+
+	now := time.Now().UTC()
+	device := &model.Device{
+		AccountID:   p.AccountID,
+		DeviceID:    id.New(),
+		Name:        sanitizeName(req.Name),
+		IdentityKey: req.IdentityKey,
+		CreatedAt:   now,
+		LastSeen:    now,
+	}
+	if err := s.store.UpsertDevice(r.Context(), device); err != nil {
+		s.fail500(w, "add device", err)
+		return
+	}
+	respond(w, http.StatusCreated, map[string]string{"deviceId": device.DeviceID})
+}
+
+// approveProvisioning stores the sealed approval for the new device to collect.
+func (s *Server) approveProvisioning(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Approval []byte `json:"approval"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if len(req.Approval) == 0 || len(req.Approval) > 8192 {
+		fail(w, http.StatusBadRequest, "approval must be between 1 and 8192 bytes")
+		return
+	}
+
+	err := s.store.SetProvisioningApproval(r.Context(), r.PathValue("id"), req.Approval)
+	if errors.Is(err, store.ErrAlreadyExists) {
+		fail(w, http.StatusConflict, "this channel has already been approved")
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusNotFound, "no such provisioning channel")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---------- push ----------

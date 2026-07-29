@@ -295,6 +295,53 @@ export class TildraClient {
   }
 
   // -------------------------------------------------------------------------
+  // Device linking
+  // -------------------------------------------------------------------------
+
+  /** Open a provisioning channel. Called by the device with no account yet. */
+  async createProvisioning(
+    identityKey: Uint8Array,
+    ephemeralKey: Uint8Array,
+  ): Promise<{ id: string; expiresAt: string }> {
+    return this.request('POST', '/v1/provisioning', {
+      body: { identityKey: toBase64(identityKey), ephemeralKey: toBase64(ephemeralKey) },
+      authenticated: false,
+    });
+  }
+
+  async getProvisioning(id: string): Promise<{
+    identityKey: Uint8Array;
+    ephemeralKey: Uint8Array;
+    approval?: Uint8Array;
+  }> {
+    const raw = await this.request<{
+      identityKey: string;
+      ephemeralKey: string;
+      approval?: string;
+    }>('GET', `/v1/provisioning/${encodeURIComponent(id)}`, { authenticated: false });
+
+    return {
+      identityKey: fromBase64(raw.identityKey),
+      ephemeralKey: fromBase64(raw.ephemeralKey),
+      approval: raw.approval ? fromBase64(raw.approval) : undefined,
+    };
+  }
+
+  /** Register a second device under the authenticated account. */
+  async addDevice(identityKey: Uint8Array, name: string): Promise<{ deviceId: string }> {
+    return this.request('POST', '/v1/devices', {
+      body: { identityKey: toBase64(identityKey), name },
+    });
+  }
+
+  async approveProvisioning(id: string, approval: Uint8Array): Promise<void> {
+    await this.request('PUT', `/v1/provisioning/${encodeURIComponent(id)}/approval`, {
+      body: { approval: toBase64(approval) },
+      expectEmpty: true,
+    });
+  }
+
+  // -------------------------------------------------------------------------
   // Push
   // -------------------------------------------------------------------------
 

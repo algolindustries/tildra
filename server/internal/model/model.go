@@ -75,6 +75,25 @@ type Mailbox struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
+// Provisioning is a short-lived channel for linking a new device.
+//
+// The server relays two opaque blobs and learns the new device's identity key
+// (which it would learn on registration anyway). It cannot usefully interfere:
+// the identity key is committed to by a hash the user carried over a camera,
+// and both devices display a pairing code derived from the whole transcript.
+// See mobile/src/crypto/provisioning.ts.
+type Provisioning struct {
+	ID string `json:"id"`
+	// IdentityKey is the new device's Ed25519 public key.
+	IdentityKey []byte `json:"identityKey"`
+	// EphemeralKey is the X25519 key the approval is sealed to.
+	EphemeralKey []byte `json:"ephemeralKey"`
+	// Approval is set once an existing device has approved. Opaque here.
+	Approval  []byte    `json:"approval,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
 // LogEntry is one binding recorded in the key transparency log.
 //
 // Unlike everything else the server stores, this is deliberately permanent and

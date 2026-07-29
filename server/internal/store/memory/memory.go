@@ -44,6 +44,7 @@ type Store struct {
 	blobs     map[string]*model.Attachment
 	push      map[string]*model.PushToken
 	logs      []*model.LogEntry
+	provision map[string]*model.Provisioning
 }
 
 // New returns an empty in-memory store.
@@ -59,6 +60,7 @@ func New() *Store {
 		tokens:    map[string]tokenEntry{},
 		blobs:     map[string]*model.Attachment{},
 		push:      map[string]*model.PushToken{},
+		provision: map[string]*model.Provisioning{},
 	}
 }
 
@@ -359,6 +361,51 @@ func (s *Store) GetAttachment(_ context.Context, id string) (*model.Attachment, 
 	return &cp, nil
 }
 
+func (s *Store) CreateProvisioning(_ context.Context, p *model.Provisioning) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.provision[p.ID]; exists {
+		return store.ErrAlreadyExists
+	}
+	cp := *p
+	s.provision[p.ID] = &cp
+	return nil
+}
+
+func (s *Store) GetProvisioning(_ context.Context, id string) (*model.Provisioning, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p, ok := s.provision[id]
+	if !ok || time.Now().After(p.ExpiresAt) {
+		return nil, store.ErrNotFound
+	}
+	cp := *p
+	return &cp, nil
+}
+
+func (s *Store) SetProvisioningApproval(_ context.Context, id string, approval []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.provision[id]
+	if !ok || time.Now().After(p.ExpiresAt) {
+		return store.ErrNotFound
+	}
+	if len(p.Approval) > 0 {
+		// One approval per channel. A second would let a server that captured
+		// the first replace it after the user had already compared codes.
+		return store.ErrAlreadyExists
+	}
+	p.Approval = append([]byte(nil), approval...)
+	return nil
+}
+
+func (s *Store) DeleteProvisioning(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.provision, id)
+	return nil
+}
+
 func (s *Store) AppendLogEntry(_ context.Context, e *model.LogEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -486,6 +533,11 @@ func (s *Store) Sweep(_ context.Context, now time.Time, envelopeTTL time.Duratio
 	for h, t := range s.tokens {
 		if now.After(t.expires) {
 			delete(s.tokens, h)
+		}
+	}
+	for id, p := range s.provision {
+		if now.After(p.ExpiresAt) {
+			delete(s.provision, id)
 		}
 	}
 	for id, a := range s.blobs {

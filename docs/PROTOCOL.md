@@ -263,6 +263,42 @@ seconds or three minutes makes the feature feel broken. Both are bounded on
 receipt as well as on send, because they come from the sender and are rendered
 directly.
 
+### 5.5 Linking a device
+
+An account may hold several devices, each with its own identity key and its own
+ratchet per contact. Adding one has to work without trusting the server, since
+the provisioning channel *is* the server.
+
+1. The new device generates its identity key and an ephemeral X25519 key, opens
+   a channel, and displays `tildra://link?id=…&key=…&commit=…&server=…` where
+   `commit = SHA-256(new identity public key)`.
+2. An existing, signed-in device reads the channel, and checks the identity key
+   the server handed over against `commit`. **The commitment travelled over a
+   camera, not the network**, so a substituted key fails here.
+3. The existing device registers the new one and seals an approval to the
+   ephemeral key: `{accountId, deviceId, approvedBy, signature}` over a
+   transcript binding all three.
+4. Both devices derive a six-digit pairing code:
+
+   ```
+   code = HKDF(shared ‖ account_id ‖ new_identity_key,
+               info = "Tildra_PairingCode_v1") mod 10^6
+   ```
+
+   The user compares them. A server that swapped the ephemeral key to read the
+   channel, or aimed the device at a different account, changes the transcript —
+   so the two screens disagree.
+
+Channels expire in 5 minutes and accept exactly one approval: a second would
+let a server that captured the first replace it after the codes had already been
+compared. Accounts are capped at 8 devices, because every device multiplies the
+fanout of every message the account receives.
+
+Once linked, the new device is visible in the account's device list, so contacts
+fan out to it automatically. It does **not** receive past messages: the ratchets
+that could decrypt them exist only on the original device, and the server has no
+key that would let it re-key anyone into their own history.
+
 ## 6. Transport
 
 - TLS 1.3 only. No downgrade, no TLS 1.2.

@@ -293,8 +293,21 @@ export function toBase64(bytes: Uint8Array): string {
   return globalThis.btoa(binary);
 }
 
+/**
+ * Decode base64, failing with a message rather than a platform exception.
+ *
+ * Much of what reaches this function is untrusted — a scanned QR code, a
+ * gossiped tree head, an attachment reference from a peer. atob throws a
+ * DOMException on malformed input, which surfaces to users as
+ * "InvalidCharacterError" and to callers as something they cannot classify.
+ */
 export function fromBase64(s: string): Uint8Array {
-  const binary = globalThis.atob(s);
+  let binary: string;
+  try {
+    binary = globalThis.atob(s);
+  } catch {
+    throw new Error('Tildra: value is not valid base64');
+  }
   const out = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
   return out;

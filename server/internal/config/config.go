@@ -42,6 +42,11 @@ type Config struct {
 	// Empty disables the log; handle lookups then carry no proof.
 	TransparencyKey string
 
+	// ProvisioningTTL bounds a device-linking window. Short on purpose: it only
+	// has to last as long as pointing one phone at another and comparing six
+	// digits, and a long window is a long time for a stale code to be usable.
+	ProvisioningTTL time.Duration
+
 	SweepInterval time.Duration
 }
 
@@ -55,6 +60,7 @@ func Load() (*Config, error) {
 		AttachmentTTL:      7 * 24 * time.Hour,
 		PushProvider:       env("TILDRA_PUSH_PROVIDER", "none"),
 		TransparencyKey:    os.Getenv("TILDRA_TRANSPARENCY_KEY"),
+		ProvisioningTTL:    5 * time.Minute,
 		SweepInterval:      10 * time.Minute,
 	}
 	if v := os.Getenv("TILDRA_ENVELOPE_TTL"); v != "" {

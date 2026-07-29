@@ -60,6 +60,12 @@ type Store interface {
 	PutAttachment(ctx context.Context, a *model.Attachment) error
 	GetAttachment(ctx context.Context, id string) (*model.Attachment, error)
 
+	// Device provisioning. Short-lived; swept with everything else.
+	CreateProvisioning(ctx context.Context, p *model.Provisioning) error
+	GetProvisioning(ctx context.Context, id string) (*model.Provisioning, error)
+	SetProvisioningApproval(ctx context.Context, id string, approval []byte) error
+	DeleteProvisioning(ctx context.Context, id string) error
+
 	// Key transparency log. Append-only by contract: there is no update or
 	// delete, because the whole value of the log is that entries cannot be
 	// changed after a client has seen them.
