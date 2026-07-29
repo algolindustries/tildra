@@ -18,13 +18,14 @@ export function OnboardingScreen() {
   const createAccount = useApp((s) => s.createAccount);
   const error = useApp((s) => s.error);
 
+  const [displayName, setDisplayName] = useState('');
   const [deviceName, setDeviceName] = useState('');
   const [busy, setBusy] = useState(false);
 
   async function onCreate() {
     setBusy(true);
     try {
-      await createAccount(deviceName.trim() || 'Phone');
+      await createAccount(deviceName.trim() || 'Phone', displayName.trim());
     } catch {
       // The store has already put a readable message in `error`.
     } finally {
@@ -45,6 +46,17 @@ export function OnboardingScreen() {
         <View style={styles.badge}>
           <Text style={styles.badgeText}>{t.noPhoneNeeded}</Text>
         </View>
+
+        <Field
+          label={t.yourNameLabel}
+          placeholder={t.yourNamePlaceholder}
+          value={displayName}
+          onChangeText={setDisplayName}
+          autoCapitalize="words"
+          editable={!busy}
+          maxLength={48}
+        />
+        <Text style={styles.help}>{t.yourNameHelp}</Text>
 
         <Field
           label={t.deviceNameLabel}
@@ -97,6 +109,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
   badgeText: { ...typography.tiny, color: palette.accent, textTransform: 'uppercase' },
+  help: { ...typography.small, color: palette.textFaint, lineHeight: 18, marginTop: -8 },
   disclaimer: {
     ...typography.small,
     color: palette.textFaint,

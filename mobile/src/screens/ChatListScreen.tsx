@@ -143,7 +143,11 @@ function ConversationRow({
       onPress={onPress}
       style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
     >
-      <Avatar seed={conversation.accountId} label={name ?? conversation.accountId} />
+      <Avatar
+        seed={conversation.accountId}
+        label={name ?? conversation.accountId}
+        image={conversation.avatar}
+      />
       <View style={styles.rowBody}>
         <View style={styles.rowTop}>
           <Text style={styles.rowName} numberOfLines={1}>

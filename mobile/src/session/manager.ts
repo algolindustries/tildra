@@ -17,6 +17,7 @@ import {
   KeyPair,
   concat,
   equal,
+  fromBase64,
   fromUtf8,
   hash,
   toBase64,
@@ -35,8 +36,11 @@ import { openEnvelope, sealEnvelope } from '../crypto/sealed';
 import {
   Content,
   ContentType,
+  Profile,
   decodeContent,
+  decodeProfile,
   encodeContent,
+  profileContent,
   senderKeyContent,
   textContent,
 } from '../crypto/content';
@@ -175,6 +179,32 @@ export class IdentityChangedError extends Error {
 
 export class NoDevicesError extends Error {}
 
+/** Profiles hold image bytes, so they cannot go through JSON unchanged. */
+interface SerializedProfile {
+  displayName: string;
+  about?: string;
+  avatar?: string;
+  updatedAt: number;
+}
+
+function serializeProfile(profile: Profile): SerializedProfile {
+  return {
+    displayName: profile.displayName,
+    about: profile.about,
+    avatar: profile.avatar ? toBase64(profile.avatar) : undefined,
+    updatedAt: profile.updatedAt,
+  };
+}
+
+function deserializeProfile(data: SerializedProfile): Profile {
+  return {
+    displayName: data.displayName,
+    about: data.about,
+    avatar: data.avatar ? fromBase64(data.avatar) : undefined,
+    updatedAt: data.updatedAt,
+  };
+}
+
 /**
  * Identify a handshake.
  *
@@ -190,9 +220,12 @@ export interface ManagerEvents {
   onMessage?: (message: Message, conversation: Conversation) => void;
   onGroupMessage?: (groupId: string, message: Message) => void;
   onGroupChange?: (groupId: string) => void;
+  onProfileChange?: (accountId: string, profile: Profile) => void;
   onIdentityChange?: (accountId: string) => void;
   onError?: (error: Error) => void;
 }
+
+const OWN_PROFILE_META_KEY = 'profile.v1';
 
 export interface ManagerOptions {
   identity: KeyPair;
@@ -326,9 +359,25 @@ export class SessionManager {
     };
     await this.store.insertMessage(message);
 
+    // First contact: introduce ourselves before the message, so the recipient
+    // sees a person rather than a 26-character identifier. Best effort — a
+    // failure here must not stop the message from going out.
+    const introduce = !(await this.store.loadSession(accountId, devices[0].deviceId));
+
     let delivered = 0;
     for (const device of devices) {
       try {
+        if (introduce) {
+          const profile = await this.getProfile();
+          if (profile) {
+            await this.sendToDevice(
+              accountId,
+              device.deviceId,
+              device.identityKey,
+              profileContent(profile),
+            );
+          }
+        }
         await this.sendToDevice(accountId, device.deviceId, device.identityKey, textContent(text));
         delivered += 1;
       } catch (err) {
@@ -582,6 +631,23 @@ export class SessionManager {
       );
       return null;
     }
+    if (decoded.type === ContentType.Profile) {
+      await this.acceptProfile(content.senderAccountId, decoded.payload!);
+      // Someone we did not know just introduced themselves. Send ours back so
+      // the introduction is mutual rather than one-sided.
+      if (newSession) {
+        const ours = await this.getProfile();
+        if (ours) {
+          await this.sendToDevice(
+            content.senderAccountId,
+            content.senderDeviceId,
+            content.senderIdentityKey,
+            profileContent(ours),
+          ).catch((err) => this.events.onError?.(err));
+        }
+      }
+      return null;
+    }
     if (decoded.type === ContentType.GroupRotation) {
       // The sender is about to publish a fresh chain; drop what we hold so a
       // stale key cannot be used to read past this point.
@@ -607,6 +673,71 @@ export class SessionManager {
 
     this.events.onMessage?.(message, conversation);
     return message;
+  }
+
+  // -------------------------------------------------------------------------
+  // Profiles
+  // -------------------------------------------------------------------------
+
+  /**
+   * Set our own profile and push it to everyone we already talk to.
+   *
+   * The profile is a message like any other: encrypted to each contact over
+   * their pairwise session. The server never sees a name or a picture, and
+   * cannot enumerate who anyone is — but the people you actually talk to see
+   * exactly who you are, which is the point.
+   */
+  async setProfile(profile: Omit<Profile, 'updatedAt'>): Promise<Profile> {
+    const stored: Profile = { ...profile, updatedAt: this.now() };
+    await this.store.setMeta(OWN_PROFILE_META_KEY, JSON.stringify(serializeProfile(stored)));
+
+    for (const accountId of await this.activeAccountIds()) {
+      try {
+        await this.sendProfileTo(accountId, stored);
+      } catch (err) {
+        // A contact we cannot reach right now is not a reason to fail the
+        // whole update; they get it with the next message we send them.
+        this.events.onError?.(err instanceof Error ? err : new Error(String(err)));
+      }
+    }
+    return stored;
+  }
+
+  async getProfile(): Promise<Profile | null> {
+    const raw = await this.store.getMeta(OWN_PROFILE_META_KEY);
+    return raw ? deserializeProfile(JSON.parse(raw)) : null;
+  }
+
+  private async sendProfileTo(accountId: string, profile: Profile): Promise<void> {
+    const devices = await this.client.listDevices(accountId);
+    for (const device of devices) {
+      await this.sendToDevice(accountId, device.deviceId, device.identityKey, profileContent(profile));
+    }
+  }
+
+  /**
+   * Record a contact's profile.
+   *
+   * Older profiles are ignored: fanout to multiple devices plus redelivery
+   * means an update can arrive after a newer one, and a stale name silently
+   * replacing a current one would look like the contact renamed themselves.
+   */
+  private async acceptProfile(accountId: string, payload: Uint8Array): Promise<void> {
+    const profile = decodeProfile(payload);
+    const conversation = await this.store.getConversation(accountId);
+    if (!conversation) return;
+    if (conversation.profileUpdatedAt && conversation.profileUpdatedAt > profile.updatedAt) {
+      return;
+    }
+
+    await this.store.upsertConversation({
+      ...conversation,
+      displayName: profile.displayName,
+      about: profile.about,
+      avatar: profile.avatar,
+      profileUpdatedAt: profile.updatedAt,
+    });
+    this.events.onProfileChange?.(accountId, profile);
   }
 
   // -------------------------------------------------------------------------

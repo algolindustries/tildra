@@ -19,6 +19,9 @@ export interface Strings {
   creatingAccount: string;
   deviceNameLabel: string;
   deviceNamePlaceholder: string;
+  yourNameLabel: string;
+  yourNamePlaceholder: string;
+  yourNameHelp: string;
   recoveryTitle: string;
   recoveryBody: string;
   recoveryConfirm: string;
@@ -91,6 +94,10 @@ const en: Strings = {
   creatingAccount: 'Generating keys…',
   deviceNameLabel: 'Name this device',
   deviceNamePlaceholder: 'e.g. My phone',
+  yourNameLabel: 'Your name',
+  yourNamePlaceholder: 'What people should call you',
+  yourNameHelp:
+    'Only people you talk to see this. It is sent to them encrypted — the server never stores your name or picture.',
   recoveryTitle: 'Write down your recovery phrase',
   recoveryBody:
     'These 24 words are the only way back into your account. We cannot reset them for you — the server has nothing to reset. Store them somewhere physical.',
@@ -161,6 +168,10 @@ const tr: Strings = {
   creatingAccount: 'Anahtarlar üretiliyor…',
   deviceNameLabel: 'Bu cihaza bir ad verin',
   deviceNamePlaceholder: 'örn. Telefonum',
+  yourNameLabel: 'Adınız',
+  yourNamePlaceholder: 'İnsanlar size nasıl seslensin',
+  yourNameHelp:
+    'Bunu yalnızca konuştuğunuz kişiler görür. Onlara şifreli olarak gönderilir — sunucu adınızı ve fotoğrafınızı hiçbir zaman saklamaz.',
   recoveryTitle: 'Kurtarma kelimelerinizi yazın',
   recoveryBody:
     'Bu 24 kelime hesabınıza dönmenin tek yolu. Sizin için sıfırlayamayız — sunucuda sıfırlanacak bir şey yok. Fiziksel bir yerde saklayın.',

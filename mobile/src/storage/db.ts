@@ -39,7 +39,13 @@ export type MessageState = 'pending' | 'sent' | 'delivered' | 'failed';
 export interface Conversation {
   accountId: string;
   handle?: string;
+  /** The name the contact chose, delivered over their pairwise session. */
   displayName?: string;
+  about?: string;
+  /** Encoded image bytes. Never leaves the device unencrypted. */
+  avatar?: Uint8Array;
+  /** When the stored profile was authored, so a stale one cannot overwrite. */
+  profileUpdatedAt?: number;
   identityKey: Uint8Array;
   lastActivity: number;
   unreadCount: number;
@@ -115,6 +121,9 @@ interface ConversationMeta {
   accountId: string;
   handle?: string;
   displayName?: string;
+  about?: string;
+  avatar?: string;
+  profileUpdatedAt?: number;
   identityKey: string;
 }
 
@@ -233,6 +242,9 @@ export class Database {
       accountId: conversation.accountId,
       handle: conversation.handle,
       displayName: conversation.displayName,
+      about: conversation.about,
+      avatar: conversation.avatar ? toBase64(conversation.avatar) : undefined,
+      profileUpdatedAt: conversation.profileUpdatedAt,
       identityKey: toBase64(conversation.identityKey),
     };
     await this.db.runAsync(
@@ -277,6 +289,9 @@ export class Database {
       accountId: meta.accountId,
       handle: meta.handle,
       displayName: meta.displayName,
+      about: meta.about,
+      avatar: meta.avatar ? fromBase64(meta.avatar) : undefined,
+      profileUpdatedAt: meta.profileUpdatedAt,
       identityKey: fromBase64(meta.identityKey),
       lastActivity: row.last_activity,
       unreadCount: row.unread_count,

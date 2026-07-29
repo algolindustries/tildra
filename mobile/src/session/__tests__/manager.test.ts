@@ -123,9 +123,13 @@ async function bringUp(name: string): Promise<Device> {
   };
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 10_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!predicate() && Date.now() < deadline) {
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
     await new Promise((r) => setTimeout(r, 50));
   }
 }
@@ -368,6 +372,117 @@ describeIntegration('session manager', () => {
     ).rejects.toThrow();
     alice.socket.close();
   }, 30_000);
+});
+
+describeIntegration('profiles', () => {
+  it('introduces both sides on first contact', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.setProfile({ displayName: 'Ayşe Kaya', about: 'İstanbul' });
+    await bob.manager.setProfile({ displayName: 'Barış Yılmaz' });
+
+    await alice.manager.sendMessage(bob.accountId, 'merhaba');
+    await waitFor(() => bob.received.length > 0, 15_000);
+
+    // Bob learned who Alice is from the introduction that preceded the message.
+    const aliceAsBobSeesHer = await bob.store.getConversation(alice.accountId);
+    expect(aliceAsBobSeesHer?.displayName).toBe('Ayşe Kaya');
+    expect(aliceAsBobSeesHer?.about).toBe('İstanbul');
+
+    // And the introduction is mutual: Bob's profile came back automatically.
+    await waitFor(
+      async () => (await alice.store.getConversation(bob.accountId))?.displayName !== undefined,
+      15_000,
+    );
+    const bobAsAliceSeesHim = await alice.store.getConversation(bob.accountId);
+    expect(bobAsAliceSeesHim?.displayName).toBe('Barış Yılmaz');
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
+  it('carries a picture', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    const avatar = randomBytes(3000);
+    await alice.manager.setProfile({ displayName: 'With picture', avatar });
+
+    await alice.manager.sendMessage(bob.accountId, 'bak');
+    await waitFor(() => bob.received.length > 0, 15_000);
+
+    const stored = await bob.store.getConversation(alice.accountId);
+    expect(stored?.avatar).toBeDefined();
+    expect(stored!.avatar!.length).toBe(avatar.length);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
+  it('pushes an updated profile to existing contacts', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.setProfile({ displayName: 'Before' });
+    await alice.manager.sendMessage(bob.accountId, 'ilk');
+    await waitFor(() => bob.received.length > 0, 15_000);
+    expect((await bob.store.getConversation(alice.accountId))?.displayName).toBe('Before');
+
+    await alice.manager.setProfile({ displayName: 'After' });
+    await waitFor(
+      async () => (await bob.store.getConversation(alice.accountId))?.displayName === 'After',
+      15_000,
+    );
+
+    expect((await bob.store.getConversation(alice.accountId))?.displayName).toBe('After');
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
+  it('ignores a profile older than the one already stored', async () => {
+    // Fanout plus redelivery means an update can arrive after a newer one. A
+    // stale name silently replacing the current one would look to the user
+    // like the contact renamed themselves back.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.setProfile({ displayName: 'Current' });
+    await alice.manager.sendMessage(bob.accountId, 'x');
+    await waitFor(() => bob.received.length > 0, 15_000);
+
+    const conversation = await bob.store.getConversation(alice.accountId);
+    await bob.store.upsertConversation({
+      ...conversation!,
+      displayName: 'Newer',
+      profileUpdatedAt: Date.now() + 60_000,
+    });
+
+    await alice.manager.setProfile({ displayName: 'Stale arrival' });
+    await new Promise((r) => setTimeout(r, 2_000));
+
+    expect((await bob.store.getConversation(alice.accountId))?.displayName).toBe('Newer');
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
+  it('keeps names and pictures off the server', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.setProfile({ displayName: 'Ayşe Kaya', avatar: randomBytes(2048) });
+    await alice.manager.sendMessage(bob.accountId, 'x');
+    await waitFor(() => bob.received.length > 0, 15_000);
+
+    // The device list is the only place the server could plausibly leak a
+    // name, and what it holds is the device label, never the profile.
+    const devices = await bob.client.listDevices(alice.accountId);
+    expect(devices.map((d) => d.name)).not.toContain('Ayşe Kaya');
+    expect(JSON.stringify(devices)).not.toContain('Ayşe');
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
 });
 
 describeIntegration('encrypted groups', () => {

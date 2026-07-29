@@ -5,9 +5,10 @@
  * needs more machinery than this is probably a screen, not a component.
  */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   StyleSheet,
   Text,
@@ -17,6 +18,7 @@ import {
   ViewStyle,
 } from 'react-native';
 
+import { toBase64 } from '../crypto/primitives';
 import { avatarColor, initials, palette, radius, spacing, typography } from './theme';
 
 export function Button({
@@ -80,13 +82,48 @@ export function Field({ label, style, ...props }: TextInputProps & { label?: str
   );
 }
 
-export function Avatar({ seed, label, size = 46 }: { seed: string; label?: string; size?: number }) {
+/**
+ * A contact's picture, or their initials if they have not sent one.
+ *
+ * The image bytes arrive over the pairwise session and live only on this
+ * device, so they are rendered from memory rather than fetched from a URL —
+ * there is no server-side avatar to fetch.
+ */
+export function Avatar({
+  seed,
+  label,
+  image,
+  size = 46,
+}: {
+  seed: string;
+  label?: string;
+  image?: Uint8Array;
+  size?: number;
+}) {
   const color = avatarColor(seed);
+  const uri = useMemo(() => (image ? `data:image/jpeg;base64,${toBase64(image)}` : null), [image]);
+
+  if (uri) {
+    return (
+      <Image
+        source={{ uri }}
+        accessibilityLabel={label}
+        style={[styles.avatarImage, { width: size, height: size, borderRadius: size / 2 }]}
+      />
+    );
+  }
+
   return (
     <View
       style={[
         styles.avatar,
-        { width: size, height: size, borderRadius: size / 2, backgroundColor: `${color}22`, borderColor: color },
+        {
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: `${color}22`,
+          borderColor: color,
+        },
       ]}
     >
       <Text style={[styles.avatarText, { color, fontSize: size * 0.34 }]}>
@@ -182,6 +219,7 @@ const styles = StyleSheet.create({
   },
 
   avatar: { alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
+  avatarImage: { backgroundColor: palette.surfaceRaised },
   avatarText: { fontWeight: '700' },
 
   banner: {

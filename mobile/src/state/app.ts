@@ -51,6 +51,7 @@ export interface AppState {
 
   accountId: string | null;
   handle: string | null;
+  displayName: string | null;
   socketState: SocketState;
 
   conversations: (Conversation & { id: string })[];
@@ -60,7 +61,8 @@ export interface AppState {
 
   // Actions
   bootstrap: (options?: { serverUrl?: string; localeTag?: string }) => Promise<void>;
-  createAccount: (deviceName: string) => Promise<void>;
+  createAccount: (deviceName: string, displayName?: string) => Promise<void>;
+  setProfile: (profile: { displayName: string; about?: string; avatar?: Uint8Array }) => Promise<void>;
   openConversation: (accountId: string) => Promise<void>;
   closeConversation: () => void;
   send: (text: string) => Promise<void>;
@@ -98,6 +100,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   accountId: null,
   handle: null,
+  displayName: null,
   socketState: 'closed',
 
   conversations: [],
@@ -148,14 +151,19 @@ export const useApp = create<AppState>((set, get) => ({
 
       client.setCredentials(credentials);
       await startSession({ vault, db, client, identity, preKeys, serverUrl, credentials }, set, get);
-      set({ phase: 'ready', accountId: credentials.accountId });
+      const profile = await runtime?.manager.getProfile();
+      set({
+        phase: 'ready',
+        accountId: credentials.accountId,
+        displayName: profile?.displayName ?? null,
+      });
       await get().refreshConversations();
     } catch (err) {
       set({ phase: 'error', error: describeError(err, get().t) });
     }
   },
 
-  async createAccount(deviceName) {
+  async createAccount(deviceName, displayName) {
     const base = runtime;
     if (!base) throw new Error('Tildra: bootstrap has not run');
 
@@ -185,7 +193,12 @@ export const useApp = create<AppState>((set, get) => ({
         set,
         get,
       );
-      set({ phase: 'ready', accountId });
+      // Store the profile after the manager exists, so it is on disk before
+      // the first conversation needs to introduce us.
+      if (displayName?.trim()) {
+        await runtime?.manager.setProfile({ displayName: displayName.trim() });
+      }
+      set({ phase: 'ready', accountId, displayName: displayName?.trim() || null });
     } catch (err) {
       set({ error: describeError(err, get().t) });
       throw err;
@@ -265,6 +278,12 @@ export const useApp = create<AppState>((set, get) => ({
     if (get().activeAccountId === accountId) await get().openConversation(accountId);
   },
 
+  async setProfile(profile) {
+    if (!runtime?.manager) return;
+    const saved = await runtime.manager.setProfile(profile);
+    set({ displayName: saved.displayName });
+  },
+
   async claimHandle(handle) {
     if (!runtime?.client) return;
     const result = await runtime.client.claimHandle(handle);
@@ -287,6 +306,7 @@ export const useApp = create<AppState>((set, get) => ({
       phase: 'onboarding',
       accountId: null,
       handle: null,
+      displayName: null,
       conversations: [],
       messages: [],
       activeAccountId: null,

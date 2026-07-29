@@ -64,7 +64,7 @@ export function ConversationScreen({
         <Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={onBack} hitSlop={12}>
           <Text style={styles.back}>‹</Text>
         </Pressable>
-        <Avatar seed={accountId} label={name ?? accountId} size={34} />
+        <Avatar seed={accountId} label={name ?? accountId} image={conversation?.avatar} size={34} />
         <Pressable style={styles.headerText} onPress={onVerify}>
           <Text style={styles.headerName} numberOfLines={1}>
             {name ?? formatAccountId(accountId)}
