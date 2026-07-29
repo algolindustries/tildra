@@ -399,6 +399,85 @@ function trySkippedKeys(
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Persistence
+// ---------------------------------------------------------------------------
+
+/**
+ * Serialised ratchet state.
+ *
+ * This is the most sensitive structure the app writes to disk — it contains
+ * live chain keys. It is only ever stored through the vault, never raw. The
+ * shape is versioned so a future protocol change can migrate rather than
+ * silently misread old rows.
+ */
+export interface SerializedRatchet {
+  v: 1;
+  sendingPublic: string;
+  sendingSecret: string;
+  receiving: string | null;
+  rootKey: string;
+  sendingChain: string | null;
+  receivingChain: string | null;
+  sentCount: number;
+  receivedCount: number;
+  previousChainLength: number;
+  headerKeySending: string | null;
+  headerKeyReceiving: string | null;
+  nextHeaderKeySending: string;
+  nextHeaderKeyReceiving: string;
+  skipped: [string, { messageKey: string; storedAt: number }][];
+}
+
+export function serializeRatchet(state: RatchetState): SerializedRatchet {
+  return {
+    v: 1,
+    sendingPublic: toBase64(state.sending.publicKey),
+    sendingSecret: toBase64(state.sending.secretKey),
+    receiving: state.receiving ? toBase64(state.receiving) : null,
+    rootKey: toBase64(state.rootKey),
+    sendingChain: state.sendingChain ? toBase64(state.sendingChain) : null,
+    receivingChain: state.receivingChain ? toBase64(state.receivingChain) : null,
+    sentCount: state.sentCount,
+    receivedCount: state.receivedCount,
+    previousChainLength: state.previousChainLength,
+    headerKeySending: state.headerKeySending ? toBase64(state.headerKeySending) : null,
+    headerKeyReceiving: state.headerKeyReceiving ? toBase64(state.headerKeyReceiving) : null,
+    nextHeaderKeySending: toBase64(state.nextHeaderKeySending),
+    nextHeaderKeyReceiving: toBase64(state.nextHeaderKeyReceiving),
+    skipped: [...state.skipped].map(([id, entry]) => [
+      id,
+      { messageKey: toBase64(entry.messageKey), storedAt: entry.storedAt },
+    ]),
+  };
+}
+
+export function deserializeRatchet(data: SerializedRatchet): RatchetState {
+  if (data.v !== 1) {
+    throw new Error(`Tildra: unsupported ratchet state version ${data.v}`);
+  }
+  return {
+    sending: { publicKey: fromBase64(data.sendingPublic), secretKey: fromBase64(data.sendingSecret) },
+    receiving: data.receiving ? fromBase64(data.receiving) : null,
+    rootKey: fromBase64(data.rootKey),
+    sendingChain: data.sendingChain ? fromBase64(data.sendingChain) : null,
+    receivingChain: data.receivingChain ? fromBase64(data.receivingChain) : null,
+    sentCount: data.sentCount,
+    receivedCount: data.receivedCount,
+    previousChainLength: data.previousChainLength,
+    headerKeySending: data.headerKeySending ? fromBase64(data.headerKeySending) : null,
+    headerKeyReceiving: data.headerKeyReceiving ? fromBase64(data.headerKeyReceiving) : null,
+    nextHeaderKeySending: fromBase64(data.nextHeaderKeySending),
+    nextHeaderKeyReceiving: fromBase64(data.nextHeaderKeyReceiving),
+    skipped: new Map(
+      data.skipped.map(([id, entry]) => [
+        id,
+        { messageKey: fromBase64(entry.messageKey), storedAt: entry.storedAt },
+      ]),
+    ),
+  };
+}
+
 // Decoding the same handful of header keys on every out-of-order message adds
 // up when a client drains a large backlog, so the results are memoised.
 const base64Cache = new Map<string, Uint8Array>();
