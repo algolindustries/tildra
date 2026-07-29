@@ -38,6 +38,7 @@ import {
   ContentType,
   Profile,
   attachmentContent,
+  gossipContent,
   decodeContent,
   decodeProfile,
   encodeContent,
@@ -45,6 +46,14 @@ import {
   senderKeyContent,
   textContent,
 } from '../crypto/content';
+import {
+  LogCheckpoint,
+  SignedTreeHead,
+  SplitViewError,
+  crossCheckTreeHead,
+  deserializeTreeHead,
+  serializeTreeHead,
+} from '../crypto/transparency';
 import {
   AttachmentRef,
   decryptAttachment,
@@ -226,6 +235,13 @@ function initFingerprint(init: SessionInit): string {
 
 export interface ManagerEvents {
   onMessage?: (message: Message, conversation: Conversation) => void;
+  /**
+   * Two contacts were shown different transparency logs. This is the alarm
+   * that means the server is lying to somebody, and it is deliberately a
+   * separate event from onError — it is not a transient failure and must not
+   * be rendered as one.
+   */
+  onSplitView?: (accountId: string, error: SplitViewError) => void;
   onGroupMessage?: (groupId: string, message: Message) => void;
   onGroupChange?: (groupId: string) => void;
   onProfileChange?: (accountId: string, profile: Profile) => void;
@@ -234,6 +250,8 @@ export interface ManagerEvents {
 }
 
 const OWN_PROFILE_META_KEY = 'profile.v1';
+/** Shared with the app state, which writes it after verifying a lookup. */
+export const CHECKPOINT_META_KEY = 'transparency.checkpoint.v1';
 
 export interface ManagerOptions {
   identity: KeyPair;
@@ -385,6 +403,9 @@ export class SessionManager {
               profileContent(profile),
             );
           }
+          // Gossip on first contact: the earliest point at which comparing
+          // logs with this person is possible.
+          await this.gossipTo(accountId, device.deviceId, device.identityKey);
         }
         await this.sendToDevice(accountId, device.deviceId, device.identityKey, textContent(text));
         delivered += 1;
@@ -639,6 +660,10 @@ export class SessionManager {
       );
       return null;
     }
+    if (decoded.type === ContentType.TransparencyGossip) {
+      await this.acceptGossip(content.senderAccountId, decoded.payload!);
+      return null;
+    }
     if (decoded.type === ContentType.Profile) {
       await this.acceptProfile(content.senderAccountId, decoded.payload!);
       // Someone we did not know just introduced themselves. Send ours back so
@@ -791,6 +816,86 @@ export class SessionManager {
   async fetchAttachment(ref: AttachmentRef): Promise<Uint8Array> {
     const ciphertext = await this.client.downloadAttachment(ref.id);
     return decryptAttachment(ciphertext, ref);
+  }
+
+  // -------------------------------------------------------------------------
+  // Transparency gossip
+  // -------------------------------------------------------------------------
+
+  /**
+   * Attach our verified tree head to a message for this contact.
+   *
+   * Sent opportunistically rather than on a schedule: piggybacking on traffic
+   * that was happening anyway costs nothing and leaks no new timing. A device
+   * that has never verified a log has nothing to gossip and stays quiet.
+   */
+  private async gossipTo(
+    accountId: string,
+    deviceId: string,
+    identityKey: Uint8Array,
+  ): Promise<void> {
+    const checkpoint = await this.loadCheckpoint();
+    const head = checkpoint?.head;
+    if (!head) return;
+
+    await this.sendToDevice(
+      accountId,
+      deviceId,
+      identityKey,
+      gossipContent(utf8(JSON.stringify(serializeTreeHead(head)))),
+    );
+  }
+
+  /**
+   * Compare a contact's tree head with ours.
+   *
+   * If the two cannot both be true, the server is running a split view — the
+   * one attack the log's own proofs cannot catch, because each view is
+   * internally consistent.
+   */
+  private async acceptGossip(accountId: string, payload: Uint8Array): Promise<void> {
+    const stored = await this.loadCheckpoint();
+    if (!stored) return;
+
+    let theirs: SignedTreeHead;
+    try {
+      theirs = deserializeTreeHead(JSON.parse(fromUtf8(payload)));
+    } catch (err) {
+      this.events.onError?.(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
+
+    try {
+      await crossCheckTreeHead(stored.checkpoint, theirs, (first, second) =>
+        this.client.transparencyConsistency(first, second),
+      );
+    } catch (err) {
+      if (err instanceof SplitViewError) {
+        this.events.onSplitView?.(accountId, err);
+        return;
+      }
+      this.events.onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+
+  /** The verified checkpoint, and the head it came from, if any. */
+  private async loadCheckpoint(): Promise<{ checkpoint: LogCheckpoint; head?: SignedTreeHead } | null> {
+    const raw = await this.store.getMeta(CHECKPOINT_META_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as {
+      size: number;
+      rootHash: string;
+      logKey: string;
+      head?: ReturnType<typeof serializeTreeHead>;
+    };
+    return {
+      checkpoint: {
+        size: parsed.size,
+        rootHash: fromBase64(parsed.rootHash),
+        logKey: fromBase64(parsed.logKey),
+      },
+      head: parsed.head ? deserializeTreeHead(parsed.head) : undefined,
+    };
   }
 
   // -------------------------------------------------------------------------

@@ -230,6 +230,16 @@ export class TildraClient {
     };
   }
 
+  /** A consistency proof between two tree sizes, for gossip cross-checks. */
+  async transparencyConsistency(first: number, second: number): Promise<{ proof: Uint8Array[] }> {
+    const raw = await this.request<{ proof: string[] | null }>(
+      'GET',
+      `/v1/transparency/consistency?first=${first}&second=${second}`,
+      { authenticated: false },
+    );
+    return { proof: (raw.proof ?? []).map(fromBase64) };
+  }
+
   /** The log's current signed tree head. Unauthenticated, like the log itself. */
   async transparencyHead(): Promise<SignedTreeHead> {
     const raw = await this.request<{

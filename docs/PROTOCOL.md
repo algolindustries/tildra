@@ -311,12 +311,46 @@ A client that has verified a log once will not accept a later response with no
 proof at all. Dropping the mechanism silently would undo every check made
 before it.
 
-**What this does not yet do.** Split-view detection requires clients to gossip
-tree heads, so that a fork shown to one person is noticed by another. Tildra
-does not do that yet, which means a server willing to maintain a permanent,
-consistent fork *for a specific target* is still not caught by the log alone —
-only by that target comparing safety numbers. Auditors and gossip are the
-remaining work; see `docs/THREAT_MODEL.md`.
+### 7.2 Gossip
+
+Inclusion and consistency proofs stop a server rewriting history for *one*
+client. They do nothing about a server that keeps two internally consistent
+logs and shows a different one to each person. Catching that requires two
+clients to compare what they were told.
+
+Tildra uses the messages people already exchange as the transport. A device
+that has verified a tree head attaches it to a message
+(`ContentType.TransparencyGossip`); the recipient verifies the signature under
+the log key it already trusts, and then asks the server to prove the two heads
+are on the same log:
+
+```
+GET /v1/transparency/consistency?first=<smaller size>&second=<larger size>
+```
+
+Whichever head is smaller must be a prefix of the larger. Three outcomes are
+treated as evidence of a split view:
+
+1. Same size, different roots — no proof can reconcile those.
+2. A consistency proof that does not verify.
+3. The server declining to link two heads it signed itself.
+
+A gossiped head whose *signature* does not verify is explicitly **not** a split
+view. That is a broken or malicious contact, not the operator; conflating the
+two would make the alarm trivially forgeable and therefore worthless.
+
+Anyone can also read the log directly:
+
+```
+GET /v1/transparency/entries?from=<index>&to=<index>
+```
+
+**What is still missing.** Gossip only helps between people who message each
+other. A target who talks to nobody outside the attacker's chosen set is still
+only protected by comparing safety numbers, and Tildra ships no independent
+auditors that watch the log continuously. The mechanism raises the cost of the
+attack and bounds how long it can go unnoticed; it does not make it
+impossible.
 
 The log key must be held outside the database. A signing key sitting next to
 the log it signs can be used to rewrite the whole thing.

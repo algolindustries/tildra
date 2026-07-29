@@ -67,6 +67,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/auth/token", s.authToken)
 	mux.HandleFunc("GET /v1/handles/{handle}", s.resolveHandle)
 	mux.HandleFunc("GET /v1/transparency/head", s.transparencyHead)
+	mux.HandleFunc("GET /v1/transparency/consistency", s.transparencyConsistency)
+	mux.HandleFunc("GET /v1/transparency/entries", s.transparencyEntries)
 	mux.HandleFunc("GET /healthz", s.health)
 
 	// Authenticated.
@@ -572,6 +574,81 @@ func (s *Server) wake(mailboxID string) {
 			s.log.Warn("push notify failed", "err", err)
 		}
 	}()
+}
+
+// transparencyConsistency proves that one tree size is a prefix of another.
+//
+// This is what makes gossip work: when two clients compare tree heads they
+// have each verified, one of them asks for the proof that links the two. A
+// server showing different logs to different people cannot produce it.
+//
+// Unauthenticated, like the rest of the log: cross-checking is most useful
+// when anyone can do it.
+func (s *Server) transparencyConsistency(w http.ResponseWriter, r *http.Request) {
+	if s.tlog == nil {
+		fail(w, http.StatusNotFound, "this server does not run a transparency log")
+		return
+	}
+	first, err1 := strconv.ParseInt(r.URL.Query().Get("first"), 10, 64)
+	second, err2 := strconv.ParseInt(r.URL.Query().Get("second"), 10, 64)
+	if err1 != nil || err2 != nil || first < 0 || second < first {
+		fail(w, http.StatusBadRequest, "first and second must be sizes with first <= second")
+		return
+	}
+
+	proof, err := s.tlog.Consistency(int(first), int(second))
+	if err != nil {
+		fail(w, http.StatusBadRequest, "no such tree sizes in this log")
+		return
+	}
+	respond(w, http.StatusOK, map[string]any{
+		"first":  first,
+		"second": second,
+		"proof":  proof,
+		"head":   s.tlog.Head(),
+	})
+}
+
+// transparencyEntries lets an auditor read the log.
+//
+// A log nobody can enumerate is a log nobody can audit, and the entries are
+// public bindings by design — this endpoint exposes nothing the lookup
+// endpoint does not already.
+func (s *Server) transparencyEntries(w http.ResponseWriter, r *http.Request) {
+	if s.tlog == nil {
+		fail(w, http.StatusNotFound, "this server does not run a transparency log")
+		return
+	}
+	from, _ := strconv.ParseInt(r.URL.Query().Get("from"), 10, 64)
+	to, err := strconv.ParseInt(r.URL.Query().Get("to"), 10, 64)
+	if err != nil || from < 0 || to < from {
+		fail(w, http.StatusBadRequest, "from and to must be indices with from <= to")
+		return
+	}
+	// Bounded so one request cannot ask the server to serialise the whole log.
+	if to-from > 1000 {
+		to = from + 1000
+	}
+	// Clamp to what exists. An auditor walking the log does not know where it
+	// ends, and answering "bad request" to a reasonable read is a good way to
+	// make sure nobody audits anything.
+	size := s.tlog.Size()
+	if to > size {
+		to = size
+	}
+	if from > size {
+		from = size
+	}
+
+	entries, err := s.tlog.Entries(r.Context(), from, to)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "no such range in this log")
+		return
+	}
+	if entries == nil {
+		entries = []*transparency.Entry{}
+	}
+	respond(w, http.StatusOK, map[string]any{"entries": entries, "head": s.tlog.Head()})
 }
 
 // ---------- attachments ----------

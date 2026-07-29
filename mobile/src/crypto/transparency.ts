@@ -17,7 +17,7 @@
  * them honest rather than the reading of either file.
  */
 
-import { concat, equal, hash, u32, utf8, verify } from './primitives';
+import { concat, equal, fromBase64, hash, toBase64, u32, utf8, verify } from './primitives';
 
 export class TransparencyError extends Error {}
 
@@ -56,6 +56,22 @@ export interface LogCheckpoint {
   rootHash: Uint8Array;
   logKey: Uint8Array;
 }
+
+/** Fetches a consistency proof between two tree sizes. */
+export type ConsistencyFetcher = (
+  first: number,
+  second: number,
+) => Promise<{ proof: Uint8Array[] }>;
+
+/**
+ * Raised when two verified tree heads cannot both be true.
+ *
+ * This is the split-view attack: a server showing one log to one person and a
+ * different log to another. Every other transparency failure means "this
+ * response is wrong"; this one means "this server is lying to somebody, and
+ * one of us is the target".
+ */
+export class SplitViewError extends TransparencyError {}
 
 // ---------------------------------------------------------------------------
 // Hashing
@@ -283,4 +299,100 @@ export function verifyHandleProof(
   }
 
   return { size: proof.head.size, rootHash: proof.head.rootHash, logKey: proof.head.logKey };
+}
+
+// ---------------------------------------------------------------------------
+// Gossip
+// ---------------------------------------------------------------------------
+
+/**
+ * Cross-check a tree head someone else verified against our own.
+ *
+ * The log's inclusion and consistency proofs stop a server rewriting history
+ * for *one* client. They do nothing about a server that keeps two internally
+ * consistent logs and shows a different one to each person. Detecting that
+ * needs two clients to compare what they were told — which is exactly what
+ * this does, using the messages they already exchange as the transport.
+ *
+ * Whichever head is smaller must be a prefix of the larger. If the server
+ * cannot produce a proof linking them, or the proof does not verify, the two
+ * heads describe different logs and the server is running a split view.
+ */
+export async function crossCheckTreeHead(
+  ours: LogCheckpoint,
+  theirs: SignedTreeHead,
+  fetchConsistency: ConsistencyFetcher,
+): Promise<void> {
+  verifyTreeHead(theirs, ours.logKey);
+
+  if (ours.size === theirs.size) {
+    if (!equal(ours.rootHash, theirs.rootHash)) {
+      throw new SplitViewError(
+        'two devices were shown different logs of the same size; the server is running a split view',
+      );
+    }
+    return;
+  }
+
+  const [first, second, firstRoot, secondRoot] =
+    ours.size < theirs.size
+      ? [ours.size, theirs.size, ours.rootHash, theirs.rootHash]
+      : [theirs.size, ours.size, theirs.rootHash, ours.rootHash];
+
+  let proof: Uint8Array[];
+  try {
+    ({ proof } = await fetchConsistency(first, second));
+  } catch (cause) {
+    // A server that cannot link two heads it signed is a server that should
+    // not have signed both.
+    throw new SplitViewError(
+      `the server could not prove its own tree heads are consistent (${first} → ${second})`,
+      { cause },
+    );
+  }
+
+  try {
+    verifyConsistency(first, second, proof, firstRoot, secondRoot);
+  } catch (cause) {
+    throw new SplitViewError(
+      'two verified tree heads are not on the same log; the server is running a split view',
+      { cause },
+    );
+  }
+}
+
+/** Wire form of a gossiped tree head. */
+export interface SerializedTreeHead {
+  size: number;
+  rootHash: string;
+  timestamp: number;
+  signature: string;
+  logKey: string;
+}
+
+export function serializeTreeHead(head: SignedTreeHead): SerializedTreeHead {
+  return {
+    size: head.size,
+    rootHash: toBase64(head.rootHash),
+    timestamp: head.timestamp,
+    signature: toBase64(head.signature),
+    logKey: toBase64(head.logKey),
+  };
+}
+
+export function deserializeTreeHead(data: SerializedTreeHead): SignedTreeHead {
+  const head: SignedTreeHead = {
+    size: data.size,
+    rootHash: fromBase64(data.rootHash),
+    timestamp: data.timestamp,
+    signature: fromBase64(data.signature),
+    logKey: fromBase64(data.logKey),
+  };
+  if (!Number.isInteger(head.size) || head.size < 0) {
+    throw new TransparencyError('gossiped tree head has an invalid size');
+  }
+  if (head.rootHash.length !== HASH_SIZE || head.logKey.length !== 32) {
+    throw new TransparencyError('gossiped tree head is malformed');
+  }
+  return head;
 }

@@ -28,7 +28,14 @@ import { generateIdentity, generatePreKeys } from '../crypto/identity';
 import { PreKeySecrets } from '../crypto/pqxdh';
 import { IdentityChangedError, NoDevicesError, SessionManager } from '../session/manager';
 import { Locale, Strings, resolveLocale, strings } from '../i18n';
-import { LogCheckpoint, TransparencyError, verifyHandleProof } from '../crypto/transparency';
+import {
+  LogCheckpoint,
+  SignedTreeHead,
+  TransparencyError,
+  serializeTreeHead,
+  verifyHandleProof,
+} from '../crypto/transparency';
+import { CHECKPOINT_META_KEY } from '../session/manager';
 import {
   dismissWakeNotifications,
   presentLocalNotification,
@@ -378,7 +385,7 @@ export const useApp = create<AppState>((set, get) => ({
 
       if (resolved.proof) {
         const next = verifyHandleProof(resolved.proof, parsed.value, checkpoint);
-        await saveCheckpoint(runtime.db, next);
+        await saveCheckpoint(runtime.db, next, resolved.proof.head);
       } else if (checkpoint) {
         // We have verified this log before and the server has stopped
         // answering with proofs. That is a downgrade, and taking it silently
@@ -499,6 +506,11 @@ async function startSession(
       onIdentityChange: () => {
         void get().refreshConversations();
       },
+      onSplitView: (accountId, error) => {
+        // Not routed through the ordinary error path: this is not a request
+        // that failed, it is evidence the operator is attacking someone.
+        set({ error: `${get().t.errorSplitView} (${accountId}) ${error.message}` });
+      },
       onError: (error) => set({ error: describeError(error, get().t) }),
     },
   });
@@ -521,8 +533,6 @@ async function startSession(
   void registerForPush(parts.client).catch(() => undefined);
 }
 
-const CHECKPOINT_META_KEY = 'transparency.checkpoint.v1';
-
 /**
  * The last verified tree head.
  *
@@ -542,13 +552,21 @@ async function loadCheckpoint(db: Database): Promise<LogCheckpoint | null> {
   };
 }
 
-async function saveCheckpoint(db: Database, checkpoint: LogCheckpoint): Promise<void> {
+async function saveCheckpoint(
+  db: Database,
+  checkpoint: LogCheckpoint,
+  head: SignedTreeHead,
+): Promise<void> {
+  // The head is kept alongside the checkpoint because gossip has to send a
+  // *signed* head, not just the root we derived from it — a contact has no
+  // reason to believe an unsigned assertion about what we saw.
   await db.setMeta(
     CHECKPOINT_META_KEY,
     JSON.stringify({
       size: checkpoint.size,
       rootHash: toBase64(checkpoint.rootHash),
       logKey: toBase64(checkpoint.logKey),
+      head: serializeTreeHead(head),
     }),
   );
 }

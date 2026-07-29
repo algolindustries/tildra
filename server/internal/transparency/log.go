@@ -201,6 +201,19 @@ func (l *Log) Lookup(ctx context.Context, handle string, since int64) (*Entry, [
 	return entry, inclusion, consistency, head, nil
 }
 
+// Consistency proves that a tree of size first is a prefix of one of size
+// second, for any two sizes the log has passed through.
+func (l *Log) Consistency(first, second int) ([][]byte, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return ConsistencyProof(l.hashes, first, second)
+}
+
+// Entries returns a range of the log for auditors.
+func (l *Log) Entries(ctx context.Context, from, to int64) ([]*Entry, error) {
+	return l.storage.Entries(ctx, from, to)
+}
+
 // Size reports the number of entries currently in the tree.
 func (l *Log) Size() int64 {
 	l.mu.RLock()

@@ -39,12 +39,16 @@ server that swaps a key must either publish that swap where anyone can see it,
 or fork the log — which fails consistency as soon as the two views meet. See
 `docs/PROTOCOL.md` §7.1.
 
-**What is still missing**: split-view detection needs clients to gossip tree
-heads with each other or with independent auditors. Without that, a server
-willing to maintain a permanent, consistent fork aimed at one specific person
-is not caught by the log alone — only by that person comparing safety numbers.
-That is the remaining work, and until it lands the log raises the cost of an
-attack rather than closing it.
+Clients also **gossip**: a device attaches a tree head it has verified to the
+messages it already sends, and the recipient checks that head and its own are
+on the same log. A server running a split view is then caught as soon as two
+of its targets talk to each other. See `docs/PROTOCOL.md` §7.2.
+
+**What is still missing**: gossip only helps between people who message each
+other, and Tildra ships no independent auditors watching the log continuously.
+A target who talks to nobody outside the attacker's chosen set is still
+protected only by comparing safety numbers. The mechanism bounds how long an
+attack can go unnoticed; it does not make one impossible.
 
 ### A2 — A network observer (ISP, coffee-shop Wi-Fi, national firewall)
 
@@ -129,11 +133,11 @@ isn't there:
   or cover traffic; see `docs/PROTOCOL.md` §5.1 for why the simpler fixes do
   not work.
 
-- **A targeted split view of the transparency log.** The log catches a server
-  that rewrites history or that substitutes a key for everyone. It does not yet
-  catch one that maintains a separate, internally consistent log for a single
-  target, because clients do not gossip tree heads. Verify safety numbers with
-  people who matter to you.
+- **A split view aimed at someone who gossips with nobody.** Gossip catches a
+  forked log the moment two targets exchange messages, but a person whose
+  contacts are all inside the attacker's chosen set has nobody to compare with.
+  Independent auditors would close this; Tildra does not run any yet. Verify
+  safety numbers with people who matter to you.
 - **Malicious client builds.** Reproducible builds are a project goal, tracked in
   CI, not yet achieved. Until then, "open source" means auditable source, not
   verified binaries.

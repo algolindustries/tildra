@@ -101,7 +101,8 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 | Voice messages with waveforms | ✅ |
 | Voice and video calls | ⬜ not yet |
 | Key transparency for the handle directory | ✅ log, proofs verified by the client |
-| Gossip / auditors for split-view detection | ⬜ not yet |
+| Gossip between contacts for split-view detection | ✅ |
+| Independent log auditors | ⬜ not yet |
 | Independent security audit | ⬜ **not yet** |
 
 ## Repository layout

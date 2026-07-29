@@ -23,6 +23,12 @@ export enum ContentType {
   Profile = 3,
   /** A file: caption plus the reference needed to fetch and decrypt it. */
   Attachment = 4,
+  /**
+   * A tree head this device has verified, passed to a contact so the two can
+   * check they are being shown the same log. Costs one small message and is
+   * the only thing that catches a server running a split view.
+   */
+  TransparencyGossip = 5,
 }
 
 export interface Content {
@@ -93,6 +99,8 @@ export function decodeContent(data: Uint8Array): Content {
       // The caption rides in `text` so a client that renders the message has
       // something to show even before the blob is fetched.
       return { type, text: groupId, payload };
+    case ContentType.TransparencyGossip:
+      return { type, payload };
     default:
       // A newer client sending a type we do not understand must not be
       // rendered as anything. Refusing is the only safe reading.
@@ -121,6 +129,10 @@ export function rotationContent(groupId: string): Content {
  */
 export function attachmentContent(reference: Uint8Array, caption: string): Content {
   return { type: ContentType.Attachment, groupId: caption, payload: reference };
+}
+
+export function gossipContent(treeHead: Uint8Array): Content {
+  return { type: ContentType.TransparencyGossip, payload: treeHead };
 }
 
 export function profileContent(profile: Profile): Content {

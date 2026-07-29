@@ -18,7 +18,11 @@ import { generateIdentity, generatePreKeys } from '../identity';
 import { equal, randomBytes, toBase64 } from '../primitives';
 import {
   LogCheckpoint,
+  SplitViewError,
   TransparencyError,
+  crossCheckTreeHead,
+  deserializeTreeHead,
+  serializeTreeHead,
   encodeEntry,
   hashLeaf,
   verifyConsistency,
@@ -42,6 +46,8 @@ function goAvailable(): boolean {
 
 const describeIntegration = goAvailable() ? describe : describe.skip;
 let server: ChildProcess | null = null;
+/** Shared with the fork server in the split-view test. */
+const logKeySeed = toBase64(randomBytes(32));
 
 async function waitForHealth(timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -56,6 +62,25 @@ async function waitForHealth(timeoutMs = 30_000): Promise<void> {
   throw new Error('server did not start');
 }
 
+/** Ask the OS for a port nobody is using, then release it. */
+async function freePort(): Promise<number> {
+  const net = await import('node:net');
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.on('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address();
+      if (typeof address === 'string' || address === null) {
+        probe.close();
+        reject(new Error('could not determine a free port'));
+        return;
+      }
+      const { port } = address;
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
 /** Register a device and claim a handle through the real server. */
 async function claimHandle(handle: string) {
   const identity = generateIdentity();
@@ -67,28 +92,32 @@ async function claimHandle(handle: string) {
   return { identity, client, accountId, deviceId };
 }
 
+// One server for the whole file. Putting this inside a describe block leaves
+// every later block without one, which surfaces as an opaque "fetch failed"
+// rather than as a missing server — a mistake worth making only once.
+beforeAll(async () => {
+  if (!goAvailable()) return;
+  const binary = join(mkdtempSync(join(tmpdir(), 'tildra-kt-')), 'tildrad');
+  execFileSync('go', ['build', '-o', binary, './cmd/tildrad'], {
+    cwd: SERVER_DIR,
+    stdio: 'inherit',
+  });
+  server = spawn(binary, [], {
+    env: {
+      ...process.env,
+      TILDRA_ADDR: `:${PORT}`,
+      TILDRA_DATABASE_URL: '',
+      // A throwaway log key. Real deployments hold this outside the database.
+      TILDRA_TRANSPARENCY_KEY: logKeySeed,
+    },
+    stdio: 'ignore',
+  });
+  await waitForHealth();
+}, 120_000);
+
+afterAll(() => server?.kill('SIGTERM'));
+
 describeIntegration('key transparency against the Go log', () => {
-  beforeAll(async () => {
-    const binary = join(mkdtempSync(join(tmpdir(), 'tildra-kt-')), 'tildrad');
-    execFileSync('go', ['build', '-o', binary, './cmd/tildrad'], {
-      cwd: SERVER_DIR,
-      stdio: 'inherit',
-    });
-    server = spawn(binary, [], {
-      env: {
-        ...process.env,
-        TILDRA_ADDR: `:${PORT}`,
-        TILDRA_DATABASE_URL: '',
-        // A throwaway log key. Real deployments hold this outside the database.
-        TILDRA_TRANSPARENCY_KEY: toBase64(randomBytes(32)),
-      },
-      stdio: 'ignore',
-    });
-    await waitForHealth();
-  }, 120_000);
-
-  afterAll(() => server?.kill('SIGTERM'));
-
   it('verifies an inclusion proof the server produced', async () => {
     const alice = await claimHandle('alice');
     const resolved = await alice.client.resolveHandle('alice');
@@ -233,6 +262,201 @@ describeIntegration('key transparency against the Go log', () => {
     };
     expect(() => verifyHandleProof(shrunk, 'shrink', checkpoint)).toThrow();
   }, 60_000);
+});
+
+describeIntegration('gossip cross-checks', () => {
+  it('accepts two heads from the same honest log', async () => {
+    // Two clients, two independently verified heads, taken at different sizes
+    // as the log grows. Both must be on the same log.
+    const first = await claimHandle('gossipa');
+    const a = verifyHandleProof(
+      (await first.client.resolveHandle('gossipa')).proof!,
+      'gossipa',
+      null,
+    );
+
+    const second = await claimHandle('gossipb');
+    const b = verifyHandleProof(
+      (await second.client.resolveHandle('gossipb')).proof!,
+      'gossipb',
+      null,
+    );
+
+    expect(b.size).toBeGreaterThan(a.size);
+
+    const anonymous = new TildraClient({ baseUrl: BASE_URL });
+    const headB = await anonymous.transparencyHead();
+
+    await expect(
+      crossCheckTreeHead(a, { ...headB, size: b.size, rootHash: b.rootHash }, (f, sec) =>
+        anonymous.transparencyConsistency(f, sec),
+      ),
+    ).resolves.toBeUndefined();
+  }, 90_000);
+
+  it('detects two heads that cannot both be true', async () => {
+    // The split view: same size, different roots. No proof can reconcile
+    // those, so this is caught without even asking the server.
+    const account = await claimHandle('gossipfork');
+    const real = verifyHandleProof(
+      (await account.client.resolveHandle('gossipfork')).proof!,
+      'gossipfork',
+      null,
+    );
+
+    const anonymous = new TildraClient({ baseUrl: BASE_URL });
+    const head = await anonymous.transparencyHead();
+    const forged: LogCheckpoint = { ...real, rootHash: randomBytes(32) };
+
+    await expect(
+      crossCheckTreeHead(forged, { ...head, size: forged.size }, (f, sec) =>
+        anonymous.transparencyConsistency(f, sec),
+      ),
+    ).rejects.toBeInstanceOf(SplitViewError);
+  }, 90_000);
+
+  it('detects a genuine fork: two valid heads, one log key, different histories', async () => {
+    // The real attack, built properly. A second server runs with the *same*
+    // log key but a separate store, so both produce validly signed heads that
+    // describe different logs — which is exactly what a split view is.
+    //
+    // An invalidly signed head would not do: that is a contact sending
+    // garbage, not the operator attacking someone, and treating the two the
+    // same would let anyone trigger a false alarm on a contact's device.
+    // A free port chosen at run time. A fixed one races with the previous
+    // suite run's fork server, which is still releasing it — the resulting
+    // failure looks like a flaky test and is really a port conflict.
+    const forkPort = await freePort();
+    const forkUrl = `http://127.0.0.1:${forkPort}`;
+    const binary = join(mkdtempSync(join(tmpdir(), 'tildra-fork-')), 'tildrad');
+    execFileSync('go', ['build', '-o', binary, './cmd/tildrad'], {
+      cwd: SERVER_DIR,
+      stdio: 'inherit',
+    });
+    const fork = spawn(binary, [], {
+      env: {
+        ...process.env,
+        TILDRA_ADDR: `:${forkPort}`,
+        TILDRA_DATABASE_URL: '',
+        TILDRA_TRANSPARENCY_KEY: logKeySeed,
+      },
+      stdio: 'ignore',
+    });
+
+    try {
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        try {
+          if ((await fetch(`${forkUrl}/healthz`)).ok) break;
+        } catch {
+          /* not up yet */
+        }
+        if (Date.now() > deadline) throw new Error('fork server did not start');
+        await new Promise((r) => setTimeout(r, 250));
+      }
+
+      // Populate the fork with different entries.
+      for (const handle of ['forkonly1', 'forkonly2', 'forkonly3']) {
+        const identity = generateIdentity();
+        const client = new TildraClient({ baseUrl: forkUrl });
+        const { accountId, deviceId } = await client.register(identity, 'Fork');
+        await client.login(identity, accountId, deviceId);
+        await client.publishKeys(generatePreKeys(identity, { count: 1 }).upload);
+        await client.claimHandle(handle);
+      }
+
+      const honest = await claimHandle('honestside');
+      const ours = verifyHandleProof(
+        (await honest.client.resolveHandle('honestside')).proof!,
+        'honestside',
+        null,
+      );
+
+      const forkClient = new TildraClient({ baseUrl: forkUrl });
+      const theirs = await forkClient.transparencyHead();
+
+      // Both heads verify on their own — same log key, valid signatures.
+      expect(() => verifyTreeHead(theirs, ours.logKey)).not.toThrow();
+
+      // And yet they cannot both be true. Whichever server is asked to bridge
+      // them fails, because neither log contains the other.
+      await expect(
+        crossCheckTreeHead(ours, theirs, (first, second) =>
+          honest.client.transparencyConsistency(first, second),
+        ),
+      ).rejects.toBeInstanceOf(SplitViewError);
+    } finally {
+      fork.kill('SIGTERM');
+    }
+  }, 180_000);
+
+  it('does not cry split view over a badly signed head', async () => {
+    // A contact sending a head that does not verify is a broken or malicious
+    // *contact*, not evidence about the operator. Conflating the two would
+    // make the alarm trivially forgeable and therefore worthless.
+    const account = await claimHandle('badsig');
+    const ours = verifyHandleProof(
+      (await account.client.resolveHandle('badsig')).proof!,
+      'badsig',
+      null,
+    );
+    const anonymous = new TildraClient({ baseUrl: BASE_URL });
+    const head = await anonymous.transparencyHead();
+
+    const rejected = crossCheckTreeHead(ours, { ...head, rootHash: randomBytes(32) }, (f, sec) =>
+      anonymous.transparencyConsistency(f, sec),
+    );
+    await expect(rejected).rejects.toBeInstanceOf(TransparencyError);
+    await expect(rejected).rejects.not.toBeInstanceOf(SplitViewError);
+  }, 90_000);
+
+  it('treats a server that cannot link two valid heads as a split view', async () => {
+    const account = await claimHandle('gossipnolink');
+    const ours = verifyHandleProof(
+      (await account.client.resolveHandle('gossipnolink')).proof!,
+      'gossipnolink',
+      null,
+    );
+    // Grow the log so the two heads differ in size; identical heads are
+    // reconciled without the server being asked anything.
+    await claimHandle('gossipnolink2');
+    const anonymous = new TildraClient({ baseUrl: BASE_URL });
+    const head = await anonymous.transparencyHead();
+    expect(head.size).toBeGreaterThan(ours.size);
+
+    // A validly signed head the server then refuses to link to ours.
+    await expect(
+      crossCheckTreeHead(ours, head, async () => {
+        throw new Error('no such tree sizes');
+      }),
+    ).rejects.toBeInstanceOf(SplitViewError);
+  }, 90_000);
+
+  it('round-trips a gossiped tree head and rejects a malformed one', async () => {
+    await claimHandle('gossipwire');
+    const anonymous = new TildraClient({ baseUrl: BASE_URL });
+    const head = await anonymous.transparencyHead();
+
+    const revived = deserializeTreeHead(JSON.parse(JSON.stringify(serializeTreeHead(head))));
+    expect(revived.size).toBe(head.size);
+    expect(equal(revived.rootHash, head.rootHash)).toBe(true);
+    expect(() => verifyTreeHead(revived)).not.toThrow();
+
+    const wire = serializeTreeHead(head);
+    expect(() => deserializeTreeHead({ ...wire, size: -1 })).toThrow(/invalid size/);
+    expect(() => deserializeTreeHead({ ...wire, rootHash: 'AAAA' })).toThrow(/malformed/);
+  }, 90_000);
+
+  it('lets an auditor read the log', async () => {
+    // A log nobody can enumerate is a log nobody can audit.
+    await claimHandle('auditme');
+    const response = await fetch(`${BASE_URL}/v1/transparency/entries?from=0&to=100`);
+    expect(response.ok).toBe(true);
+
+    const body = (await response.json()) as { entries: { handle: string }[] };
+    expect(body.entries.length).toBeGreaterThan(0);
+    expect(body.entries.map((e) => e.handle)).toContain('auditme');
+  }, 90_000);
 });
 
 describe('consistency verification', () => {
