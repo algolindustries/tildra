@@ -102,7 +102,7 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 | Voice and video calls | ⬜ not yet |
 | Key transparency for the handle directory | ✅ log, proofs verified by the client |
 | Gossip between contacts for split-view detection | ✅ |
-| Independent log auditors | ⬜ not yet |
+| Independent log auditor (`tildra-auditor`) | ✅ tool shipped, no public instance |
 | Independent security audit | ⬜ **not yet** |
 
 ## Repository layout
@@ -110,6 +110,7 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 ```
 tildra/
 ├── server/     Go — API, key directory, WebSocket gateway, sealed-sender relay
+│               plus tildra-auditor, a standalone transparency log watcher
 ├── mobile/     React Native (Expo) + TypeScript — iOS & Android client
 ├── docs/       Protocol spec, threat model, self-hosting guide
 └── .github/    CI

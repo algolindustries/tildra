@@ -345,12 +345,40 @@ Anyone can also read the log directly:
 GET /v1/transparency/entries?from=<index>&to=<index>
 ```
 
-**What is still missing.** Gossip only helps between people who message each
-other. A target who talks to nobody outside the attacker's chosen set is still
-only protected by comparing safety numbers, and Tildra ships no independent
-auditors that watch the log continuously. The mechanism raises the cost of the
-attack and bounds how long it can go unnoticed; it does not make it
-impossible.
+### 7.3 Auditors
+
+Gossip only helps between people who message each other. An auditor has no
+account and no stake in any conversation, so it notices a fork whether or not
+the people inside it ever talk.
+
+`tildra-auditor` reads the whole log and checks three things a client cannot:
+
+1. Every tree head is consistent with every head it has previously seen.
+2. The entries the server actually serves hash to the roots it signs. A
+   consistency proof says the tree grew; only re-deriving the root says the
+   tree is made of the entries anyone can read.
+3. Handles that were rebound to a different key — reported, not judged, because
+   a reinstall and a substitution look identical from outside.
+
+```
+tildra-auditor -server https://api.tildra.chat -state ./auditor.json -watch 5m
+```
+
+The checkpoint file is meant to be **published**. An auditor keeping its view
+private proves only that the log it personally saw was internally consistent;
+two auditors comparing published checkpoints is what establishes they were
+shown the same log:
+
+```
+tildra-auditor -server https://api.tildra.chat -compare ./other-auditor.json
+```
+
+An auditor never advances its checkpoint past a critical finding. Recording a
+head it does not believe would make the next run compare against a lie.
+
+**What is still missing.** Nobody is obliged to run an auditor, and Tildra
+operates none as a public service. The mechanism means a fork *can* be caught
+by any third party who looks; it does not guarantee that someone is looking.
 
 The log key must be held outside the database. A signing key sitting next to
 the log it signs can be used to rewrite the whole thing.

@@ -10,6 +10,7 @@ dev:
 
 build:
 	go build -trimpath -ldflags="-s -w" -o $(BIN) ./cmd/tildrad
+	go build -trimpath -ldflags="-s -w" -o bin/tildra-auditor ./cmd/tildra-auditor
 
 test:
 	go test -race -count=1 ./...

@@ -62,6 +62,23 @@ func sthBytes(size int64, root []byte, at time.Time) []byte {
 	return binary.BigEndian.AppendUint64(out, uint64(at.UTC().Unix()))
 }
 
+// SignTreeHead builds a signed tree head over a given size, root and time.
+//
+// Exported so the log is not the only thing that can produce one: an auditor's
+// test needs to sign heads the honest log never would, and a mirror or witness
+// signing its own view needs the same encoding. Keeping the encoding in one
+// place is what stops a second implementation drifting.
+func SignTreeHead(key ed25519.PrivateKey, size int64, root []byte, at time.Time) SignedTreeHead {
+	at = at.UTC().Truncate(time.Second)
+	return SignedTreeHead{
+		Size:      size,
+		RootHash:  root,
+		Timestamp: at,
+		Signature: ed25519.Sign(key, sthBytes(size, root, at)),
+		LogKey:    key.Public().(ed25519.PublicKey),
+	}
+}
+
 // Verify checks a tree head's signature against the log's public key.
 func (s SignedTreeHead) Verify(logKey ed25519.PublicKey) error {
 	if len(logKey) != ed25519.PublicKeySize {
@@ -163,14 +180,7 @@ func (l *Log) Head() SignedTreeHead {
 	size := int64(len(l.hashes))
 	l.mu.RUnlock()
 
-	at := time.Now().UTC().Truncate(time.Second)
-	return SignedTreeHead{
-		Size:      size,
-		RootHash:  root,
-		Timestamp: at,
-		Signature: ed25519.Sign(l.signKey, sthBytes(size, root, at)),
-		LogKey:    l.PublicKey(),
-	}
+	return SignTreeHead(l.signKey, size, root, time.Now())
 }
 
 // Lookup returns the current binding for a handle together with the proof that

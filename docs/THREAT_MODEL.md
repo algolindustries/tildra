@@ -44,11 +44,15 @@ messages it already sends, and the recipient checks that head and its own are
 on the same log. A server running a split view is then caught as soon as two
 of its targets talk to each other. See `docs/PROTOCOL.md` §7.2.
 
-**What is still missing**: gossip only helps between people who message each
-other, and Tildra ships no independent auditors watching the log continuously.
-A target who talks to nobody outside the attacker's chosen set is still
-protected only by comparing safety numbers. The mechanism bounds how long an
-attack can go unnoticed; it does not make one impossible.
+Third parties can also **audit**: `tildra-auditor` reads the whole log,
+re-derives every root from the entries the server serves, and publishes a
+checkpoint. Two auditors comparing checkpoints catch a fork without either of
+them having an account. See `docs/PROTOCOL.md` §7.3.
+
+**What is still missing**: nobody is obliged to run an auditor, and we operate
+none as a public service. A fork *can* now be caught by any third party who
+looks — that is a real change from before — but nothing guarantees someone is
+looking.
 
 ### A2 — A network observer (ISP, coffee-shop Wi-Fi, national firewall)
 
@@ -133,11 +137,11 @@ isn't there:
   or cover traffic; see `docs/PROTOCOL.md` §5.1 for why the simpler fixes do
   not work.
 
-- **A split view aimed at someone who gossips with nobody.** Gossip catches a
-  forked log the moment two targets exchange messages, but a person whose
-  contacts are all inside the attacker's chosen set has nobody to compare with.
-  Independent auditors would close this; Tildra does not run any yet. Verify
-  safety numbers with people who matter to you.
+- **A split view nobody happens to be watching.** Gossip catches a forked log
+  when two targets exchange messages, and an auditor catches it without
+  needing an account — but only if someone is actually running one. We ship the
+  tool and operate no public instance, so this is a "can be detected", not a
+  "will be". Verify safety numbers with people who matter to you.
 - **Malicious client builds.** Reproducible builds are a project goal, tracked in
   CI, not yet achieved. Until then, "open source" means auditable source, not
   verified binaries.
