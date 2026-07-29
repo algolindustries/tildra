@@ -73,8 +73,8 @@ func (s *Server) Handler() http.Handler {
 type createAccountReq struct {
 	IdentityKey []byte `json:"identityKey"` // Ed25519 public key
 	DeviceName  string `json:"deviceName"`
-	ProofTS     string `json:"proofTs"`   // RFC3339, signed
-	Proof       []byte `json:"proof"`     // Ed25519 signature
+	ProofTS     string `json:"proofTs"` // RFC3339, signed
+	Proof       []byte `json:"proof"`   // Ed25519 signature
 }
 
 type createAccountResp struct {
