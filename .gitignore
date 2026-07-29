@@ -1,0 +1,34 @@
+# Secrets — never commit these
+.env
+*.pem
+*.key
+*.p12
+*.keystore
+*.jks
+
+# Go
+server/bin/
+*.test
+*.out
+
+# Node / Expo / React Native
+node_modules/
+.expo/
+dist/
+web-build/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+
+# Native build output
+mobile/ios/Pods/
+mobile/ios/build/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
