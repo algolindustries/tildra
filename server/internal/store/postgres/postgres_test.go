@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,8 +23,15 @@ import (
 func TestConformance(t *testing.T) {
 	url := os.Getenv("TILDRA_TEST_DATABASE_URL")
 	if url == "" {
+		// Skipping locally is a convenience. Skipping in CI would mean the two
+		// store implementations are free to drift in the one environment
+		// that is supposed to catch it, so there it is a failure.
+		if os.Getenv("CI") != "" {
+			t.Fatal("TILDRA_TEST_DATABASE_URL must be set in CI: the Postgres conformance suite must not silently skip")
+		}
 		t.Skip("set TILDRA_TEST_DATABASE_URL to run the Postgres conformance suite")
 	}
+	t.Logf("running the conformance suite against %s", redact(url))
 
 	counter := 0
 	storetest.Run(t, func(t *testing.T) store.Store {
@@ -76,6 +84,17 @@ func openWithSchema(t *testing.T, url, schema string) store.Store {
 	})
 
 	return s
+}
+
+// redact strips the password before a connection string reaches a test log,
+// which CI stores and displays publicly.
+func redact(url string) string {
+	at := strings.LastIndex(url, "@")
+	scheme := strings.Index(url, "://")
+	if at < 0 || scheme < 0 || at < scheme {
+		return url
+	}
+	return url[:scheme+3] + "***" + url[at:]
 }
 
 func containsQuery(url string) bool {
