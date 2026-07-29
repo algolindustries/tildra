@@ -107,6 +107,9 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 | Independent log auditor (`tildra-auditor`) | ✅ tool shipped, no public instance |
 | Independent security audit | ⬜ **not yet** |
 
+Current state, in detail: [`docs/STATUS.md`](docs/STATUS.md) — what works, what
+does not, and what needs a person rather than more code.
+
 ## Repository layout
 
 ```
@@ -114,7 +117,7 @@ tildra/
 ├── server/     Go — API, key directory, WebSocket gateway, sealed-sender relay
 │               plus tildra-auditor, a standalone transparency log watcher
 ├── mobile/     React Native (Expo) + TypeScript — iOS & Android client
-├── docs/       Protocol spec, threat model, self-hosting guide
+├── docs/       Protocol spec, threat model, current status
 └── .github/    CI
 ```
 
