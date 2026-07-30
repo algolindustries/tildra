@@ -22,7 +22,8 @@ tested by running the real Go server and pushing real traffic through it.
 | Push notifications with a content-free payload | done |
 | Key transparency: Merkle log, inclusion + consistency proofs verified by the client | done |
 | Gossip between contacts for split-view detection | done |
-| `tildra-auditor`: standalone log watcher, publishable checkpoints | done |
+| `tildra-auditor`: standalone log watcher, signed publishable checkpoints | done |
+| Clients verify and cross-check pinned auditors' signed checkpoints, distinguishing a split view from a bad publisher from an unreachable one | done |
 | Device linking, both halves: the new device shows a QR, the signed-in device scans it, six-digit pairing code compared on both screens | done |
 | QR scanning and display for device links and safety numbers, with a hardened parser for what comes off the camera | done |
 | Call signalling: SDP hardening, DTLS fingerprint bound to the identity key, ICE address policy, call state machine | done |
@@ -32,7 +33,7 @@ tested by running the real Go server and pushing real traffic through it.
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 375 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 385 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -84,7 +85,11 @@ knowing before trusting a UI change.
   the repo. The crypto uses standard primitives and is heavily tested, but it has
   not been reviewed by anyone outside this work, and nothing should carry real
   traffic until it has.
-- **A public auditor instance.** The tool ships; nobody operates one.
+- **A public auditor instance.** The tool ships, it signs what it publishes,
+  and clients can now verify and cross-check a pinned auditor — that consumer
+  did not exist before and is most of why running one had no obvious point.
+  What is still missing is somebody actually operating one, and therefore an
+  auditor for a client to pin. No client ships with a pinned auditor today.
 - **Reproducible builds for the app's native shell.** The server, the auditor
   and the app's JavaScript bundle — Hermes bytecode included — all reproduce,
   checked in CI. The `.ipa` and `.aab` do not: that is Xcode and Gradle with

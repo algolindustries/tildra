@@ -100,6 +100,11 @@ import {
   deliveryMailbox,
   deriveMailboxSecret,
 } from '../crypto/mailbox';
+import {
+  PinnedAuditor,
+  crossCheckAuditor,
+  verifyAuditorCheckpoint,
+} from '../crypto/auditor';
 import { safetyNumber, safetyQrPayload, verifyQrPayload } from '../crypto/safety';
 import {
   ONE_TIME_PREKEY_TARGET,
@@ -258,12 +263,17 @@ function initFingerprint(init: SessionInit): string {
 export interface ManagerEvents {
   onMessage?: (message: Message, conversation: Conversation) => void;
   /**
-   * Two contacts were shown different transparency logs. This is the alarm
-   * that means the server is lying to somebody, and it is deliberately a
-   * separate event from onError — it is not a transient failure and must not
-   * be rendered as one.
+   * This device and somebody else were shown different transparency logs.
+   * This is the alarm that means the server is lying to somebody, and it is
+   * deliberately a separate event from onError — it is not a transient failure
+   * and must not be rendered as one.
+   *
+   * `source` is the contact's account id when it came from gossip, or the
+   * auditor's name when it came from `checkAuditors`. The UI says which,
+   * because "your contact and you disagree" and "an independent watcher and
+   * you disagree" are different amounts of evidence.
    */
-  onSplitView?: (accountId: string, error: SplitViewError) => void;
+  onSplitView?: (source: string, error: SplitViewError) => void;
   onGroupMessage?: (groupId: string, message: Message) => void;
   onGroupChange?: (groupId: string) => void;
   onProfileChange?: (accountId: string, profile: Profile) => void;
@@ -948,6 +958,63 @@ export class SessionManager {
       },
       head: parsed.head ? deserializeTreeHead(parsed.head) : undefined,
     };
+  }
+
+  /**
+   * Ask the auditors this device listens to whether they saw the same log.
+   *
+   * Gossip needs a contact who was also targeted and who is talking to you.
+   * An auditor needs neither: it watches continuously and has no account. The
+   * tool has shipped for a while with nothing consuming its output, which is
+   * most of why running one had no obvious point.
+   *
+   * Returns how many auditors were successfully checked. A network failure is
+   * not a split view and is reported as an error, not an alarm — an alarm the
+   * server can trigger by dropping a request is an alarm people learn to
+   * ignore.
+   */
+  async checkAuditors(auditors: PinnedAuditor[]): Promise<number> {
+    const stored = await this.loadCheckpoint();
+    if (!stored || auditors.length === 0) return 0;
+
+    let checked = 0;
+    for (const auditor of auditors) {
+      const name = auditor.name ?? auditor.url;
+      let body: string;
+      try {
+        const response = await fetch(auditor.url);
+        if (!response.ok) throw new Error(`${response.status}`);
+        body = await response.text();
+      } catch (err) {
+        this.events.onError?.(
+          new Error(`could not reach ${name}: ${err instanceof Error ? err.message : String(err)}`),
+        );
+        continue;
+      }
+
+      try {
+        const checkpoint = verifyAuditorCheckpoint(body, auditor.publicKey, this.now());
+        await crossCheckAuditor(
+          stored.checkpoint,
+          checkpoint,
+          (first, second) => this.client.transparencyConsistency(first, second),
+          name,
+        );
+        checked += 1;
+      } catch (err) {
+        if (err instanceof SplitViewError) {
+          // Same alarm as gossip, and for the same reason: two views that
+          // cannot both be true means somebody is being lied to.
+          this.events.onSplitView?.(name, err);
+          continue;
+        }
+        // A checkpoint that does not verify is a broken or hostile publisher,
+        // not evidence about the operator — exactly the distinction the gossip
+        // path already makes.
+        this.events.onError?.(err instanceof Error ? err : new Error(String(err)));
+      }
+    }
+    return checked;
   }
 
   // -------------------------------------------------------------------------

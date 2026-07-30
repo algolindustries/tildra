@@ -104,7 +104,7 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 | Voice and video calls | ⬜ signalling end to end, fingerprint bound to identity; **no media yet** |
 | Key transparency for the handle directory | ✅ log, proofs verified by the client |
 | Gossip between contacts for split-view detection | ✅ |
-| Independent log auditor (`tildra-auditor`) | ✅ tool shipped, no public instance |
+| Independent log auditor (`tildra-auditor`) | ✅ signs checkpoints, clients verify pinned auditors; no public instance |
 | Reproducible builds | ⚠️ server, auditor and the app's JS bundle (Hermes included), checked in CI; native shell not yet |
 | Independent security audit | ⬜ **not yet** |
 

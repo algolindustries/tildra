@@ -8,14 +8,14 @@
  */
 
 import { execFileSync, spawn, ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { TildraClient } from '../../api/client';
 import { generateIdentity, generatePreKeys } from '../identity';
-import { equal, randomBytes, toBase64 } from '../primitives';
+import { equal, fromBase64, randomBytes, toBase64 } from '../primitives';
 import {
   LogCheckpoint,
   SplitViewError,
@@ -30,6 +30,7 @@ import {
   verifyInclusion,
   verifyTreeHead,
 } from '../transparency';
+import { AuditorError, crossCheckAuditor, verifyAuditorCheckpoint } from '../auditor';
 
 const SERVER_DIR = join(__dirname, '../../../../server');
 const PORT = 8793;
@@ -475,4 +476,223 @@ describe('consistency verification', () => {
       /requires a consistency path/,
     );
   });
+});
+
+// ---------------------------------------------------------------------------
+// Auditor checkpoints
+// ---------------------------------------------------------------------------
+
+/** Build tildra-auditor once and reuse it. */
+let auditorBinary: string | null = null;
+function buildAuditor(): string {
+  if (auditorBinary) return auditorBinary;
+  const binary = join(mkdtempSync(join(tmpdir(), 'tildra-aud-')), 'tildra-auditor');
+  execFileSync('go', ['build', '-o', binary, './cmd/tildra-auditor'], {
+    cwd: SERVER_DIR,
+    stdio: 'inherit',
+  });
+  auditorBinary = binary;
+  return binary;
+}
+
+/** Generate an auditor identity the way an operator would. */
+function generateAuditorKey(): { seed: string; publicKey: Uint8Array } {
+  const out = execFileSync(buildAuditor(), ['-genkey'], { encoding: 'utf8' });
+  const seed = /^seed:\s*(\S+)$/m.exec(out)?.[1];
+  const publicKey = /^publicKey:\s*(\S+)$/m.exec(out)?.[1];
+  if (!seed || !publicKey) throw new Error(`unexpected -genkey output:\n${out}`);
+  return { seed, publicKey: fromBase64(publicKey) };
+}
+
+/** Run the real auditor against the real server and publish a signed checkpoint. */
+function runAuditor(dir: string, seed: string): string {
+  const keyPath = join(dir, 'auditor.key');
+  const statePath = join(dir, 'state.json');
+  const publishPath = join(dir, 'checkpoint.json');
+  writeFileSync(keyPath, seed);
+
+  execFileSync(
+    buildAuditor(),
+    ['-server', BASE_URL, '-state', statePath, '-key', keyPath, '-publish', publishPath],
+    { stdio: 'inherit' },
+  );
+  return readFileSync(publishPath, 'utf8');
+}
+
+describeIntegration('auditor checkpoints', () => {
+  it('the client verifies what the real auditor signed', async () => {
+    // Cross-language, and end to end: a Go binary reads the log this server
+    // served, signs what it saw, and TypeScript checks the signature. Two
+    // implementations of the same framing kept honest by making them agree
+    // rather than by reading both files.
+    await claimHandle('auditone');
+    const { seed, publicKey } = generateAuditorKey();
+    const dir = mkdtempSync(join(tmpdir(), 'tildra-aud-run-'));
+
+    const published = runAuditor(dir, seed);
+    const checkpoint = verifyAuditorCheckpoint(published, publicKey);
+
+    expect(checkpoint.size).toBeGreaterThan(0);
+    expect(checkpoint.rootHash).toHaveLength(32);
+    expect(equal(checkpoint.auditorKey, publicKey)).toBe(true);
+  }, 120_000);
+
+  it('refuses a checkpoint from an auditor the client did not pin', async () => {
+    // The key inside the document is a label. Anyone can generate a key, sign
+    // a checkpoint, and publish both.
+    await claimHandle('audittwo');
+    const { seed } = generateAuditorKey();
+    const other = generateAuditorKey();
+    const dir = mkdtempSync(join(tmpdir(), 'tildra-aud-run-'));
+
+    const published = runAuditor(dir, seed);
+    expect(() => verifyAuditorCheckpoint(published, other.publicKey)).toThrow(AuditorError);
+  }, 120_000);
+
+  it('refuses a checkpoint whose root was edited after signing', async () => {
+    await claimHandle('auditthree');
+    const { seed, publicKey } = generateAuditorKey();
+    const dir = mkdtempSync(join(tmpdir(), 'tildra-aud-run-'));
+
+    const parsed = JSON.parse(runAuditor(dir, seed));
+    const root = fromBase64(parsed.rootHash);
+    root[0] ^= 0x01;
+    parsed.rootHash = toBase64(root);
+
+    expect(() => verifyAuditorCheckpoint(JSON.stringify(parsed), publicKey)).toThrow(
+      /signature does not verify/,
+    );
+  }, 120_000);
+
+  it('refuses a checkpoint whose size was edited after signing', async () => {
+    await claimHandle('auditfour');
+    const { seed, publicKey } = generateAuditorKey();
+    const dir = mkdtempSync(join(tmpdir(), 'tildra-aud-run-'));
+
+    const parsed = JSON.parse(runAuditor(dir, seed));
+    parsed.size += 1;
+
+    expect(() => verifyAuditorCheckpoint(JSON.stringify(parsed), publicKey)).toThrow(
+      /signature does not verify/,
+    );
+  }, 120_000);
+
+  it('agrees with a client that was shown the same log', async () => {
+    const account = await claimHandle('auditfive');
+    const ours = verifyHandleProof(
+      (await account.client.resolveHandle('auditfive')).proof!,
+      'auditfive',
+      null,
+    );
+
+    const { seed, publicKey } = generateAuditorKey();
+    const dir = mkdtempSync(join(tmpdir(), 'tildra-aud-run-'));
+    const checkpoint = verifyAuditorCheckpoint(runAuditor(dir, seed), publicKey);
+
+    // The auditor may be ahead or behind — other tests in this file are still
+    // claiming handles — so this is a consistency check, not an equality one.
+    await expect(
+      crossCheckAuditor(ours, checkpoint, (first, second) =>
+        account.client.transparencyConsistency(first, second),
+      ),
+    ).resolves.toBeUndefined();
+  }, 120_000);
+
+  it('raises a split view when the auditor watched a different log', async () => {
+    // The case the auditor exists for, and the one gossip cannot reach: the
+    // user has no contact who was targeted, but a third party watched all
+    // along.
+    const account = await claimHandle('auditsix');
+    const ours = verifyHandleProof(
+      (await account.client.resolveHandle('auditsix')).proof!,
+      'auditsix',
+      null,
+    );
+
+    const forkPort = await freePort();
+    const forkUrl = `http://127.0.0.1:${forkPort}`;
+    const binary = join(mkdtempSync(join(tmpdir(), 'tildra-aud-fork-')), 'tildrad');
+    execFileSync('go', ['build', '-o', binary, './cmd/tildrad'], {
+      cwd: SERVER_DIR,
+      stdio: 'inherit',
+    });
+    // Same log key, separate store: both logs are validly signed and describe
+    // different histories, which is what a split view is.
+    const fork = spawn(binary, [], {
+      env: {
+        ...process.env,
+        TILDRA_ADDR: `:${forkPort}`,
+        TILDRA_DATABASE_URL: '',
+        TILDRA_TRANSPARENCY_KEY: logKeySeed,
+      },
+      stdio: 'ignore',
+    });
+
+    try {
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        try {
+          if ((await fetch(`${forkUrl}/healthz`)).ok) break;
+        } catch {
+          /* not up yet */
+        }
+        if (Date.now() > deadline) throw new Error('fork server did not start');
+        await new Promise((r) => setTimeout(r, 250));
+      }
+
+      for (const handle of ['auditfork1', 'auditfork2']) {
+        const identity = generateIdentity();
+        const client = new TildraClient({ baseUrl: forkUrl });
+        const { accountId, deviceId } = await client.register(identity, 'Fork');
+        await client.login(identity, accountId, deviceId);
+        await client.publishKeys(generatePreKeys(identity, { count: 1 }).upload);
+        await client.claimHandle(handle);
+      }
+
+      // An auditor that watched the fork, publishing a genuinely signed
+      // checkpoint. Nothing about it is forged; it is simply a different log.
+      const { seed, publicKey } = generateAuditorKey();
+      const dir = mkdtempSync(join(tmpdir(), 'tildra-aud-run-'));
+      const keyPath = join(dir, 'auditor.key');
+      writeFileSync(keyPath, seed);
+      execFileSync(
+        buildAuditor(),
+        [
+          '-server', forkUrl,
+          '-state', join(dir, 'state.json'),
+          '-key', keyPath,
+          '-publish', join(dir, 'checkpoint.json'),
+        ],
+        { stdio: 'inherit' },
+      );
+
+      const checkpoint = verifyAuditorCheckpoint(
+        readFileSync(join(dir, 'checkpoint.json'), 'utf8'),
+        publicKey,
+      );
+
+      // It verifies — the auditor really signed it — and it still cannot be
+      // reconciled with what this device was shown.
+      await expect(
+        crossCheckAuditor(ours, checkpoint, (first, second) =>
+          account.client.transparencyConsistency(first, second),
+        ),
+      ).rejects.toBeInstanceOf(SplitViewError);
+    } finally {
+      fork.kill('SIGTERM');
+    }
+  }, 180_000);
+
+  it('refuses to publish an unsigned checkpoint', async () => {
+    // A published document that looks like an attestation and is not one is
+    // worse than no document.
+    const dir = mkdtempSync(join(tmpdir(), 'tildra-aud-run-'));
+    expect(() =>
+      execFileSync(
+        buildAuditor(),
+        ['-server', BASE_URL, '-state', join(dir, 's.json'), '-publish', join(dir, 'c.json')],
+        { stdio: 'pipe' },
+      ),
+    ).toThrow();
+  }, 120_000);
 });

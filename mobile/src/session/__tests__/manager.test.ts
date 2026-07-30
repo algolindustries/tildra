@@ -7,17 +7,18 @@
  */
 
 import { execFileSync, spawn, ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { TildraClient } from '../../api/client';
 import { TildraSocket } from '../../api/socket';
-import { IdentityChangedError, SessionManager } from '../manager';
+import { CHECKPOINT_META_KEY, IdentityChangedError, SessionManager } from '../manager';
 import { MemorySessionStore } from './memory-store';
 import { generateIdentity, generatePreKeys } from '../../crypto/identity';
-import { equal, fromUtf8, randomBytes, toBase64, utf8 } from '../../crypto/primitives';
+import { equal, fromBase64, fromUtf8, randomBytes, toBase64, utf8 } from '../../crypto/primitives';
+import { SplitViewError, verifyHandleProof } from '../../crypto/transparency';
 import {
   CallSession,
   CallSignal,
@@ -77,6 +78,7 @@ interface Device {
   answers: { call: CallSession; sdp: string }[];
   candidates: string[];
   callChanges: CallSession[];
+  splitViews: { source: string; error: SplitViewError }[];
   member: () => { accountId: string; deviceId: string };
 }
 
@@ -97,6 +99,7 @@ async function bringUp(name: string): Promise<Device> {
   const answers: { call: CallSession; sdp: string }[] = [];
   const candidates: string[] = [];
   const callChanges: CallSession[] = [];
+  const splitViews: { source: string; error: SplitViewError }[] = [];
 
   // The socket is created first so the manager can hand it new mailboxes as
   // sessions appear — the wiring the real app uses.
@@ -119,6 +122,7 @@ async function bringUp(name: string): Promise<Device> {
       onCallAnswer: (call, sdp) => answers.push({ call, sdp }),
       onCallCandidate: (_call, candidate) => candidates.push(candidate),
       onCallChange: (call) => callChanges.push(call),
+      onSplitView: (source, error) => splitViews.push({ source, error }),
       onError: (error) => errors.push(error),
     },
   });
@@ -148,6 +152,7 @@ async function bringUp(name: string): Promise<Device> {
     answers,
     candidates,
     callChanges,
+    splitViews,
     member: () => ({ accountId, deviceId }),
   };
 }
@@ -182,6 +187,9 @@ beforeAll(async () => {
       // /v1/turn rather than against a stub that agrees with itself.
       TILDRA_TURN_SECRET: 'test-shared-secret',
       TILDRA_TURN_URLS: 'turn:turn.test:3478?transport=udp',
+      // Without a signing key the log is off and handle lookups carry no
+      // proof, so there is nothing for an auditor to audit.
+      TILDRA_TRANSPARENCY_KEY: toBase64(randomBytes(32)),
     },
     stdio: 'ignore',
   });
@@ -1307,4 +1315,155 @@ describeIntegration('relay credentials', () => {
       bare.kill('SIGTERM');
     }
   }, 90_000);
+});
+
+// ---------------------------------------------------------------------------
+// Auditors
+// ---------------------------------------------------------------------------
+
+/** Serve one file over HTTP, the way an auditor operator would publish it. */
+async function servePublished(body: string): Promise<{ url: string; close: () => void }> {
+  const http = await import('node:http');
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(body);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (typeof address === 'string' || address === null) throw new Error('no port');
+  return {
+    url: `http://127.0.0.1:${address.port}/checkpoint.json`,
+    close: () => server.close(),
+  };
+}
+
+function runRealAuditor(serverUrl: string): { published: string; publicKey: Uint8Array } {
+  const binary = join(mkdtempSync(join(tmpdir(), 'tildra-mgr-aud-')), 'tildra-auditor');
+  execFileSync('go', ['build', '-o', binary, './cmd/tildra-auditor'], {
+    cwd: SERVER_DIR,
+    stdio: 'inherit',
+  });
+
+  const out = execFileSync(binary, ['-genkey'], { encoding: 'utf8' });
+  const seed = /^seed:\s*(\S+)$/m.exec(out)![1];
+  const publicKey = fromBase64(/^publicKey:\s*(\S+)$/m.exec(out)![1]);
+
+  const dir = mkdtempSync(join(tmpdir(), 'tildra-mgr-aud-run-'));
+  const keyPath = join(dir, 'auditor.key');
+  writeFileSync(keyPath, seed);
+  execFileSync(
+    binary,
+    [
+      '-server', serverUrl,
+      '-state', join(dir, 'state.json'),
+      '-key', keyPath,
+      '-publish', join(dir, 'checkpoint.json'),
+    ],
+    { stdio: 'inherit' },
+  );
+  return { published: readFileSync(join(dir, 'checkpoint.json'), 'utf8'), publicKey };
+}
+
+describeIntegration('auditors', () => {
+  it('checks the log against a real auditor over the network', async () => {
+    // The wiring, end to end: a Go auditor reads this server's log, signs what
+    // it saw, publishes it over HTTP, and the client fetches and verifies it.
+    const alice = await bringUp('Alice');
+    await alice.client.publishKeys(generatePreKeys(alice.identity, { count: 2 }).upload);
+    await alice.client.claimHandle('auditwire');
+
+    // The client needs its own verified view before there is anything to
+    // compare against.
+    const proof = (await alice.client.resolveHandle('auditwire')).proof!;
+    const ours = verifyHandleProof(proof, 'auditwire', null);
+    await alice.store.setMeta(
+      CHECKPOINT_META_KEY,
+      JSON.stringify({
+        size: ours.size,
+        rootHash: toBase64(ours.rootHash),
+        logKey: toBase64(ours.logKey),
+      }),
+    );
+
+    const { published, publicKey } = runRealAuditor(BASE_URL);
+    const hosted = await servePublished(published);
+    try {
+      const checked = await alice.manager.checkAuditors([
+        { url: hosted.url, publicKey, name: 'test auditor' },
+      ]);
+      expect(checked).toBe(1);
+      expect(alice.errors).toEqual([]);
+      expect(alice.splitViews).toEqual([]);
+    } finally {
+      hosted.close();
+      alice.socket.close();
+    }
+  }, 180_000);
+
+  it('does not raise an alarm when an auditor is unreachable', async () => {
+    // An alarm the server can trigger by dropping one request is an alarm
+    // people learn to dismiss.
+    const alice = await bringUp('Alice');
+    await alice.client.publishKeys(generatePreKeys(alice.identity, { count: 2 }).upload);
+    await alice.client.claimHandle('auditgone');
+    const ours = verifyHandleProof(
+      (await alice.client.resolveHandle('auditgone')).proof!,
+      'auditgone',
+      null,
+    );
+    await alice.store.setMeta(
+      CHECKPOINT_META_KEY,
+      JSON.stringify({
+        size: ours.size,
+        rootHash: toBase64(ours.rootHash),
+        logKey: toBase64(ours.logKey),
+      }),
+    );
+
+    const checked = await alice.manager.checkAuditors([
+      { url: 'http://127.0.0.1:1/checkpoint.json', publicKey: randomBytes(32), name: 'offline' },
+    ]);
+
+    expect(checked).toBe(0);
+    expect(alice.splitViews).toEqual([]);
+    expect(alice.errors.map((e) => e.message).join()).toMatch(/could not reach offline/);
+
+    alice.socket.close();
+  }, 120_000);
+
+  it('treats a forged checkpoint as a broken publisher, not as an attack on the log', async () => {
+    // Anyone can serve a document. Confusing "this publisher is lying" with
+    // "the operator forked the log" would make the alarm trivially forgeable.
+    const alice = await bringUp('Alice');
+    await alice.client.publishKeys(generatePreKeys(alice.identity, { count: 2 }).upload);
+    await alice.client.claimHandle('auditforge');
+    const ours = verifyHandleProof(
+      (await alice.client.resolveHandle('auditforge')).proof!,
+      'auditforge',
+      null,
+    );
+    await alice.store.setMeta(
+      CHECKPOINT_META_KEY,
+      JSON.stringify({
+        size: ours.size,
+        rootHash: toBase64(ours.rootHash),
+        logKey: toBase64(ours.logKey),
+      }),
+    );
+
+    const { published } = runRealAuditor(BASE_URL);
+    const hosted = await servePublished(published);
+    try {
+      // Pinned to a key that did not sign this.
+      const checked = await alice.manager.checkAuditors([
+        { url: hosted.url, publicKey: randomBytes(32), name: 'impostor' },
+      ]);
+      expect(checked).toBe(0);
+      expect(alice.splitViews).toEqual([]);
+      expect(alice.errors.map((e) => e.message).join()).toMatch(/different auditor/);
+    } finally {
+      hosted.close();
+      alice.socket.close();
+    }
+  }, 180_000);
 });

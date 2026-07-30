@@ -412,9 +412,66 @@ tildra-auditor -server https://api.tildra.chat -compare ./other-auditor.json
 An auditor never advances its checkpoint past a critical finding. Recording a
 head it does not believe would make the next run compare against a lie.
 
+#### Signed checkpoints, and who reads them
+
+Two operators who know each other can exchange files by hand and compare them.
+The case that protects a *user* is different: a phone fetching a checkpoint
+over the network. There an unsigned JSON document is worth nothing, because
+whoever serves it — including the operator being audited — can write whatever
+makes the two views agree.
+
+So an auditor has its own Ed25519 key, publishes the public half once, and
+signs every checkpoint:
+
+```
+tildra-auditor -genkey                       # print a seed and a public key
+tildra-auditor -server … -key ./auditor.key -publish ./checkpoint.json
+```
+
+The signature covers
+
+```
+"tildra-auditor-checkpoint-v1:" ‖ frame(size, root_hash, log_key, checked_at)
+```
+
+— a length-framed encoding, not the JSON. JSON has no canonical form, so
+signing the serialised bytes would mean an equivalent document re-serialised by
+a different encoder stops verifying, and that two different documents could
+share one signature. `checked_at` is truncated to seconds for the same reason:
+a timestamp whose precision changes between encoders is a signature that fails
+for no reason. The context prefix means an auditor's signature can never pass
+for a signed tree head.
+
+Publishing without `-key` is refused rather than warned about. A document that
+looks like an attestation and is not one is worse than no document.
+
+**The client reads these.** A device holds a list of pinned auditors — a URL
+and a public key each, configured out of band, which is the same act as
+deciding to trust an auditor at all — fetches their checkpoints, verifies the
+signature against the pinned key, and cross-checks each against the head it was
+shown itself. Same comparison as gossip: equal sizes must have equal roots,
+different sizes must be linked by a consistency proof the server can produce.
+
+Three outcomes, deliberately distinct:
+
+| What happened | What the client does |
+|---|---|
+| The auditor saw a log that cannot be reconciled with ours | Split-view alarm |
+| The checkpoint does not verify against the pinned key | An error about *that publisher* — not an alarm about the log |
+| The auditor could not be reached, or its checkpoint is stale | An error, no alarm |
+
+Conflating the second with the first would make the alarm forgeable by anyone
+who can serve a file. Conflating the third with the first would let the
+operator raise the alarm by dropping a request, which teaches people to dismiss
+it. A checkpoint older than 48 hours is treated as stale: an auditor that
+stopped running last month cannot testify about today's log, and the way a fork
+survives is the operator making the auditor's fetches fail and waiting.
+
 **What is still missing.** Nobody is obliged to run an auditor, and Tildra
-operates none as a public service. The mechanism means a fork *can* be caught
-by any third party who looks; it does not guarantee that someone is looking.
+operates none as a public service, so no client ships with a pinned auditor
+today. The mechanism now runs end to end — an auditor can publish and a client
+can check — but a mechanism with nobody on the other end still catches
+nothing.
 
 The log key must be held outside the database. A signing key sitting next to
 the log it signs can be used to rewrite the whole thing.

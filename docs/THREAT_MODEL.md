@@ -142,10 +142,13 @@ isn't there:
   not work.
 
 - **A split view nobody happens to be watching.** Gossip catches a forked log
-  when two targets exchange messages, and an auditor catches it without
-  needing an account — but only if someone is actually running one. We ship the
-  tool and operate no public instance, so this is a "can be detected", not a
-  "will be". Verify safety numbers with people who matter to you.
+  when two targets exchange messages, and an auditor catches it without needing
+  an account. An auditor now signs what it publishes and clients can pin one
+  and cross-check it, which closes the gap that its findings had no path to a
+  phone — but only if someone is actually running one. We ship the tool,
+  operate no public instance, and therefore no client ships with a pinned
+  auditor. This is still a "can be detected", not a "will be". Verify safety
+  numbers with people who matter to you.
 - **That a call happened, to whoever runs the TURN relay.** A relayed call
   goes through the operator's server, which sees two endpoints exchanging
   media and how long for. The credential carries a random name rather than an
