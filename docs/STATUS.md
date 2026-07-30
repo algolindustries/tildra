@@ -24,17 +24,25 @@ tested by running the real Go server and pushing real traffic through it.
 | Gossip between contacts for split-view detection | done |
 | `tildra-auditor`: standalone log watcher, publishable checkpoints | done |
 | Device linking: commitment over a camera + six-digit pairing code | done |
+| Call signalling: SDP hardening, DTLS fingerprint bound to the identity key, ICE address policy, call state machine | done |
 
-Counts at time of writing: 225 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 297 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 ## Not done
 
-- **Voice and video calls.** Nothing exists. Needs `react-native-webrtc` (so a
-  dev build, not Expo Go), a TURN server, and — the part that actually matters —
-  binding the DTLS fingerprints in the SDP to the identity keys, or the server
-  can sit in the middle of the media. The signalling and fingerprint binding are
-  testable as pure logic; the media path is not testable headlessly.
+- **Voice and video calls — the media half.** The part that decides whether a
+  call is private is done and tested: `mobile/src/crypto/calling.ts` parses and
+  hardens the SDP, binds the DTLS fingerprint to the sender's identity key with
+  a role- and peer-bound signature, holds an unanswered incoming call to
+  relay-only candidates so it cannot be used to find out where you are, and
+  refuses every out-of-order signal. See `docs/PROTOCOL.md` §10.
+
+  What does not exist: `react-native-webrtc` (so a dev build, not Expo Go), a
+  TURN deployment, wiring the signals through `SessionManager`, and a call UI.
+  **No media has ever flowed.** The signalling logic is testable headlessly and
+  is tested; the media path is not, and nothing here should be read as "calls
+  work".
 - **An independent security audit.** Not something that can be done from inside
   the repo. The crypto uses standard primitives and is heavily tested, but it has
   not been reviewed by anyone outside this work, and nothing should carry real

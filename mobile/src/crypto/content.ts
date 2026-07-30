@@ -29,6 +29,12 @@ export enum ContentType {
    * the only thing that catches a server running a split view.
    */
   TransparencyGossip = 5,
+  /**
+   * Call setup: an offer, an answer, an ICE candidate, or a hangup. Rides the
+   * pairwise ratchet like everything else, so the server sees that two people
+   * exchanged some small messages and not that a call happened.
+   */
+  CallSignal = 6,
 }
 
 export interface Content {
@@ -101,6 +107,8 @@ export function decodeContent(data: Uint8Array): Content {
       return { type, text: groupId, payload };
     case ContentType.TransparencyGossip:
       return { type, payload };
+    case ContentType.CallSignal:
+      return { type, payload };
     default:
       // A newer client sending a type we do not understand must not be
       // rendered as anything. Refusing is the only safe reading.
@@ -133,6 +141,10 @@ export function attachmentContent(reference: Uint8Array, caption: string): Conte
 
 export function gossipContent(treeHead: Uint8Array): Content {
   return { type: ContentType.TransparencyGossip, payload: treeHead };
+}
+
+export function callSignalContent(signal: Uint8Array): Content {
+  return { type: ContentType.CallSignal, payload: signal };
 }
 
 export function profileContent(profile: Profile): Content {

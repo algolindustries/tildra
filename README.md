@@ -4,7 +4,7 @@
 
 **Encrypted messaging that doesn't ask who you are.**
 
-Open-source, end-to-end encrypted by default — every chat, every group, every call.
+Open-source, end-to-end encrypted by default — every chat, every group.
 Post-quantum key agreement. No phone number. Fully self-hostable server.
 
 [![CI](https://github.com/tildra/tildra/actions/workflows/ci.yml/badge.svg)](https://github.com/tildra/tildra/actions/workflows/ci.yml)
@@ -101,7 +101,7 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 | Encrypted photo and file attachments | ✅ |
 | Push notifications (content-free payload) | ✅ |
 | Voice messages with waveforms | ✅ |
-| Voice and video calls | ⬜ not yet |
+| Voice and video calls | ⬜ signalling and fingerprint binding done; **no media yet** |
 | Key transparency for the handle directory | ✅ log, proofs verified by the client |
 | Gossip between contacts for split-view detection | ✅ |
 | Independent log auditor (`tildra-auditor`) | ✅ tool shipped, no public instance |

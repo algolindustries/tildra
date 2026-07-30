@@ -107,6 +107,10 @@ different tool, and we would rather say so than imply protection we don't provid
 - Silent key substitution by the server (detected, blocks sending).
 - Reading group messages after being removed from the group (forced rotation).
 - Requiring a phone number to have an account (never collected).
+- A server inserting itself into the media path of a call, by binding the DTLS
+  fingerprint to the identity key — see `docs/PROTOCOL.md` §10. The signalling
+  logic is implemented and tested; no media has flowed yet, so this is a
+  designed defence, not an operating one.
 
 ## What we don't defend against
 
@@ -142,6 +146,13 @@ isn't there:
   needing an account — but only if someone is actually running one. We ship the
   tool and operate no public instance, so this is a "can be detected", not a
   "will be". Verify safety numbers with people who matter to you.
+- **Your IP address, once you answer a call.** WebRTC finds the shortest path
+  between two endpoints, and the shortest path is a direct one — which means
+  each side learns the other's address. An unanswered incoming call leaks
+  nothing (candidates are held to relay-only until you accept), and a
+  deployment can force relay for the whole call at the cost of routing all
+  media through its TURN server, but the default after you pick up is that the
+  person you are talking to can see where you are.
 - **Malicious client builds.** Reproducible builds are a project goal, tracked in
   CI, not yet achieved. Until then, "open source" means auditable source, not
   verified binaries.
