@@ -54,10 +54,6 @@ export async function loadOrCreateMasterKey(): Promise<Uint8Array> {
   return key;
 }
 
-export async function hasMasterKey(): Promise<boolean> {
-  return (await SecureStore.getItemAsync(MASTER_KEY_ID, OPTIONS)) !== null;
-}
-
 /** Server credentials. Small, and useless without the device identity key. */
 export async function saveCredentials(credentials: unknown): Promise<void> {
   await SecureStore.setItemAsync(CREDENTIALS_ID, JSON.stringify(credentials), OPTIONS);

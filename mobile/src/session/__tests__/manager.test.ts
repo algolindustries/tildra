@@ -118,6 +118,8 @@ async function bringUp(name: string): Promise<Device> {
     preKeys: secrets,
     randomId: () => toBase64(randomBytes(16)),
     stunUrls: ['stun:stun.test:3478'],
+    // Short enough to assert on. The real value is 45 seconds.
+    ringingTimeoutMs: 700,
     onMailboxesChanged: (mailboxes) => socket?.subscribe(mailboxes),
     events: {
       onMessage: (message) => received.push(message.text),
@@ -1577,4 +1579,50 @@ describeIntegration('renegotiation', () => {
     alice.socket.close();
     bob.socket.close();
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// Unanswered calls
+// ---------------------------------------------------------------------------
+
+describeIntegration('a call nobody answers', () => {
+  it('gives up, and stops the other phone ringing', async () => {
+    // CALL_RINGING_TIMEOUT_MS and callHasTimedOut existed for several commits
+    // with nothing calling them, so a call rang forever: no missed-call entry,
+    // the line held against a second call, and a notification on the other
+    // side for something that had stopped being true.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    const placed = await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) });
+    await waitFor(() => bob.incomingCalls.length > 0);
+
+    await waitFor(() => alice.manager.currentCall() === null, 10_000);
+    expect(alice.callChanges.at(-1)?.endedReason).toBe('unanswered');
+
+    await waitFor(() => bob.manager.currentCall() === null, 10_000);
+    expect(bob.manager.currentCall()).toBeNull();
+    expect(placed.callId).toBeTruthy();
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+
+  it('does not give up on a call that was answered', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    const placed = await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) });
+    await waitFor(() => bob.incomingCalls.length > 0);
+    await bob.manager.answerCall(placed.callId, callSdp(2));
+    await waitFor(() => alice.answers.length > 0);
+
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(alice.manager.currentCall()?.phase).toBe('connecting');
+    expect(bob.manager.currentCall()?.phase).toBe('connecting');
+
+    await alice.manager.endCall(placed.callId);
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
 });

@@ -52,6 +52,7 @@ import {
   CallError,
   CallSession,
   CallSignal,
+  CALL_RINGING_TIMEOUT_MS,
   CallSignalKind,
   IceConfiguration,
   IceTransportPolicy,
@@ -59,6 +60,7 @@ import {
   advanceCall,
   beginIncomingCall,
   beginOutgoingCall,
+  callHasTimedOut,
   decodeCallSignal,
   encodeCallSignal,
   filterIceCandidates,
@@ -325,6 +327,8 @@ export interface ManagerOptions {
    * device's address, which is the thing the ringing phase withholds.
    */
   stunUrls?: string[];
+  /** How long a call rings before this device gives up. Injectable for tests. */
+  ringingTimeoutMs?: number;
   /** Injectable for tests. */
   now?: () => number;
   randomId?: () => string;
@@ -341,6 +345,7 @@ export class SessionManager {
   private readonly randomId: () => string;
   private readonly onMailboxesChanged?: (mailboxes: string[]) => void;
   private readonly stunUrls: string[];
+  private readonly ringingTimeoutMs: number;
   private preKeys: PreKeySecrets;
 
   constructor(options: ManagerOptions) {
@@ -353,6 +358,7 @@ export class SessionManager {
     this.events = options.events ?? {};
     this.onMailboxesChanged = options.onMailboxesChanged;
     this.stunUrls = options.stunUrls ?? [];
+    this.ringingTimeoutMs = options.ringingTimeoutMs ?? CALL_RINGING_TIMEOUT_MS;
     this.now = options.now ?? (() => Date.now());
     this.randomId = options.randomId ?? (() => toBase64(crypto.getRandomValues(new Uint8Array(16))));
   }
@@ -1335,6 +1341,9 @@ export class SessionManager {
   /** The relay credential, cached until shortly before it expires. */
   private turn: TurnCredential | null = null;
 
+  /** Fires when a call has rung long enough that nobody is coming. */
+  private ringingTimer: ReturnType<typeof setTimeout> | null = null;
+
   /** The live call, if any. */
   currentCall(): CallSession | null {
     return this.call && this.call.phase !== 'ended' ? this.call : null;
@@ -1406,6 +1415,7 @@ export class SessionManager {
       throw new CallError('the call could not be delivered to any device');
     }
 
+    this.armRingingTimer();
     this.events.onCallChange?.(call);
     return call;
   }
@@ -1436,6 +1446,7 @@ export class SessionManager {
     await this.sendCallSignalTo(call.peerAccountId, call.peerDeviceId, signal);
 
     this.call = next;
+    this.clearRingingTimer();
     this.events.onCallChange?.(next);
     return next;
   }
@@ -1587,9 +1598,41 @@ export class SessionManager {
 
   private finishCall(reason: CallEndReason): void {
     if (!this.call) return;
+    this.clearRingingTimer();
     this.call = advanceCall(this.call, { type: 'end', reason }, this.now());
     this.ringing = [];
     this.events.onCallChange?.(this.call);
+  }
+
+  /**
+   * Give up on a call nobody answered.
+   *
+   * `CALL_RINGING_TIMEOUT_MS` and `callHasTimedOut` existed for several
+   * commits with nothing calling them, which meant an outgoing call rang
+   * forever: no missed-call entry, the line held against a second call, and on
+   * the receiving side a notification for something that stopped being true.
+   */
+  private armRingingTimer(): void {
+    this.clearRingingTimer();
+    const callId = this.call?.callId;
+    if (!callId) return;
+
+    this.ringingTimer = setTimeout(() => {
+      this.ringingTimer = null;
+      const call = this.currentCall();
+      if (!call || call.callId !== callId || call.phase !== 'ringing') return;
+      if (!callHasTimedOut(call, this.now(), this.ringingTimeoutMs)) return;
+      // Told to the far end rather than dropped: a caller who walked away
+      // should stop the other phone ringing too.
+      void this.endCall(callId, 'unanswered').catch((err) =>
+        this.events.onError?.(err instanceof Error ? err : new Error(String(err))),
+      );
+    }, this.ringingTimeoutMs);
+  }
+
+  private clearRingingTimer(): void {
+    if (this.ringingTimer) clearTimeout(this.ringingTimer);
+    this.ringingTimer = null;
   }
 
   private async sendCallSignalTo(
@@ -1712,6 +1755,7 @@ export class SessionManager {
     });
     this.call = call;
     this.ringing = [{ deviceId: senderDeviceId, identityKey: senderIdentityKey }];
+    this.armRingingTimer();
 
     this.events.onIncomingCall?.(call, signal.body);
     this.events.onCallChange?.(call);
@@ -1741,6 +1785,7 @@ export class SessionManager {
       this.now(),
     );
     this.call = next;
+    this.clearRingingTimer();
 
     // Every other device is still ringing for a call that has been picked up.
     const losers = this.ringing.filter((d) => d.deviceId !== senderDeviceId);

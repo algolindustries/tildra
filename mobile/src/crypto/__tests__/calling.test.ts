@@ -688,6 +688,14 @@ describe('call state machine', () => {
     expect(callHasTimedOut(answered, NOW + CALL_RINGING_TIMEOUT_MS * 10)).toBe(false);
   });
 
+  it('honours a caller-supplied bound', () => {
+    // The caller that arms the timer has its own value, and the two silently
+    // disagreeing is a feature that never fires. It did, once.
+    const call = outgoing();
+    expect(callHasTimedOut(call, NOW + 699, 700)).toBe(false);
+    expect(callHasTimedOut(call, NOW + 700, 700)).toBe(true);
+  });
+
   it('refuses a call id that is not a call id', () => {
     expect(() => beginOutgoingCall({ callId: 'no', peerAccountId: BOB })).toThrow(/call id/);
     expect(() =>

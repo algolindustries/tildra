@@ -157,6 +157,10 @@ jobs:
       - run: npm ci
       - name: Typecheck
         run: npm run typecheck
+      # This project has four times shipped something that works, is tested,
+      # and cannot be reached from the app.
+      - name: Every exported function is reachable
+        run: npm run check:reachable
       - name: Test
         run: npm test
       # Typechecking does not prove the app bundles: a missing native module

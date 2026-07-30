@@ -53,7 +53,8 @@
     "bundle:release": "scripts/bundle.sh dist",
     "reproduce": "scripts/reproduce.sh",
     "reproduce:native": "scripts/reproduce-native.sh",
-    "check:native": "scripts/check-native-config.sh"
+    "check:native": "scripts/check-native-config.sh",
+    "check:reachable": "node scripts/unreferenced-exports.mjs"
   },
   "private": true,
   "overrides": {

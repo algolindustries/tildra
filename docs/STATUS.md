@@ -38,7 +38,7 @@ tested by running the real Go server and pushing real traffic through it.
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 421 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 424 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -125,6 +125,15 @@ knowing before trusting a UI change.
   Xcode and Gradle over them to get an `.ipa` and an `.aab`. That needs the
   toolchains and has not been started. See `docs/REPRODUCIBLE_BUILDS.md`.
 
+- **Signed prekey rotation.** `docs/PROTOCOL.md` claimed a 48-hour rotation
+  that has never happened: `signedPreKeyIsStale` is called by nothing, and
+  `topUpPreKeysIfLow` republishes the same signed prekey rather than a fresh
+  one. The claim in the protocol document is now corrected rather than left
+  standing. Doing it needs the previous signed prekey retained for a grace
+  period — `acceptSession` matches the prekey id, so rotating without that
+  breaks every peer that fetched the old bundle. Found by
+  `mobile/scripts/unreferenced-exports.mjs`.
+
 ## Needs a human, not code
 
 - A domain. `tildra.chat` and `tildra.dev` were both free when the name was
@@ -153,6 +162,15 @@ knowing before trusting a UI change.
 - **`docs/THREAT_MODEL.md` lists what Tildra does not defend against.** If a
   change would move something off that list, or onto it, the doc changes in the
   same commit.
+- **`npm run check:reachable` looks for the recurring bug in this project.**
+  Something that works, is tested, and cannot be reached from the app has
+  shipped four times: device linking with only its approving half,
+  `safetyQrPayload` with no renderer, `checkAuditors` with no caller, and a
+  split-view alarm written to a field the app never displays. The check
+  reports exported functions and classes whose only callers are tests, with an
+  allowlist where every entry carries a reason somebody can check. It found
+  the signed-prekey rotation gap above and a ringing timeout that never fired.
+  It cannot see methods, which is a real limit — two of the four were methods.
 - **A protocol that supports something is not a feature.** This table said
   device linking was done while the only screen was the *approving* half —
   there was nothing in the app that could produce a code for it to approve. The

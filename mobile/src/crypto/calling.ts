@@ -862,9 +862,20 @@ function assertFingerprintPinned(call: CallSession, offered?: SdpFingerprint): v
   }
 }
 
-/** Whether a call has rung long enough that either side should give up. */
-export function callHasTimedOut(call: CallSession, now: number): boolean {
-  return call.phase === 'ringing' && now - call.phaseAt >= CALL_RINGING_TIMEOUT_MS;
+/**
+ * Whether a call has rung long enough that either side should give up.
+ *
+ * The bound is a parameter and not just the constant, because the caller that
+ * arms the timer already has its own value and the two silently disagreeing is
+ * a feature that never fires — which is exactly what happened the first time
+ * this was wired up.
+ */
+export function callHasTimedOut(
+  call: CallSession,
+  now: number,
+  timeoutMs: number = CALL_RINGING_TIMEOUT_MS,
+): boolean {
+  return call.phase === 'ringing' && now - call.phaseAt >= timeoutMs;
 }
 
 function describe(event: CallEvent): string {
