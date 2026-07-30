@@ -11,6 +11,7 @@ import {
   randomBytes,
   sign,
   toBase64,
+  toHex,
   utf8,
   verify,
 } from '../primitives';
@@ -26,7 +27,14 @@ import { acceptSession, initiateSession, PreKeyBundle, verifyBundle } from '../p
 import { generateIdentity, generatePreKeys, registrationProof } from '../identity';
 import { openEnvelope, sealEnvelope, SealedEnvelopeError } from '../sealed';
 import { safetyNumber, safetyQrPayload, verifyQrPayload } from '../safety';
-import { currentMailboxes, dayNumber, deliveryMailbox, mailboxFor } from '../mailbox';
+import {
+  contactInbox,
+  currentMailboxes,
+  dayNumber,
+  deliveryMailbox,
+  deriveMailboxSecret,
+  mailboxFor,
+} from '../mailbox';
 import { bucketSize, frame, pad, unframe, unpad } from '../wire';
 import { MAX_SKIPPED_KEYS, SKIPPED_KEY_TTL_MS } from '../ratchet';
 
@@ -733,5 +741,71 @@ describe('how long a stolen device is worth reading', () => {
     }
     encrypt(receiving, utf8('reply'), ad);
     expect(receiving.skipped.size).toBe(0);
+  });
+});
+
+describe('what the server can link', () => {
+  // docs/PROTOCOL.md §5.1 and the threat-model table: after the first
+  // message a conversation moves to per-session mailboxes that rotate daily
+  // and are unlinkable across contacts, so the contact inbox is a one-event
+  // leak per conversation rather than an ongoing one. deriveMailboxSecret and
+  // contactInbox carry that claim and had no tests.
+  const alice = { account: '0123456789ABCDEFGHJKMNPQRS', device: 'DEVICEA0123456789ABCDEFGHJ' };
+  const bob = { account: 'ZYXWVUTSRQPNMKJHGFEDCBA987', device: 'DEVICEB0123456789ABCDEFGHJ' };
+  const at = new Date('2026-07-30T12:00:00Z');
+
+  function mailboxes(sessionSecret: Uint8Array, owner: { account: string; device: string }) {
+    return currentMailboxes(deriveMailboxSecret(sessionSecret, owner.account, owner.device), at);
+  }
+
+  it('cannot link the two directions of one conversation', () => {
+    // Both sides derive both mailboxes from the same session secret, but the
+    // server sees only the addresses. If Alice's and Bob's were related, one
+    // envelope would give away the other half of the conversation.
+    const session = randomBytes(32);
+    const toAlice = mailboxes(session, alice);
+    const toBob = mailboxes(session, bob);
+    expect(toAlice.some((m) => toBob.includes(m))).toBe(false);
+  });
+
+  it('cannot link two conversations of the same device', () => {
+    // The claim that makes sealed sender worth having: two people talking to
+    // Alice address two sets of mailboxes with nothing in common, so the
+    // server cannot tell they are both talking to Alice.
+    const withBob = mailboxes(randomBytes(32), alice);
+    const withCarol = mailboxes(randomBytes(32), alice);
+    expect(withBob.some((m) => withCarol.includes(m))).toBe(false);
+  });
+
+  it('does not confuse one owner for another that spells the same', () => {
+    // The owner is folded in as "account/device". Without the delimiter,
+    // ("ab", "c") and ("a", "bc") would be the same mailbox — and account ids
+    // are fixed-width today, which is a reason it has never happened rather
+    // than a reason it cannot.
+    const session = randomBytes(32);
+    expect(toHex(deriveMailboxSecret(session, 'ab', 'c'))).not.toBe(
+      toHex(deriveMailboxSecret(session, 'a', 'bc')),
+    );
+  });
+
+  it('keeps the contact inbox out of the rotating set', () => {
+    // The contact inbox is derived from the identity key, which the server
+    // holds, so it is computable by the server. Every per-session mailbox
+    // must be outside it, or the leak would be ongoing instead of one event.
+    const inbox = contactInbox(generateIdentity().publicKey);
+    for (let attempt = 0; attempt < 20; attempt++) {
+      expect(mailboxes(randomBytes(32), alice)).not.toContain(inbox);
+    }
+  });
+
+  it('gives one stable contact inbox per identity key', () => {
+    // Stable, because it is the address a stranger delivers a first message
+    // to, and it has to work before any session exists.
+    const identity = generateIdentity();
+    expect(contactInbox(identity.publicKey)).toBe(contactInbox(identity.publicKey));
+    expect(contactInbox(identity.publicKey)).toMatch(/^mb_[0-9a-f]{32}$/);
+    expect(contactInbox(identity.publicKey)).not.toBe(
+      contactInbox(generateIdentity().publicKey),
+    );
   });
 });

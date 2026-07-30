@@ -165,6 +165,15 @@ knowing before trusting a UI change.
   version of the test above kept a reference to the secrets and passed with the
   persistence call deleted, because the top-up mutates the same maps in place.
   It serialises on the way in now. Run the negative control.
+- **The unlinkability claim now has tests.** `deriveMailboxSecret` and
+  `contactInbox` carry what `docs/PROTOCOL.md` §5.1 promises — that the
+  contact inbox is a one-event leak per conversation and everything after it
+  is unlinkable — and neither had a test.
+- **A killed test run leaves its server behind.** The integration harness
+  stops `tildrad` in `afterAll`, which does not run if vitest itself is
+  killed. The orphan keeps port 8792, the next run's server cannot bind, and
+  its tests quietly talk to a stale server instead. Two failures and a hang
+  were traced to that. `pkill -f tildrad` before re-running.
 - **A bound with no test is a number in a file.** `MAX_SKIP`,
   `MAX_SKIPPED_KEYS` and `SKIPPED_KEY_TTL_MS` had been there from the start,
   are quoted in `docs/PROTOCOL.md` §3 as what bounds a device compromise, and
