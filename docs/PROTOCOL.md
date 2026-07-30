@@ -570,6 +570,16 @@ A server with no relay configured answers `503` rather than an empty
 credential, because a client that cannot tell "no relay" from "relay with no
 servers" cannot tell a safe call from a broken one.
 
+**Ordering.** Signalling and gathering race each other, and getting that
+wrong is silent rather than loud — the call still connects, over the relay,
+when a direct path existed. Two buffers are therefore part of the design and
+not an implementation detail: remote candidates that arrive before the
+description they belong to are held until it is installed, and local
+candidates gathered before the call has an id are held until it does. When the
+user accepts an incoming call the widened policy has to be applied to the
+*live* connection with an ICE restart; setting the configuration alone does
+not go back for the candidates that were skipped while relay-only.
+
 **Calls are not persisted.** A call that outlives the process is not a call; it
 is a row that would ring a phone about something that stopped happening when
 the app was killed.

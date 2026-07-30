@@ -29,8 +29,9 @@ tested by running the real Go server and pushing real traffic through it.
 | Call signalling carried end to end through `SessionManager`: ring all devices, first answer wins, busy, hangup | done |
 | Reproducible builds for the Go server and `tildra-auditor`, checked in CI | done |
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
+| Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 354 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 375 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -51,12 +52,24 @@ knowing before trusting a UI change.
   when the fingerprint does not verify** — tested against a real Go server with
   a hand-forged offer. See `docs/PROTOCOL.md` §10.
 
-  What does not exist: `react-native-webrtc` (so a dev build, not Expo Go) and
-  a call UI — nothing calls `placeCall` yet. The relay side is ready on the
-  server (`GET /v1/turn`, see `docs/PROTOCOL.md` §10) but no coturn is
-  deployed. **No media has ever flowed.** The signalling is testable headlessly and is
-  tested; the media path is not, and nothing here should be read as "calls
+  `session/call-driver.ts` sequences the peer-connection operations and
+  handles the ordering hazards — remote candidates that arrive before the
+  description they belong to, local candidates gathered before the call has an
+  id, and widening the address policy on the live connection when the user
+  accepts. It runs against an interface, so it is tested against a fake peer
+  connection rather than not at all.
+
+  What does not exist: **`react-native-webrtc` and the adapter that would
+  implement `PeerConnection` against it**, a call UI, and a deployed coturn.
+  Nothing calls `CallDriver.place` yet. **No media has ever flowed** — every
+  test in this area drives a double. Nothing here should be read as "calls
   work".
+
+  One thing for whoever writes the adapter: `setConfiguration` must trigger an
+  ICE restart when the policy widens from `relay` to `all`.
+  `RTCPeerConnection.setConfiguration` alone does not go back for the host
+  candidates it skipped while relay-only, so an answered call would sit on the
+  relay forever with nothing indicating anything was wrong.
 - **An independent security audit.** Not something that can be done from inside
   the repo. The crypto uses standard primitives and is heavily tested, but it has
   not been reviewed by anyone outside this work, and nothing should carry real

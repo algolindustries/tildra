@@ -54,6 +54,7 @@ import {
   CallSignal,
   CallSignalKind,
   IceConfiguration,
+  IceTransportPolicy,
   TurnCredential,
   advanceCall,
   beginIncomingCall,
@@ -1428,8 +1429,11 @@ export class SessionManager {
    * call would be a request the server can count and time — a weak signal, but
    * a free one to not give away.
    */
-  async iceConfiguration(call: CallSession): Promise<IceConfiguration> {
-    return iceConfigurationFor(iceTransportPolicyFor(call), await this.relayCredential(), {
+  async iceConfiguration(target: CallSession | IceTransportPolicy): Promise<IceConfiguration> {
+    // A policy can be named directly, because a peer connection has to exist
+    // before there is a call to place — the offer comes out of it.
+    const policy = typeof target === 'string' ? target : iceTransportPolicyFor(target);
+    return iceConfigurationFor(policy, await this.relayCredential(), {
       stunUrls: this.stunUrls,
       now: this.now(),
     });
