@@ -21,7 +21,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Encrypted groups: sender keys, signed messages, rotation on removal, and screens to create one, talk in it and change who is in it | done |
 | Encrypted profiles (name, photo, about), mutual introduction on first contact | done |
 | Encrypted attachments; photo and voice messages with waveforms | done |
-| Push notifications with a content-free payload | done |
+| Push notifications with a content-free payload, pinned by a test against the bytes actually sent | done |
 | Key transparency: Merkle log, inclusion + consistency proofs verified by the client | done |
 | Gossip between contacts for split-view detection | done |
 | `tildra-auditor`: standalone log watcher, signed publishable checkpoints | done |
@@ -165,6 +165,13 @@ knowing before trusting a UI change.
   version of the test above kept a reference to the secrets and passed with the
   persistence call deleted, because the top-up mutates the same maps in place.
   It serialises on the way in now. Run the negative control.
+- **A privacy claim with no test is a comment.** The push payload has always
+  been content-free and the `Notifier` interface takes only a token, so the
+  server cannot pass content even by mistake — but nothing checked the bytes
+  that go to Expo, and one well-meant "New message from Ayşe" would have
+  broken a claim in the README and the threat model with nothing noticing.
+  `internal/push` now asserts the exact payload. The same question is worth
+  asking of every other claim in the table above.
 - **An undecryptable message must be acknowledged, not retried.** Throwing
   from `receiveEnvelope` leaves the envelope unacked so the server redelivers
   it, which is right for a transient failure and an infinite loop for a
