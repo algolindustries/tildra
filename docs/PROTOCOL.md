@@ -95,9 +95,29 @@ Argon2id is not load-bearing for a 24-word phrase, which already carries 256
 bits. The parameters are chosen for the weaker inputs a later version might
 allow — and for the user who writes down twelve words instead of twenty-four.
 
-**Not yet reachable.** The crypto and the blob format are implemented and
-tested; no screen shows a phrase and nothing calls `putBackup`. Losing a device
-today still means losing the account. Tracked in `docs/STATUS.md`.
+**Where the blob lives.** Recovery needs the account id to log in, and the
+account id was on the device that is gone — so the blob cannot be addressed by
+account. A third derivation gives it an address:
+
+```
+lookup id = hex(HKDF(seed, info = "Tildra_RecoveryLookup_v1")[0..16])
+```
+
+`PUT /v1/recovery/{lookupId}` is authenticated, because an account publishes
+its own. `GET` is **not**, and has to not be: the caller has nothing to
+authenticate with yet. What protects the blob is that the id is 128 bits only
+the phrase produces and the contents are encrypted under a different
+derivation of it, so guessing an id yields ciphertext. The first account to
+claim an id keeps it, which closes the case where an id leaks later.
+
+The unauthenticated read is a scraping surface and this deployment has no rate
+limiting. The blob is bounded at 256 KiB so it stays cheap to serve; the
+missing limiter is in `docs/THREAT_MODEL.md`.
+
+**Not yet reachable.** The crypto, the blob format and both endpoints are
+implemented and tested; no screen shows a phrase, and account creation still
+takes its identity from the CSPRNG rather than from one. Losing a device today
+still means losing the account. Tracked in `docs/STATUS.md`.
 
 ## 2. Session establishment — PQXDH-hybrid
 

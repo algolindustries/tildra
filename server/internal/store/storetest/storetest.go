@@ -37,6 +37,7 @@ func Run(t *testing.T, newStore Factory) {
 		{"Envelopes", testEnvelopes},
 		{"AckIsScopedToMailbox", testAckIsScopedToMailbox},
 		{"Backups", testBackups},
+		{"RecoveryBlobs", testRecoveryBlobs},
 		{"Attachments", testAttachments},
 		{"PushTokens", testPushTokens},
 		{"TransparencyLog", testTransparencyLog},
@@ -705,5 +706,55 @@ func testSweep(t *testing.T, s store.Store) {
 	}
 	if _, err := s.GetAttachment(ctx(), "att-live"); err != nil {
 		t.Errorf("live attachment was swept: %v", err)
+	}
+}
+
+// testRecoveryBlobs covers the path that has to work for somebody who has lost
+// the device that knew their account id: addressed by a lookup id derived from
+// a recovery phrase, readable without authenticating, and not takeable over by
+// another account if the id ever leaks.
+func testRecoveryBlobs(t *testing.T, s store.Store) {
+	seed(t, s, "ACCOUNT1", "DEVICE1")
+	seed(t, s, "ACCOUNT2", "DEVICE2")
+
+	if _, err := s.GetRecoveryBlob(ctx(), "lookup-1"); err != store.ErrNotFound {
+		t.Fatalf("GetRecoveryBlob on an unknown id = %v, want ErrNotFound", err)
+	}
+
+	blob := []byte("ciphertext the server cannot read")
+	if err := s.PutRecoveryBlob(ctx(), "lookup-1", "ACCOUNT1", blob); err != nil {
+		t.Fatalf("PutRecoveryBlob: %v", err)
+	}
+
+	got, err := s.GetRecoveryBlob(ctx(), "lookup-1")
+	if err != nil {
+		t.Fatalf("GetRecoveryBlob: %v", err)
+	}
+	if string(got) != string(blob) {
+		t.Fatalf("GetRecoveryBlob = %q, want %q", got, blob)
+	}
+
+	// The owner may replace their own.
+	replaced := []byte("a later blob")
+	if err := s.PutRecoveryBlob(ctx(), "lookup-1", "ACCOUNT1", replaced); err != nil {
+		t.Fatalf("replacing own blob: %v", err)
+	}
+	got, err = s.GetRecoveryBlob(ctx(), "lookup-1")
+	if err != nil || string(got) != string(replaced) {
+		t.Fatalf("after replace = %q, %v", got, err)
+	}
+
+	// Somebody else may not, even knowing the id.
+	if err := s.PutRecoveryBlob(ctx(), "lookup-1", "ACCOUNT2", []byte("mine now")); err != store.ErrAlreadyExists {
+		t.Fatalf("takeover = %v, want ErrAlreadyExists", err)
+	}
+	got, _ = s.GetRecoveryBlob(ctx(), "lookup-1")
+	if string(got) != string(replaced) {
+		t.Fatalf("a refused takeover still changed the blob: %q", got)
+	}
+
+	// An unknown account cannot publish one at all.
+	if err := s.PutRecoveryBlob(ctx(), "lookup-2", "NOSUCH", blob); err != store.ErrNotFound {
+		t.Fatalf("PutRecoveryBlob for an unknown account = %v, want ErrNotFound", err)
 	}
 }

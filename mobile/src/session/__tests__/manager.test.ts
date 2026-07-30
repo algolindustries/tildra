@@ -41,6 +41,12 @@ import {
 } from '../../crypto/calling';
 import { callSignalContent, encodeContent } from '../../crypto/content';
 import { readSafetyCode } from '../../crypto/scan';
+import {
+  generateRecoveryPhrase,
+  openBackup,
+  recoveryKeys,
+  sealBackup,
+} from '../../crypto/recovery';
 import { encrypt } from '../../crypto/ratchet';
 import { sealEnvelope } from '../../crypto/sealed';
 
@@ -1998,4 +2004,102 @@ describeIntegration('changing who is in a group', () => {
 
     [alice, bob, carol].forEach((d) => d.socket.close());
   }, 120_000);
+});
+
+// ---------------------------------------------------------------------------
+// Recovery
+// ---------------------------------------------------------------------------
+
+describeIntegration('recovering from a phrase', () => {
+  it('finds and opens a blob knowing only the phrase', async () => {
+    // The circle this breaks: logging in needs an account id, and the account
+    // id was on the device that is gone. The blob is addressed by something
+    // the phrase produces, so a person with the phrase and nothing else can
+    // reach it.
+    const phrase = generateRecoveryPhrase();
+    const { identity, backupKey, lookupId } = recoveryKeys(phrase);
+
+    const client = new TildraClient({ baseUrl: BASE_URL });
+    const { accountId, deviceId } = await client.register(identity, 'Phone');
+    await client.login(identity, accountId, deviceId);
+
+    await client.putRecoveryBlob(
+      lookupId,
+      sealBackup(backupKey, accountId, {
+        contacts: [{ accountId: 'acct-bob', displayName: 'Bob' }],
+        groups: [],
+        updatedAt: Date.now(),
+      }),
+    );
+
+    // A new device, holding nothing but the words.
+    const fresh = new TildraClient({ baseUrl: BASE_URL });
+    const recovered = recoveryKeys(phrase);
+    const sealed = await fresh.getRecoveryBlob(recovered.lookupId);
+    expect(sealed).toBeTruthy();
+
+    const backup = openBackup(recovered.backupKey, accountId, sealed!);
+    expect(backup.contacts[0].displayName).toBe('Bob');
+
+    // And the derived identity is the account's, so it can sign in again.
+    const credentials = await fresh.login(recovered.identity, accountId, deviceId);
+    expect(credentials.token).toBeTruthy();
+  }, 90_000);
+
+  it('gives nothing to a different phrase', async () => {
+    const phrase = generateRecoveryPhrase();
+    const { identity, backupKey, lookupId } = recoveryKeys(phrase);
+
+    const client = new TildraClient({ baseUrl: BASE_URL });
+    const { accountId, deviceId } = await client.register(identity, 'Phone');
+    await client.login(identity, accountId, deviceId);
+    await client.putRecoveryBlob(
+      lookupId,
+      sealBackup(backupKey, accountId, { contacts: [], groups: [], updatedAt: Date.now() }),
+    );
+
+    const other = recoveryKeys(generateRecoveryPhrase());
+    expect(await client.getRecoveryBlob(other.lookupId)).toBeNull();
+  }, 90_000);
+
+  it('refuses to open a blob fetched for the wrong account', async () => {
+    // The account id is associated data, so a server that serves the wrong
+    // blob fails to authenticate rather than restoring somebody else's
+    // contacts.
+    const phrase = generateRecoveryPhrase();
+    const { identity, backupKey, lookupId } = recoveryKeys(phrase);
+
+    const client = new TildraClient({ baseUrl: BASE_URL });
+    const { accountId, deviceId } = await client.register(identity, 'Phone');
+    await client.login(identity, accountId, deviceId);
+    await client.putRecoveryBlob(
+      lookupId,
+      sealBackup(backupKey, accountId, { contacts: [], groups: [], updatedAt: Date.now() }),
+    );
+
+    const sealed = await client.getRecoveryBlob(lookupId);
+    expect(() => openBackup(backupKey, 'acct-somebody-else', sealed!)).toThrow();
+  }, 90_000);
+
+  it('will not let another account take the id over', async () => {
+    const phrase = generateRecoveryPhrase();
+    const { identity, backupKey, lookupId } = recoveryKeys(phrase);
+
+    const client = new TildraClient({ baseUrl: BASE_URL });
+    const { accountId, deviceId } = await client.register(identity, 'Phone');
+    await client.login(identity, accountId, deviceId);
+    await client.putRecoveryBlob(
+      lookupId,
+      sealBackup(backupKey, accountId, { contacts: [], groups: [], updatedAt: Date.now() }),
+    );
+
+    const attacker = await bringUp('Mallory');
+    await expect(attacker.client.putRecoveryBlob(lookupId, utf8('mine now'))).rejects.toThrow();
+
+    // And the original is untouched.
+    const sealed = await client.getRecoveryBlob(lookupId);
+    expect(openBackup(backupKey, accountId, sealed!).contacts).toEqual([]);
+
+    attacker.socket.close();
+  }, 90_000);
 });

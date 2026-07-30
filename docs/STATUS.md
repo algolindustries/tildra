@@ -15,7 +15,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Sealed sender, rotating mailboxes, contact inbox for first contact | done |
 | Encrypted local storage: keystore master key + vault-encrypted SQLite | done |
 | Session manager: fanout per device, identity-change blocking, prekey top-up | done |
-| Recovery phrase: 24 words, Argon2id, identity and backup key derived from it, encrypted blob — crypto only, no screens | done at the crypto layer |
+| Recovery phrase: 24 words, Argon2id, identity/backup/lookup derived from it, encrypted blob, and the endpoints to publish and fetch it without an account id — no screens | done below the UI |
 | Signed prekey rotation every 48h, with the replaced pair honoured for one more window, and every change to the secrets written to disk | done |
 | Screens: onboarding, chat list, conversation, safety number, profile, device link (both halves) | done |
 | Encrypted groups: sender keys, signed messages, rotation on removal, and screens to create one, talk in it and change who is in it | done |
@@ -40,7 +40,7 @@ tested by running the real Go server and pushing real traffic through it.
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 456 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 463 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -133,11 +133,18 @@ knowing before trusting a UI change.
   back under a new identity — which makes every contact see the alarm this
   app exists to raise. See `docs/PROTOCOL.md` §1.1.
 
-  What exists: phrase generation, Argon2id stretching, both derivations, and
-  the encrypted blob, with 18 tests. What does not: a screen that shows the
+  The circular dependency underneath is also solved: logging in needs an
+  account id, and the account id was on the device that is gone, so the blob
+  is addressed by a third derivation of the phrase and served without
+  authentication. A person holding nothing but the words can now find their
+  blob, open it, and sign in — tested end to end against a real server.
+
+  What exists: the phrase, Argon2id, three derivations, the encrypted blob,
+  `PUT`/`GET /v1/recovery/{lookupId}` with the store conformance suite
+  extended, and the client calls. What does not: a screen that shows the
   phrase at registration, a screen that takes one back, and the change to
-  account creation that derives the identity from it instead of from the
-  CSPRNG. Losing a device still means losing the account.
+  account creation that derives the identity from a phrase instead of from
+  the CSPRNG. Losing a device still means losing the account.
 
 ## Needs a human, not code
 
@@ -177,6 +184,10 @@ knowing before trusting a UI change.
   version of the test above kept a reference to the secrets and passed with the
   persistence call deleted, because the top-up mutates the same maps in place.
   It serialises on the way in now. Run the negative control.
+- **The store conformance suite earns its place regularly.** Adding
+  `PutRecoveryBlob` to it immediately caught the memory store accepting an
+  unknown account where Postgres refuses it on a foreign key — a drift that
+  would have surfaced only in production.
 - **Group membership changes are in units of people, not devices.** The
   manager distributes a sender key per device, so `removeGroupMember` takes
   one. Removing a person with two phones by calling it twice rotates after the

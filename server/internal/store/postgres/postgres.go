@@ -477,6 +477,38 @@ func (s *Store) Ack(ctx context.Context, mailboxID string, ids []string) error {
 // Backups
 // ---------------------------------------------------------------------------
 
+func (s *Store) PutRecoveryBlob(ctx context.Context, lookupID, accountID string, blob []byte) error {
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO recovery_blobs (lookup_id, account_id, blob, updated_at)
+		VALUES ($1, $2, $3, now())
+		ON CONFLICT (lookup_id) DO UPDATE
+		  SET blob = EXCLUDED.blob, updated_at = now()
+		  WHERE recovery_blobs.account_id = EXCLUDED.account_id`,
+		lookupID, accountID, blob)
+	if isForeignKeyViolation(err) {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	// The WHERE on the conflict path means "somebody else owns this id"
+	// arrives as zero rows rather than as an error.
+	if tag.RowsAffected() == 0 {
+		return store.ErrAlreadyExists
+	}
+	return nil
+}
+
+func (s *Store) GetRecoveryBlob(ctx context.Context, lookupID string) ([]byte, error) {
+	var blob []byte
+	err := s.pool.QueryRow(ctx,
+		`SELECT blob FROM recovery_blobs WHERE lookup_id = $1`, lookupID).Scan(&blob)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	return blob, err
+}
+
 func (s *Store) PutBackup(ctx context.Context, accountID string, blob []byte) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO backups (account_id, blob, updated_at) VALUES ($1, $2, now())

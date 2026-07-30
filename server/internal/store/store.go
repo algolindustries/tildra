@@ -56,6 +56,17 @@ type Store interface {
 	PutBackup(ctx context.Context, accountID string, blob []byte) error
 	GetBackup(ctx context.Context, accountID string) ([]byte, error)
 
+	// Recovery blobs are addressed by a lookup id the client derives from its
+	// recovery phrase, not by an account, because the whole point is to be
+	// readable by somebody who has lost the device that knew their account id.
+	//
+	// The first writer claims the id; a later write from a different account
+	// is ErrAlreadyExists. Knowing the lookup id is the only thing that lets
+	// anyone write there in the first place — it comes out of the phrase — but
+	// pinning it to one account closes the case where it leaks afterwards.
+	PutRecoveryBlob(ctx context.Context, lookupID, accountID string, blob []byte) error
+	GetRecoveryBlob(ctx context.Context, lookupID string) ([]byte, error)
+
 	// Attachments. Ciphertext only; no owner is recorded, on purpose.
 	PutAttachment(ctx context.Context, a *model.Attachment) error
 	GetAttachment(ctx context.Context, id string) (*model.Attachment, error)

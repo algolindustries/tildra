@@ -15,6 +15,7 @@ import {
   phraseEntropyBits,
   phraseRows,
   recoveryKeys,
+  recoveryLookupId,
   recoverySeed,
   sealBackup,
 } from '../recovery';
@@ -162,5 +163,27 @@ describe('the backup blob', () => {
     const sealed = sealBackup(backupKey, 'acct-me', BACKUP);
     const restored = openBackup(backupKey, 'acct-me', sealed);
     expect(Object.keys(restored).sort()).toEqual(['contacts', 'groups', 'updatedAt']);
+  });
+});
+
+describe('where the blob is published', () => {
+  it('comes out of the phrase and nothing else', () => {
+    // This is what breaks the circle: recovery needs the account id to log in,
+    // and the account id was on the device that is gone.
+    expect(recoveryLookupId(SEED)).toBe(recoveryLookupId(recoverySeed(PHRASE)));
+    expect(recoveryLookupId(SEED)).not.toBe(recoveryLookupId(recoverySeed(generateRecoveryPhrase())));
+  });
+
+  it('is a shape the server can validate', () => {
+    // Hex, because a shape worth validating is one that cannot contain a path.
+    expect(recoveryLookupId(SEED)).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it('is not either of the keys', () => {
+    // An id that leaks must yield ciphertext and nothing else.
+    const { identity, backupKey, lookupId } = recoveryKeys(PHRASE);
+    expect(lookupId).not.toBe(toHex(backupKey));
+    expect(lookupId).not.toBe(toHex(identity.secretKey));
+    expect(lookupId).not.toBe(toHex(SEED).slice(0, 32));
   });
 });

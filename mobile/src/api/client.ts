@@ -144,6 +144,39 @@ export class TildraClient {
   }
 
   /**
+   * Publish the blob a lost device is recovered from.
+   *
+   * Addressed by a value derived from the recovery phrase rather than by this
+   * account, because whoever fetches it will not know the account id — that
+   * was on the device they lost.
+   */
+  async putRecoveryBlob(lookupId: string, blob: Uint8Array): Promise<void> {
+    await this.request('PUT', `/v1/recovery/${encodeURIComponent(lookupId)}`, {
+      body: { blob: toBase64(blob) },
+      expectEmpty: true,
+    });
+  }
+
+  /**
+   * Fetch it. Unauthenticated, because the caller has nothing to authenticate
+   * with yet. Null when there is nothing there, which is the ordinary answer
+   * for a phrase that was never used on this server.
+   */
+  async getRecoveryBlob(lookupId: string): Promise<Uint8Array | null> {
+    try {
+      const raw = await this.request<{ blob: string }>(
+        'GET',
+        `/v1/recovery/${encodeURIComponent(lookupId)}`,
+        { authenticated: false },
+      );
+      return fromBase64(raw.blob);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
    * Fetch a bundle for a device. The caller must run verifyBundle() on the
    * result before using it — this method deliberately does not, so that the
    * verification failure surfaces where the session is being established and

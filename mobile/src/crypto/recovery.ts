@@ -35,7 +35,7 @@ import { argon2id } from '@noble/hashes/argon2.js';
 import { generateMnemonic, mnemonicToEntropy, validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 
-import { KeyPair, fromUtf8, kdf, open, seal, utf8 } from './primitives';
+import { KeyPair, fromUtf8, kdf, open, seal, toHex, utf8 } from './primitives';
 import { ed25519 } from '@noble/curves/ed25519.js';
 
 export class RecoveryError extends Error {}
@@ -55,6 +55,7 @@ export const ARGON2_PARALLELISM = 4;
 const ARGON2_SALT = 'Tildra_Recovery_v1';
 const IDENTITY_INFO = 'Tildra_RecoveryIdentity_v1';
 const BACKUP_INFO = 'Tildra_RecoveryBackup_v1';
+const LOOKUP_INFO = 'Tildra_RecoveryLookup_v1';
 
 /** What the backup blob carries. Deliberately not messages. */
 export interface RecoveryBackup {
@@ -169,6 +170,22 @@ export function openBackup(
 }
 
 /**
+ * Where the blob is published, derived from the phrase and nothing else.
+ *
+ * This is what breaks the circle. Recovery needs the account id to log in, and
+ * the account id was on the device that is gone — so the blob cannot be
+ * addressed by account. It is addressed by a value only the phrase produces,
+ * fetched without authenticating, and encrypted under a *different*
+ * derivation, so an id that leaks yields ciphertext and nothing else.
+ *
+ * Hex, 32 characters, because the server validates the shape and a shape
+ * worth validating is one that cannot contain a path.
+ */
+export function recoveryLookupId(seed: Uint8Array): string {
+  return toHex(kdf(seed, undefined, LOOKUP_INFO, 16));
+}
+
+/**
  * The words, grouped for reading off a screen and onto paper.
  *
  * Numbered because the order matters and a phrase copied out of order is a
@@ -189,7 +206,15 @@ export function phraseEntropyBits(phrase: string): number {
 }
 
 /** Bind two derivations together so a caller cannot use one without the other. */
-export function recoveryKeys(phrase: string): { identity: KeyPair; backupKey: Uint8Array } {
+export function recoveryKeys(phrase: string): {
+  identity: KeyPair;
+  backupKey: Uint8Array;
+  lookupId: string;
+} {
   const seed = recoverySeed(phrase);
-  return { identity: identityFromSeed(seed), backupKey: backupKeyFromSeed(seed) };
+  return {
+    identity: identityFromSeed(seed),
+    backupKey: backupKeyFromSeed(seed),
+    lookupId: recoveryLookupId(seed),
+  };
 }

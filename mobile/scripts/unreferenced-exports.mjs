@@ -107,6 +107,9 @@ const ALLOWED = new Map([
   ['sealBackup', 'no recovery screens yet; see docs/STATUS.md'],
   ['openBackup', 'no recovery screens yet; see docs/STATUS.md'],
   ['phraseRows', 'the layout the phrase screen will use'],
+  ['recoveryLookupId', 'called by recoveryKeys'],
+  ['TildraClient.putRecoveryBlob', 'no recovery screens yet; see docs/STATUS.md'],
+  ['TildraClient.getRecoveryBlob', 'no recovery screens yet; see docs/STATUS.md'],
   ['phraseEntropyBits', 'asserted by the tests; a phrase that claims 256 bits should carry them'],
 
   ['signedPreKeyIsStale', 'called by rotateSignedPreKeysIfStale'],

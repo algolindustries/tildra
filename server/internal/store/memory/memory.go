@@ -40,6 +40,7 @@ type Store struct {
 	mailboxes map[string]*model.Mailbox
 	queue     map[string][]*model.Envelope // mailboxID -> envelopes
 	backups   map[string][]byte
+	recovery  map[string]recoveryBlob
 	tokens    map[string]tokenEntry // hex(tokenHash) -> entry
 	blobs     map[string]*model.Attachment
 	push      map[string]*model.PushToken
@@ -57,6 +58,7 @@ func New() *Store {
 		mailboxes: map[string]*model.Mailbox{},
 		queue:     map[string][]*model.Envelope{},
 		backups:   map[string][]byte{},
+		recovery:  map[string]recoveryBlob{},
 		tokens:    map[string]tokenEntry{},
 		blobs:     map[string]*model.Attachment{},
 		push:      map[string]*model.PushToken{},
@@ -315,6 +317,37 @@ func (s *Store) Ack(_ context.Context, mailboxID string, ids []string) error {
 		s.queue[mailboxID] = kept
 	}
 	return nil
+}
+
+type recoveryBlob struct {
+	owner string
+	blob  []byte
+}
+
+func (s *Store) PutRecoveryBlob(_ context.Context, lookupID, accountID string, blob []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Postgres enforces this with a foreign key; without the same check here
+	// the two stores disagree about an unknown account, which is exactly the
+	// drift the conformance suite exists to catch. It caught this one.
+	if _, ok := s.accounts[accountID]; !ok {
+		return store.ErrNotFound
+	}
+	if existing, ok := s.recovery[lookupID]; ok && existing.owner != accountID {
+		return store.ErrAlreadyExists
+	}
+	s.recovery[lookupID] = recoveryBlob{owner: accountID, blob: append([]byte(nil), blob...)}
+	return nil
+}
+
+func (s *Store) GetRecoveryBlob(_ context.Context, lookupID string) ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entry, ok := s.recovery[lookupID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return append([]byte(nil), entry.blob...), nil
 }
 
 func (s *Store) PutBackup(_ context.Context, accountID string, blob []byte) error {

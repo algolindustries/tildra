@@ -982,3 +982,108 @@ func TestTurnCredentialIsNotCached(t *testing.T) {
 		t.Fatalf("Cache-Control = %q, want no-store on a bearer token", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Recovery blobs
+// ---------------------------------------------------------------------------
+
+const lookupID = "0123456789abcdef0123456789abcdef"
+
+func TestRecoveryBlobIsReadableWithoutAuthenticating(t *testing.T) {
+	// The caller is somebody who has lost the device that knew their account
+	// id. There is nothing for them to authenticate with, which is the whole
+	// reason this endpoint exists separately from /v1/backup.
+	h := newHarness(t)
+	a := h.register("Alice")
+
+	blob := []byte("ciphertext the server cannot open")
+	resp, body := h.do(http.MethodPut, "/v1/recovery/"+lookupID, a.token, map[string]any{"blob": blob})
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("put: status %d body %s", resp.StatusCode, body)
+	}
+
+	resp, body = h.do(http.MethodGet, "/v1/recovery/"+lookupID, "", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get: status %d body %s", resp.StatusCode, body)
+	}
+	var got struct {
+		Blob []byte `json:"blob"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if string(got.Blob) != string(blob) {
+		t.Fatalf("blob = %q, want %q", got.Blob, blob)
+	}
+	if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", cc)
+	}
+}
+
+func TestRecoveryBlobCannotBeTakenOver(t *testing.T) {
+	// Writing requires knowing the id, which requires the phrase — but if an
+	// id ever leaks, the account that claimed it keeps it.
+	h := newHarness(t)
+	alice := h.register("Alice")
+	bob := h.register("Bob")
+
+	if resp, _ := h.do(http.MethodPut, "/v1/recovery/"+lookupID, alice.token,
+		map[string]any{"blob": []byte("alice")}); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("alice put: %d", resp.StatusCode)
+	}
+	resp, _ := h.do(http.MethodPut, "/v1/recovery/"+lookupID, bob.token,
+		map[string]any{"blob": []byte("bob")})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("bob put: status %d, want 409", resp.StatusCode)
+	}
+
+	_, body := h.do(http.MethodGet, "/v1/recovery/"+lookupID, "", nil)
+	if !strings.Contains(string(body), "YWxpY2U=") { // base64("alice")
+		t.Fatalf("a refused takeover changed the blob: %s", body)
+	}
+}
+
+func TestRecoveryBlobRequiresAuthenticationToWrite(t *testing.T) {
+	h := newHarness(t)
+	resp, _ := h.do(http.MethodPut, "/v1/recovery/"+lookupID, "", map[string]any{"blob": []byte("x")})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestRecoveryBlobRejectsAMalformedLookupId(t *testing.T) {
+	// The id is hex derived from a phrase. Anything else is either a mistake
+	// or somebody probing, and neither should reach the store.
+	h := newHarness(t)
+	a := h.register("Alice")
+	for _, bad := range []string{"short", strings.Repeat("f", 65), "ZZZZ0123456789abcdef0123456789ab", "../etc"} {
+		resp, _ := h.do(http.MethodGet, "/v1/recovery/"+bad, "", nil)
+		if resp.StatusCode == http.StatusOK {
+			t.Fatalf("GET %q returned 200", bad)
+		}
+		resp, _ = h.do(http.MethodPut, "/v1/recovery/"+bad, a.token, map[string]any{"blob": []byte("x")})
+		if resp.StatusCode == http.StatusNoContent {
+			t.Fatalf("PUT %q was accepted", bad)
+		}
+	}
+}
+
+func TestUnknownRecoveryBlobIsANotFound(t *testing.T) {
+	h := newHarness(t)
+	resp, _ := h.do(http.MethodGet, "/v1/recovery/"+strings.Repeat("a", 32), "", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestRecoveryBlobIsSizeBounded(t *testing.T) {
+	// Readable without authenticating, so this is the one worth keeping cheap
+	// to serve.
+	h := newHarness(t)
+	a := h.register("Alice")
+	resp, _ := h.do(http.MethodPut, "/v1/recovery/"+lookupID, a.token,
+		map[string]any{"blob": make([]byte, (256<<10)+1)})
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", resp.StatusCode)
+	}
+}

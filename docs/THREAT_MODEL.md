@@ -156,6 +156,13 @@ isn't there:
   deployment running both the relay and the message server can correlate by
   timing, and self-hosting is the only real answer to that. A call that finds
   a direct path does not touch the relay at all.
+- **Somebody grinding recovery lookup ids.** `GET /v1/recovery/{id}` is
+  unauthenticated by necessity — the caller has lost the device that knew
+  their account id — and this deployment has no rate limiting, so nothing but
+  the 128-bit id stops somebody from asking repeatedly. A hit yields
+  ciphertext they cannot open, so the cost of a guess is bounded, but the
+  endpoint is a scraping surface and an operator should put a limiter in front
+  of it.
 - **Your IP address, once you answer a call.** WebRTC finds the shortest path
   between two endpoints, and the shortest path is a direct one — which means
   each side learns the other's address. An unanswered incoming call leaks

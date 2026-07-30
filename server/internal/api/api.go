@@ -70,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/transparency/head", s.transparencyHead)
 	mux.HandleFunc("GET /v1/transparency/consistency", s.transparencyConsistency)
 	mux.HandleFunc("GET /v1/transparency/entries", s.transparencyEntries)
+	mux.HandleFunc("GET /v1/recovery/{lookupId}", s.getRecoveryBlob)
 	mux.HandleFunc("GET /healthz", s.health)
 
 	// Device linking. The new device has no account yet, so the first two
@@ -90,6 +91,7 @@ func (s *Server) Handler() http.Handler {
 	authed.HandleFunc("POST /v1/messages", s.sendMessage)
 	authed.HandleFunc("PUT /v1/backup", s.putBackup)
 	authed.HandleFunc("GET /v1/backup", s.getBackup)
+	authed.HandleFunc("PUT /v1/recovery/{lookupId}", s.putRecoveryBlob)
 	authed.HandleFunc("PUT /v1/push", s.registerPushToken)
 	authed.HandleFunc("DELETE /v1/push", s.deletePushToken)
 	authed.HandleFunc("POST /v1/attachments", s.uploadAttachment)
@@ -542,6 +544,77 @@ func (s *Server) getBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	respond(w, http.StatusOK, map[string][]byte{"blob": blob})
 }
+
+// putRecoveryBlob publishes the blob a lost device is recovered from.
+//
+// Authenticated, because an account publishes its own. The lookup id comes
+// from the client's recovery phrase and the server never learns the phrase;
+// what it holds is a random-looking string and a ciphertext it cannot open.
+func (s *Server) putRecoveryBlob(w http.ResponseWriter, r *http.Request) {
+	p, _ := auth.FromContext(r.Context())
+	lookupID := r.PathValue("lookupId")
+	if !validLookupID(lookupID) {
+		fail(w, http.StatusBadRequest, "lookupId must be 32-64 hex characters")
+		return
+	}
+
+	var req struct {
+		Blob []byte `json:"blob"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	// Smaller than the account backup on purpose: this one is readable without
+	// authenticating, so it is the one worth keeping cheap to serve.
+	if len(req.Blob) > 256<<10 {
+		fail(w, http.StatusRequestEntityTooLarge, "recovery blob exceeds 256 KiB")
+		return
+	}
+
+	err := s.store.PutRecoveryBlob(r.Context(), lookupID, p.AccountID, req.Blob)
+	if errors.Is(err, store.ErrAlreadyExists) {
+		fail(w, http.StatusConflict, "that recovery id belongs to another account")
+		return
+	}
+	if err != nil {
+		s.fail500(w, "put recovery blob", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// getRecoveryBlob serves it to anybody who knows the id.
+//
+// Unauthenticated, and it has to be: the caller is somebody who has lost the
+// device that knew their account id, so there is nothing for them to
+// authenticate with yet. What protects the blob is that the id is 128 bits
+// derived from a phrase, and that the contents are encrypted under a
+// different derivation of the same phrase. Guessing an id gets you ciphertext.
+//
+// It is a scraping surface and this deployment has no rate limiting — see
+// docs/THREAT_MODEL.md.
+func (s *Server) getRecoveryBlob(w http.ResponseWriter, r *http.Request) {
+	lookupID := r.PathValue("lookupId")
+	if !validLookupID(lookupID) {
+		fail(w, http.StatusBadRequest, "lookupId must be 32-64 hex characters")
+		return
+	}
+
+	blob, err := s.store.GetRecoveryBlob(r.Context(), lookupID)
+	if err != nil {
+		// Deliberately the same answer as a malformed id would get after
+		// validation: whether an id exists is the one bit this endpoint has
+		// to give up, and it should not give up more.
+		fail(w, http.StatusNotFound, "no recovery blob stored")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	respond(w, http.StatusOK, map[string][]byte{"blob": blob})
+}
+
+var lookupIDPattern = regexp.MustCompile(`^[0-9a-f]{32,64}$`)
+
+func validLookupID(id string) bool { return lookupIDPattern.MatchString(id) }
 
 // ---------- device linking ----------
 
