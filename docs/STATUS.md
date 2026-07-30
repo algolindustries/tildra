@@ -15,6 +15,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Sealed sender, rotating mailboxes, contact inbox for first contact | done |
 | Encrypted local storage: keystore master key + vault-encrypted SQLite | done |
 | Session manager: fanout per device, identity-change blocking, prekey top-up | done |
+| Recovery phrase: 24 words, Argon2id, identity and backup key derived from it, encrypted blob — crypto only, no screens | done at the crypto layer |
 | Signed prekey rotation every 48h, with the replaced pair honoured for one more window, and every change to the secrets written to disk | done |
 | Screens: onboarding, chat list, conversation, safety number, profile, device link (both halves) | done |
 | Encrypted groups: sender keys, signed messages, rotation on removal, and screens to create one, talk in it and change who is in it | done |
@@ -39,7 +40,7 @@ tested by running the real Go server and pushing real traffic through it.
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 438 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 456 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -126,11 +127,17 @@ knowing before trusting a UI change.
   Xcode and Gradle over them to get an `.ipa` and an `.aab`. That needs the
   toolchains and has not been started. See `docs/REPRODUCIBLE_BUILDS.md`.
 
-- **Account recovery.** `docs/PROTOCOL.md` §1.1 described a recovery-phrase
-  backup in the present tense. The server endpoints exist; the client calls
-  them only from tests, and no onboarding screen shows a phrase. Losing a
-  device today means losing the account. The protocol document now says
-  "specified, not implemented".
+- **Recovery screens.** The design question underneath is now settled and
+  written down: the phrase derives the identity key, because an account is a
+  key and restoring everything except the key hands the user their contacts
+  back under a new identity — which makes every contact see the alarm this
+  app exists to raise. See `docs/PROTOCOL.md` §1.1.
+
+  What exists: phrase generation, Argon2id stretching, both derivations, and
+  the encrypted blob, with 18 tests. What does not: a screen that shows the
+  phrase at registration, a screen that takes one back, and the change to
+  account creation that derives the identity from it instead of from the
+  CSPRNG. Losing a device still means losing the account.
 
 ## Needs a human, not code
 

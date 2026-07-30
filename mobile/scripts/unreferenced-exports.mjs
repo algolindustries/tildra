@@ -93,10 +93,21 @@ const ALLOWED = new Map([
   ['SessionManager.listGroups', 'no group UI; see docs/STATUS.md'],
   ['groupConversationKey', 'called within manager.ts; the screens that will use it do not exist yet'],
 
-  // Account recovery: the protocol specifies it, the client never calls it.
-  // Also recorded under "Not done".
-  ['TildraClient.putBackup', 'no recovery-phrase flow in the client; see docs/STATUS.md'],
-  ['TildraClient.getBackup', 'no recovery-phrase flow in the client; see docs/STATUS.md'],
+  // Account recovery: the crypto exists and the screens do not. Recorded
+  // under "Not done"; remove these when onboarding shows a phrase.
+  ['TildraClient.putBackup', 'no recovery screens yet; see docs/STATUS.md'],
+  ['TildraClient.getBackup', 'no recovery screens yet; see docs/STATUS.md'],
+  ['generateRecoveryPhrase', 'no recovery screens yet; see docs/STATUS.md'],
+  ['normalizeRecoveryPhrase', 'called by the rest of recovery.ts'],
+  ['isValidRecoveryPhrase', 'for the screen that will check as the user types'],
+  ['recoverySeed', 'called by recoveryKeys'],
+  ['identityFromSeed', 'called by recoveryKeys'],
+  ['backupKeyFromSeed', 'called by recoveryKeys'],
+  ['recoveryKeys', 'no recovery screens yet; see docs/STATUS.md'],
+  ['sealBackup', 'no recovery screens yet; see docs/STATUS.md'],
+  ['openBackup', 'no recovery screens yet; see docs/STATUS.md'],
+  ['phraseRows', 'the layout the phrase screen will use'],
+  ['phraseEntropyBits', 'asserted by the tests; a phrase that claims 256 bits should carry them'],
 
   ['signedPreKeyIsStale', 'called by rotateSignedPreKeysIfStale'],
   ['rotateSignedPreKeys', 'called by rotateSignedPreKeysIfStale'],

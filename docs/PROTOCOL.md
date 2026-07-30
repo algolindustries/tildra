@@ -61,15 +61,43 @@ push token. It does not require or store a phone number or an email address.
 
 There is no server-side password reset, because the server has nothing to reset.
 
-**Specified, not implemented.** Recovery is to be a 24-word BIP-39-style
-**recovery phrase** seeding a recovery key pair; the client would encrypt a
-backup blob (contact list, group memberships, and a device-provisioning
-secret) under a key derived from the phrase with Argon2id (m=64 MiB, t=3, p=4)
-and upload the ciphertext, and the server would store bytes it cannot read.
-The endpoints exist and the client never calls them: `putBackup` and
-`getBackup` are reached only by tests, and no onboarding screen shows a
-phrase. Losing a device today means losing the account. Tracked in
-`docs/STATUS.md`.
+**The phrase is the account.** A 24-word BIP-39 phrase is generated at
+registration and everything else follows from it:
+
+```
+seed       = Argon2id(phrase, salt = "Tildra_Recovery_v1", m = 64 MiB, t = 3, p = 4)
+IK         = Ed25519 from HKDF(seed, info = "Tildra_RecoveryIdentity_v1")
+backup key = HKDF(seed, info = "Tildra_RecoveryBackup_v1")
+```
+
+An earlier draft of this section had the blob carry a "device-provisioning
+secret" and left the identity unrecoverable. That is not recovery. An account
+is a key, so restoring everything *except* the key gives the user their contact
+list back under a new identity — and every contact sees a key change, which is
+indistinguishable from the attack this whole design exists to make visible.
+Recovery that fires the alarm is not a feature. The alternative also needed the
+server to let a device join an account without an existing device approving it,
+which is a second way into an account, and a second way in is a second thing to
+attack.
+
+**The cost is that anyone holding the phrase is you.** It is exactly as
+powerful as an unlocked device. The onboarding screen has to say that in those
+words rather than calling it a backup.
+
+Two derivations from one seed, so handing the backup key to something does not
+hand it the identity. The blob carries the contact list and group memberships —
+**not messages**: a blob on a server that holds what was said is the thing this
+design is arranged to avoid. It is encrypted with the account id as associated
+data, so a server that serves the wrong blob fails to authenticate rather than
+restoring somebody else's contacts.
+
+Argon2id is not load-bearing for a 24-word phrase, which already carries 256
+bits. The parameters are chosen for the weaker inputs a later version might
+allow — and for the user who writes down twelve words instead of twenty-four.
+
+**Not yet reachable.** The crypto and the blob format are implemented and
+tested; no screen shows a phrase and nothing calls `putBackup`. Losing a device
+today still means losing the account. Tracked in `docs/STATUS.md`.
 
 ## 2. Session establishment — PQXDH-hybrid
 
