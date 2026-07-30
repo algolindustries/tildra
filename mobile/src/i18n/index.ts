@@ -118,6 +118,7 @@ export interface Strings {
   errorGeneric: string;
   errorTransparency: string;
   errorSplitView: string;
+  dismiss: string;
   retry: string;
   cancel: string;
   copy: string;
@@ -239,7 +240,8 @@ const en: Strings = {
   errorTransparency:
     'This server’s key transparency log did not check out, so the lookup was refused.',
   errorSplitView:
-    'This server showed you and your contact different key transparency logs. That should never happen and may mean your messages are being intercepted. Verify safety numbers before continuing.',
+    'This server showed you and someone else different key transparency logs. That should never happen and may mean your messages are being intercepted. Verify safety numbers before continuing.',
+  dismiss: 'Dismiss',
   retry: 'Try again',
   cancel: 'Cancel',
   copy: 'Copy',
@@ -361,7 +363,8 @@ const tr: Strings = {
   errorTransparency:
     'Bu sunucunun anahtar şeffaflık kaydı doğrulanamadı, arama reddedildi.',
   errorSplitView:
-    'Bu sunucu size ve karşınızdaki kişiye farklı anahtar şeffaflık kayıtları gösterdi. Bu asla olmamalı ve mesajlarınızın araya girilerek okunduğu anlamına gelebilir. Devam etmeden önce güvenlik numaralarını doğrulayın.',
+    'Bu sunucu size ve bir başkasına farklı anahtar şeffaflık kayıtları gösterdi. Bu asla olmamalı ve mesajlarınızın araya girilerek okunduğu anlamına gelebilir. Devam etmeden önce güvenlik numaralarını doğrulayın.',
+  dismiss: 'Kapat',
   retry: 'Tekrar dene',
   cancel: 'Vazgeç',
   copy: 'Kopyala',

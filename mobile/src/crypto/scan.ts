@@ -99,19 +99,19 @@ export function readSafetyCode(raw: string): string {
  * transport is the whole attack in one field. Embedded credentials are refused
  * because `fetch` would use them and nothing would say so.
  */
-export function assertUsableServerUrl(raw: string): string {
+export function assertUsableServerUrl(raw: string, subject = 'the code'): string {
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    throw new ScanError('the code points at something that is not a URL');
+    throw new ScanError(`${subject} points at something that is not a URL`);
   }
 
   if (url.username || url.password) {
-    throw new ScanError('the code embeds credentials in its server address');
+    throw new ScanError(`${subject} embeds credentials in its server address`);
   }
   if (url.search || url.hash) {
-    throw new ScanError('the server address in the code is malformed');
+    throw new ScanError(`the server address in ${subject} is malformed`);
   }
 
   const loopback = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname);
@@ -120,8 +120,8 @@ export function assertUsableServerUrl(raw: string): string {
 
   throw new ScanError(
     url.protocol === 'http:'
-      ? 'the code points at a plaintext server'
-      : `the code points at an unsupported address (${url.protocol})`,
+      ? `${subject} points at a plaintext server`
+      : `${subject} points at an unsupported address (${url.protocol})`,
   );
 }
 

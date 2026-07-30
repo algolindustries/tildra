@@ -23,6 +23,8 @@ export function ChatListScreen({
   const myAccountId = useApp((s) => s.accountId);
   const myName = useApp((s) => s.displayName);
   const myAvatar = useApp((s) => s.avatar);
+  const splitView = useApp((s) => s.splitView);
+  const dismissSplitView = useApp((s) => s.dismissSplitView);
 
   const [adding, setAdding] = useState(false);
   const [input, setInput] = useState('');
@@ -57,6 +59,22 @@ export function ChatListScreen({
 
   return (
     <SafeAreaView style={styles.screen} edges={['top', 'left', 'right']}>
+      {/* Above everything, on the screen the user is on most, and only
+          dismissible by saying so. This is the one alarm in the app that means
+          the operator is lying to somebody — it used to be written into the
+          general `error` field, which is rendered only while the app is
+          failing to start, so it was never shown at all. */}
+      {splitView ? (
+        <View style={styles.alarm}>
+          <Banner
+            tone="danger"
+            title={t.errorSplitView}
+            body={`${splitView.source}: ${splitView.detail}`}
+            actionLabel={t.dismiss}
+            onAction={dismissSplitView}
+          />
+        </View>
+      ) : null}
       <ScreenTitle
         right={
           <View style={styles.titleActions}>
@@ -202,6 +220,7 @@ function ConversationRow({
 }
 
 const styles = StyleSheet.create({
+  alarm: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
   screen: { flex: 1, backgroundColor: palette.bg },
   newButton: {
     width: 40,

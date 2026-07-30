@@ -32,6 +32,7 @@ import {
   verifyConsistency,
 } from './transparency';
 import { concat, equal, fromBase64, u32, utf8, verify } from './primitives';
+import { assertUsableServerUrl } from './scan';
 
 /** Must match `CheckpointContext` in server/internal/auditor/signed.go. */
 const CHECKPOINT_CONTEXT = 'tildra-auditor-checkpoint-v1:';
@@ -247,4 +248,88 @@ export async function crossCheckAuditor(
       { cause },
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse the pinned-auditor list a deployment configures.
+ *
+ * JSON rather than a delimited string, because a public key is base64 and
+ * every separator worth using appears in base64.
+ *
+ * ```json
+ * [{"name":"EFF","url":"https://auditor.example/checkpoint.json","publicKey":"…"}]
+ * ```
+ *
+ * **A malformed entry fails the whole list rather than being skipped.** An
+ * operator who mistypes one key and gets a silently shorter list believes
+ * their users are checking an auditor that is not being checked, and nothing
+ * anywhere says otherwise. Refusing to start is recoverable; a quiet downgrade
+ * of a security control is not.
+ */
+export function parsePinnedAuditors(raw: string | undefined | null): PinnedAuditor[] {
+  const trimmed = (raw ?? '').trim();
+  if (trimmed.length === 0) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new AuditorError('the pinned auditor list is not JSON');
+  }
+  if (!Array.isArray(parsed)) {
+    throw new AuditorError('the pinned auditor list must be a JSON array');
+  }
+
+  const seen = new Set<string>();
+  return parsed.map((entry, index) => {
+    const where = `auditor ${index + 1}`;
+    if (typeof entry !== 'object' || entry === null) {
+      throw new AuditorError(`${where} is not an object`);
+    }
+    const { url, publicKey, name } = entry as Record<string, unknown>;
+
+    if (typeof url !== 'string' || url.length === 0) {
+      throw new AuditorError(`${where} has no url`);
+    }
+    // Same rule as a scanned code — HTTPS, or plaintext only on loopback,
+    // because a checkpoint fetched over plaintext can be replaced in transit
+    // and the whole check becomes theatre. The rule is shared; the wording and
+    // the error type are not, because "the code points at…" is nonsense to
+    // somebody editing an environment variable.
+    try {
+      assertUsableServerUrl(url, where);
+    } catch (err) {
+      throw new AuditorError(err instanceof Error ? err.message : `${where} has an unusable url`);
+    }
+
+    if (typeof publicKey !== 'string') {
+      throw new AuditorError(`${where} has no publicKey`);
+    }
+    let key: Uint8Array;
+    try {
+      key = fromBase64(publicKey);
+    } catch {
+      throw new AuditorError(`${where} has a publicKey that is not base64`);
+    }
+    if (key.length !== KEY_BYTES) {
+      throw new AuditorError(`${where} has a publicKey that is not 32 bytes`);
+    }
+
+    // Two entries with one key is either a copy-paste mistake or an attempt to
+    // make one auditor look like two independent ones.
+    if (seen.has(publicKey)) {
+      throw new AuditorError(`${where} repeats a publicKey already in the list`);
+    }
+    seen.add(publicKey);
+
+    if (name !== undefined && typeof name !== 'string') {
+      throw new AuditorError(`${where} has a name that is not a string`);
+    }
+
+    return { url, publicKey: key, name: name?.trim() || undefined };
+  });
 }

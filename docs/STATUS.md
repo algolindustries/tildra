@@ -24,6 +24,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Gossip between contacts for split-view detection | done |
 | `tildra-auditor`: standalone log watcher, signed publishable checkpoints | done |
 | Clients verify and cross-check pinned auditors' signed checkpoints, distinguishing a split view from a bad publisher from an unreachable one | done |
+| The app configures auditors, checks them at startup and every six hours, and shows a split view as a persistent alarm | done |
 | Device linking, both halves: the new device shows a QR, the signed-in device scans it, six-digit pairing code compared on both screens | done |
 | QR scanning and display for device links and safety numbers, with a hardened parser for what comes off the camera | done |
 | Call signalling: SDP hardening, DTLS fingerprint bound to the identity key, ICE address policy, call state machine | done |
@@ -33,7 +34,7 @@ tested by running the real Go server and pushing real traffic through it.
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 385 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 395 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -85,11 +86,12 @@ knowing before trusting a UI change.
   the repo. The crypto uses standard primitives and is heavily tested, but it has
   not been reviewed by anyone outside this work, and nothing should carry real
   traffic until it has.
-- **A public auditor instance.** The tool ships, it signs what it publishes,
-  and clients can now verify and cross-check a pinned auditor — that consumer
-  did not exist before and is most of why running one had no obvious point.
-  What is still missing is somebody actually operating one, and therefore an
-  auditor for a client to pin. No client ships with a pinned auditor today.
+- **A public auditor instance.** Everything around it now exists: the tool
+  signs what it publishes, a build pins auditors through
+  `EXPO_PUBLIC_TILDRA_AUDITORS`, the app asks them at startup and every six
+  hours, and a disagreement is a persistent alarm on the chat list. What is
+  missing is somebody actually operating one, so the default configuration is
+  empty and the machinery runs against nobody.
 - **Reproducible builds for the app's native shell.** The server, the auditor
   and the app's JavaScript bundle — Hermes bytecode included — all reproduce,
   checked in CI. The `.ipa` and `.aab` do not: that is Xcode and Gradle with
@@ -127,8 +129,11 @@ knowing before trusting a UI change.
 - **A protocol that supports something is not a feature.** This table said
   device linking was done while the only screen was the *approving* half —
   there was nothing in the app that could produce a code for it to approve. The
-  same mistake had already been made once with "multi-device". Before writing
-  "done", find the entry point a user would actually press.
+  same mistake had already been made once with "multi-device", and again with
+  the split-view alarm, which was written into the general `error` field that
+  is only rendered while the app is failing to start, so it was never shown at
+  all. Before writing "done", find the entry point a user would actually press
+  and the pixel they would actually see.
 - **The camera is an input the attacker controls.** Everything scanned goes
   through `crypto/scan.ts`, which decides what kind of code it is, refuses the
   wrong kind by name, and validates the server address inside a link code

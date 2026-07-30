@@ -467,11 +467,19 @@ it. A checkpoint older than 48 hours is treated as stale: an auditor that
 stopped running last month cannot testify about today's log, and the way a fork
 survives is the operator making the auditor's fetches fail and waiting.
 
+A build pins auditors through `EXPO_PUBLIC_TILDRA_AUDITORS`, a JSON array of
+`{name, url, publicKey}`. A malformed entry fails the whole list rather than
+being skipped: an operator who mistypes one key and gets a shorter list
+believes their users are checking an auditor that is not being checked, and
+nothing anywhere says otherwise. The app asks at startup and every six hours —
+a fork is a state the operator has to keep up, not a moment, so checking a few
+times a day catches one without becoming a beacon.
+
 **What is still missing.** Nobody is obliged to run an auditor, and Tildra
-operates none as a public service, so no client ships with a pinned auditor
-today. The mechanism now runs end to end — an auditor can publish and a client
-can check — but a mechanism with nobody on the other end still catches
-nothing.
+operates none as a public service, so the default configuration is empty. The
+mechanism now runs end to end — an auditor can publish, a build can pin one,
+the app checks it, and a disagreement is an alarm the user actually sees — but
+a mechanism with nobody on the other end still catches nothing.
 
 The log key must be held outside the database. A signing key sitting next to
 the log it signs can be used to rewrite the whole thing.

@@ -36,6 +36,7 @@ import {
   verifyHandleProof,
 } from '../crypto/transparency';
 import { CHECKPOINT_META_KEY } from '../session/manager';
+import { PinnedAuditor, parsePinnedAuditors } from '../crypto/auditor';
 import {
   dismissWakeNotifications,
   presentLocalNotification,
@@ -47,6 +48,31 @@ const IDENTITY_META_KEY = 'identity.v1';
 const PREKEYS_META_KEY = 'prekeys.v1';
 
 export const DEFAULT_SERVER_URL = 'https://api.tildra.chat';
+
+/**
+ * How often the pinned auditors are asked again.
+ *
+ * A fork is not a moment, it is a state the operator has to keep up; checking
+ * a few times a day is enough to catch one and cheap enough not to be a
+ * beacon. Also run once at startup, because the first check is the one most
+ * likely to happen at all.
+ */
+export const AUDITOR_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * The auditors this build listens to, from the environment at build time.
+ *
+ * Empty by default and that is the honest default: Tildra operates no public
+ * auditor, so there is nobody to pin. A deployment that runs one sets
+ * `EXPO_PUBLIC_TILDRA_AUDITORS` to a JSON array of `{name, url, publicKey}`.
+ *
+ * A malformed list throws rather than yielding a shorter one — see
+ * `parsePinnedAuditors`. It surfaces as a startup error, which is the loudest
+ * available place for "the security control you configured is not running".
+ */
+function pinnedAuditors(): PinnedAuditor[] {
+  return parsePinnedAuditors(process.env.EXPO_PUBLIC_TILDRA_AUDITORS);
+}
 
 export type Phase = 'starting' | 'onboarding' | 'ready' | 'error';
 
@@ -85,6 +111,22 @@ export interface AppState {
    */
   pendingLink: { payload: string; code: string | null } | null;
 
+  /**
+   * Two views of the transparency log that cannot both be true.
+   *
+   * Its own field, not `error`. This used to be written to `error` with a
+   * comment saying it was not the ordinary error path — which it then was, so
+   * the next network hiccup overwrote it, and since `error` is only rendered
+   * while the app is failing to start, the one alarm that means the operator
+   * is attacking somebody was never shown at all.
+   *
+   * Persistent until the user dismisses it deliberately.
+   */
+  splitView: { source: string; detail: string } | null;
+
+  /** How many pinned auditors last answered, and when. Null before the first check. */
+  auditorStatus: { checked: number; of: number; at: number } | null;
+
   // Actions
   bootstrap: (options?: { serverUrl?: string; localeTag?: string }) => Promise<void>;
   createAccount: (deviceName: string, displayName?: string) => Promise<void>;
@@ -104,6 +146,9 @@ export interface AppState {
   loadAttachment: (messageId: string) => Promise<Uint8Array | null>;
   startConversation: (input: string) => Promise<string>;
   markVerified: (accountId: string) => Promise<void>;
+  /** Ask every pinned auditor whether it saw the same log. */
+  checkAuditors: () => Promise<void>;
+  dismissSplitView: () => void;
   /** Whether a scanned code belongs to this conversation. Verifying stays a separate act. */
   matchesSafetyCode: (accountId: string, scanned: string) => Promise<boolean>;
   claimHandle: (handle: string) => Promise<void>;
@@ -166,6 +211,8 @@ export const useApp = create<AppState>((set, get) => ({
   safetyNumber: null,
   safetyQr: null,
   pendingLink: null,
+  splitView: null,
+  auditorStatus: null,
 
   setLocale: (locale) => set({ locale, t: strings(locale) }),
 
@@ -453,6 +500,19 @@ export const useApp = create<AppState>((set, get) => ({
     return runtime.manager.matchesSafetyCode(accountId, scanned);
   },
 
+  async checkAuditors() {
+    if (!runtime?.manager) return;
+    const auditors = pinnedAuditors();
+    if (auditors.length === 0) return;
+
+    const checked = await runtime.manager.checkAuditors(auditors);
+    set({ auditorStatus: { checked, of: auditors.length, at: Date.now() } });
+  },
+
+  dismissSplitView() {
+    set({ splitView: null });
+  },
+
   async markVerified(accountId) {
     if (!runtime?.manager) return;
     await runtime.manager.markVerified(accountId);
@@ -649,10 +709,11 @@ async function startSession(
       onIdentityChange: () => {
         void get().refreshConversations();
       },
-      onSplitView: (accountId, error) => {
-        // Not routed through the ordinary error path: this is not a request
-        // that failed, it is evidence the operator is attacking someone.
-        set({ error: `${get().t.errorSplitView} (${accountId}) ${error.message}` });
+      onSplitView: (source, error) => {
+        // Its own field, deliberately. This is not a request that failed, it
+        // is evidence the operator is lying to somebody, and it must survive
+        // the next transient error rather than being replaced by it.
+        set({ splitView: { source, detail: error.message } });
       },
       onError: (error) => set({ error: describeError(error, get().t) }),
     },
@@ -674,6 +735,21 @@ async function startSession(
   // Best effort, and after the socket is up: a device that declines push still
   // receives everything while the app is open.
   void registerForPush(parts.client).catch(() => undefined);
+
+  // Auditors, once now and then on an interval. Not awaited: a slow or
+  // unreachable auditor must not hold up the app starting, and an auditor
+  // that cannot be reached is an error rather than an alarm anyway.
+  startAuditorChecks(get);
+}
+
+let auditorTimer: ReturnType<typeof setInterval> | null = null;
+
+function startAuditorChecks(get: () => AppState): void {
+  if (auditorTimer) clearInterval(auditorTimer);
+  void get().checkAuditors().catch(() => undefined);
+  auditorTimer = setInterval(() => {
+    void get().checkAuditors().catch(() => undefined);
+  }, AUDITOR_CHECK_INTERVAL_MS);
 }
 
 /**
