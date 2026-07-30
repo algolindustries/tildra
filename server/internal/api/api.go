@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -41,7 +42,20 @@ type Server struct {
 	// no proof, which the client is told rather than left to assume.
 	tlog *transparency.Log
 	log  *slog.Logger
+	// wakes counts the detached push goroutines that are still running. A
+	// process that exits without waiting drops notifications it had already
+	// decided to send, and a test that asserts a notification was *not* sent
+	// has no other way to know the decision has been made.
+	wakes sync.WaitGroup
 }
+
+// WaitForWakes blocks until every push notification triggered so far has been
+// attempted.
+//
+// `wake` registers itself before the request that triggered it is answered,
+// so a caller that has seen a response has also seen the counter rise: there
+// is no window where this returns early.
+func (s *Server) WaitForWakes() { s.wakes.Wait() }
 
 func New(
 	cfg *config.Config,
@@ -800,7 +814,11 @@ func (s *Server) deletePushToken(w http.ResponseWriter, r *http.Request) {
 // hold up the sender, who has already done their part. A failure here costs a
 // delayed notification, not a lost message — the envelope is queued either way.
 func (s *Server) wake(mailboxID string) {
+	// Counted before the goroutine starts, so the count is already up by the
+	// time this function returns to the request handler.
+	s.wakes.Add(1)
 	go func() {
+		defer s.wakes.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 

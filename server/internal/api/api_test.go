@@ -52,6 +52,7 @@ type harness struct {
 	srv      *httptest.Server
 	store    *memory.Store
 	client   *http.Client
+	api      *api.Server
 	notifier *push.Recording
 	tlog     *transparency.Log
 }
@@ -139,7 +140,7 @@ func newHarnessWith(t *testing.T, configure func(*config.Config)) *harness {
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	return &harness{
-		t: t, srv: srv, store: st, client: srv.Client(),
+		t: t, srv: srv, api: s, store: st, client: srv.Client(),
 		notifier: notifier, tlog: tlog, logs: logs,
 	}
 }
@@ -689,15 +690,11 @@ func TestPushWakesAnOfflineDevice(t *testing.T) {
 		t.Fatalf("send: status %d", resp.StatusCode)
 	}
 
-	// The wake runs detached from the request, so give it a moment.
-	deadline := time.Now().Add(3 * time.Second)
-	var sent []model.PushToken
-	for time.Now().Before(deadline) {
-		if sent = h.notifier.Sent(); len(sent) > 0 {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	// The wake runs detached from the request. Waiting for it is exact; the
+	// polling deadline this replaces turned a slow machine into a failure
+	// that read as "no notification was sent".
+	h.api.WaitForWakes()
+	sent := h.notifier.Sent()
 
 	if len(sent) != 1 {
 		t.Fatalf("sent %d notifications, want 1", len(sent))
@@ -724,7 +721,11 @@ func TestNoPushWithoutARegisteredToken(t *testing.T) {
 	h.do(http.MethodPost, "/v1/messages", alice.token, map[string]any{
 		"mailbox": mailbox, "ciphertext": []byte("sealed"),
 	})
-	time.Sleep(300 * time.Millisecond)
+	// This asserts an absence, so it needs a moment it can prove has passed.
+	// A fixed sleep cannot: on a machine slow enough that the wake had not
+	// run yet, "nothing was sent" was true because nothing had happened at
+	// all, and the test passed while measuring nothing.
+	h.api.WaitForWakes()
 
 	if sent := h.notifier.Sent(); len(sent) != 0 {
 		t.Errorf("sent %d notifications for a device with no token", len(sent))

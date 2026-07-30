@@ -194,6 +194,23 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **A test that asserts an absence needs a moment it can prove has passed.**
+  `TestNoPushWithoutARegisteredToken` sent a message to a device with no push
+  token, slept 300 milliseconds, and checked that no notification had gone
+  out. The wake runs detached from the request, so on a machine slow enough
+  that it had not run yet, "nothing was sent" was true because nothing had
+  happened at all — the test passed while measuring nothing.
+
+  `Server.WaitForWakes` is the synchronisation point it was missing. The
+  counter is raised inside `wake`, synchronously, before the request that
+  triggered it is answered, so a caller holding a response has already seen it
+  rise and there is no window where the wait returns early. The positive test
+  uses it too, and no longer polls a three-second deadline.
+
+  Demonstrated rather than argued: with the server broken to notify a device
+  that has no token *and* the wake delayed by a second and a half, the old
+  sleeping test passes and the waiting one fails.
+
 - **A test fixture shortened a product timer, and it broke fifteen other
   tests.** `SessionManager` gives up on a call nobody answers after
   `CALL_RINGING_TIMEOUT_MS`, 45 seconds. One test asserts that, and rather
