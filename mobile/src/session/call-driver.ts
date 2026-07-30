@@ -34,6 +34,9 @@ import {
   IceTransportPolicy,
 } from '../crypto/calling';
 
+// Re-exported so an adapter implementing `PeerConnection` has one import.
+export type { IceConfiguration } from '../crypto/calling';
+
 export class CallDriverError extends Error {}
 
 /** The part of a peer connection this driver uses. */

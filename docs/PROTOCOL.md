@@ -645,6 +645,13 @@ user accepts an incoming call the widened policy has to be applied to the
 *live* connection with an ICE restart; setting the configuration alone does
 not go back for the candidates that were skipped while relay-only.
 
+**Renegotiation is not implemented.** Widening the policy on a live
+connection needs an ICE restart, and an ICE restart changes the ICE ufrag and
+pwd, which strictly requires a fresh offer/answer exchange. The client asks the
+agent to restart but does not renegotiate, so today the address policy is held
+by the signalling filters described above rather than by the ICE agent as well.
+The guarantee stands; the redundancy under it does not yet.
+
 **Calls are not persisted.** A call that outlives the process is not a call; it
 is a row that would ring a phone about something that stopped happening when
 the app was killed.

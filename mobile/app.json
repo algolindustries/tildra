@@ -27,8 +27,15 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Tildra uses the camera only to read a linking or verification code off another screen. Nothing is recorded or uploaded.",
+          "cameraPermission": "Tildra uses the camera to read a linking or verification code off another screen, and for video calls. Nothing is recorded or uploaded.",
           "recordAudioAndroid": false
+        }
+      ],
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "Tildra uses the camera to read a linking or verification code off another screen, and for video calls. Nothing is recorded or uploaded.",
+          "microphonePermission": "Tildra uses the microphone for calls and voice messages."
         }
       ]
     ]

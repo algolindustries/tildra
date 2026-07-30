@@ -114,6 +114,11 @@ jobs:
       - name: Native projects generate identically
         run: ./scripts/reproduce-native.sh all
         working-directory: mobile
+      # A config plugin that stops applying leaves a project that compiles,
+      # installs, and then denies the camera when somebody answers a call.
+      - name: Native config has what the code depends on
+        run: ./scripts/check-native-config.sh
+        working-directory: mobile
 
   staticcheck:
     name: staticcheck

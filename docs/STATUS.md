@@ -32,6 +32,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Reproducible builds for the Go server and `tildra-auditor`, checked in CI | done |
 | Reproducible app JavaScript bundle including Hermes bytecode, iOS and Android, checked in CI | done |
 | Native iOS and Android projects generate identically from the same source, checked in CI | done |
+| `react-native-webrtc` and its config plugin, with the generated native permissions and usage strings asserted in CI | done |
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
@@ -63,20 +64,35 @@ knowing before trusting a UI change.
   accepts. It runs against an interface, so it is tested against a fake peer
   connection rather than not at all.
 
-  What does not exist: **`react-native-webrtc` and the adapter that would
-  implement `PeerConnection` against it**, a call UI, and a deployed coturn.
-  Nothing calls `CallDriver.place` yet.
+  `session/webrtc-peer.ts` implements `PeerConnection` against
+  `react-native-webrtc`. The plugin blocker turned out to be a stale
+  declaration rather than a real incompatibility:
+  `@config-plugins/react-native-webrtc@15.0.1` says `expo: ^56` and has no SDK
+  57 release, but it uses only long-standing `expo/config-plugins` helpers.
+  It is installed with an npm `overrides` entry so `npm ci` needs no flags,
+  and — the part that makes this a decision rather than a hope —
+  `scripts/check-native-config.sh` runs `expo prebuild` in CI and asserts every
+  Android permission and both iOS usage strings are actually in the generated
+  project. Verified it bites by removing the plugin and watching four
+  permissions disappear.
 
-  This one is blocked on something outside the repo, not deferred:
-  `@config-plugins/react-native-webrtc` is at 15.0.1 and still declares
-  `expo: ^56`, with no SDK 57 release. `react-native-webrtc` itself has no Expo
-  constraint, but without the config plugin the native side — iOS deployment
-  target, camera and microphone entitlements, Gradle wiring — is unconfigured,
-  so adding the dependency would produce something that typechecks and bundles
-  and does not run. That is the exact failure mode this project has been bitten
-  by before. **No media has ever flowed** — every
-  test in this area drives a double. Nothing here should be read as "calls
-  work".
+  What does not exist:
+
+  - **A call UI.** Nothing imports `webrtc-peer.ts` and nothing calls
+    `CallDriver.place`, so the adapter is not even in the JavaScript bundle —
+    its hash did not change when the dependency was added.
+  - **A deployed coturn.**
+  - **Renegotiation.** `setConfiguration` widens the policy and calls
+    `restartIce()`, but an ICE restart changes the ufrag and pwd and strictly
+    needs a fresh offer/answer, which `CallDriver` does not model. Until it
+    does, what actually holds the address policy is the send and receive
+    filters in `SessionManager`, not the ICE agent. The property is kept; the
+    second layer under it is not yet.
+
+  **No media has ever flowed.** Every test in this area drives a double, and
+  nothing here should be read as "calls work". What the CI checks establish is
+  that the native project a build would come from is configured the way the
+  code expects — not that the resulting app works.
 
   One thing for whoever writes the adapter: `setConfiguration` must trigger an
   ICE restart when the policy widens from `relay` to `all`.
@@ -135,6 +151,10 @@ knowing before trusting a UI change.
   is only rendered while the app is failing to start, so it was never shown at
   all. Before writing "done", find the entry point a user would actually press
   and the pixel they would actually see.
+- **A dependency that typechecks and bundles can still be unconfigured
+  natively.** `expo prebuild` is cheap to run and its output can be asserted,
+  which is the difference between adding a native module on faith and adding
+  one with a regression test. `scripts/check-native-config.sh` is that test.
 - **The camera is an input the attacker controls.** Everything scanned goes
   through `crypto/scan.ts`, which decides what kind of code it is, refuses the
   wrong kind by name, and validates the server address inside a link code

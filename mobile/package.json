@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
+    "@config-plugins/react-native-webrtc": "^15.0.1",
     "@noble/ciphers": "^2.2.0",
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
@@ -30,6 +31,7 @@
     "react-native-safe-area-context": "^5.8.0",
     "react-native-screens": "^4.26.2",
     "react-native-svg": "15.15.4",
+    "react-native-webrtc": "^124.0.8",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
@@ -50,7 +52,13 @@
     "bundle": "expo export --platform ios --output-dir .expo-export",
     "bundle:release": "scripts/bundle.sh dist",
     "reproduce": "scripts/reproduce.sh",
-    "reproduce:native": "scripts/reproduce-native.sh"
+    "reproduce:native": "scripts/reproduce-native.sh",
+    "check:native": "scripts/check-native-config.sh"
   },
-  "private": true
+  "private": true,
+  "overrides": {
+    "@config-plugins/react-native-webrtc": {
+      "expo": "$expo"
+    }
+  }
 }
