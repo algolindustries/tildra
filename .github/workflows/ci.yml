@@ -87,6 +87,28 @@ jobs:
         run: ./scripts/reproduce.sh linux arm64
         working-directory: server
 
+  # The JavaScript bundle is where all the cryptography actually lives, so it
+  # is the half of the app most worth being able to check against the source.
+  # The native shell still cannot be — docs/REPRODUCIBLE_BUILDS.md says so.
+  reproducible-bundle:
+    name: Reproducible app bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+        working-directory: mobile
+      - name: Build twice from different paths and compare
+        run: ./scripts/reproduce.sh ios
+        working-directory: mobile
+      - name: Same, for Android
+        run: ./scripts/reproduce.sh android
+        working-directory: mobile
+
   staticcheck:
     name: staticcheck
     runs-on: ubuntu-latest

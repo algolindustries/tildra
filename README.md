@@ -51,7 +51,7 @@ that doesn't feel like homework) and rebuilds the parts that aren't.
 | Sealed sender (server can't see who sent what) | ❌ | ✅ | ✅ |
 | Key transparency log | ❌ | ⚠️ in progress | ✅ proofs verified per lookup |
 | Message retention on server | ♾️ indefinite | until delivered | until delivered, hard TTL |
-| Reproducible builds | ⚠️ partial | ✅ | ⚠️ server and auditor yes, **app not yet** |
+| Reproducible builds | ⚠️ partial | ✅ | ⚠️ server, auditor and the app's JS bundle; native shell not yet |
 
 ## Not anonymous — private
 
@@ -105,7 +105,7 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 | Key transparency for the handle directory | ✅ log, proofs verified by the client |
 | Gossip between contacts for split-view detection | ✅ |
 | Independent log auditor (`tildra-auditor`) | ✅ tool shipped, no public instance |
-| Reproducible builds | ⚠️ server and `tildra-auditor`, checked in CI; app not yet |
+| Reproducible builds | ⚠️ server, auditor and the app's JS bundle (Hermes included), checked in CI; native shell not yet |
 | Independent security audit | ⬜ **not yet** |
 
 Current state, in detail: [`docs/STATUS.md`](docs/STATUS.md) — what works, what

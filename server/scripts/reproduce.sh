@@ -43,8 +43,12 @@ COPY_B="$WORK/b-considerably-longer-path/nested/deeper/server"
 
 for dest in "$COPY_A" "$COPY_B"; do
   mkdir -p "$dest"
-  # Copy the module, not the build outputs. `bin/` is what we are producing.
-  (cd "$SERVER_DIR" && tar --exclude=./bin --exclude=./scripts/out -cf - .) | (cd "$dest" && tar -xf -)
+  # Copied whole and pruned afterwards. BSD tar matches an exclude pattern
+  # against trailing path components, so `--exclude=./bin` would also remove
+  # any nested `bin/`. There is none in this module today, which is precisely
+  # why it would be a silent problem the day there is one.
+  (cd "$SERVER_DIR" && tar -cf - .) | (cd "$dest" && tar -xf -)
+  rm -rf "$dest/bin"
 done
 
 hash_of() {

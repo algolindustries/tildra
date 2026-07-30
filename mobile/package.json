@@ -47,7 +47,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:vectors": "vitest run src/crypto",
-    "bundle": "expo export --platform ios --output-dir .expo-export"
+    "bundle": "expo export --platform ios --output-dir .expo-export",
+    "bundle:release": "scripts/bundle.sh dist",
+    "reproduce": "scripts/reproduce.sh"
   },
   "private": true
 }

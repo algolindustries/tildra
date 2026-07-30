@@ -28,6 +28,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Call signalling: SDP hardening, DTLS fingerprint bound to the identity key, ICE address policy, call state machine | done |
 | Call signalling carried end to end through `SessionManager`: ring all devices, first answer wins, busy, hangup | done |
 | Reproducible builds for the Go server and `tildra-auditor`, checked in CI | done |
+| Reproducible app JavaScript bundle including Hermes bytecode, iOS and Android, checked in CI | done |
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
@@ -61,7 +62,16 @@ knowing before trusting a UI change.
 
   What does not exist: **`react-native-webrtc` and the adapter that would
   implement `PeerConnection` against it**, a call UI, and a deployed coturn.
-  Nothing calls `CallDriver.place` yet. **No media has ever flowed** — every
+  Nothing calls `CallDriver.place` yet.
+
+  This one is blocked on something outside the repo, not deferred:
+  `@config-plugins/react-native-webrtc` is at 15.0.1 and still declares
+  `expo: ^56`, with no SDK 57 release. `react-native-webrtc` itself has no Expo
+  constraint, but without the config plugin the native side — iOS deployment
+  target, camera and microphone entitlements, Gradle wiring — is unconfigured,
+  so adding the dependency would produce something that typechecks and bundles
+  and does not run. That is the exact failure mode this project has been bitten
+  by before. **No media has ever flowed** — every
   test in this area drives a double. Nothing here should be read as "calls
   work".
 
@@ -75,11 +85,10 @@ knowing before trusting a UI change.
   not been reviewed by anyone outside this work, and nothing should carry real
   traffic until it has.
 - **A public auditor instance.** The tool ships; nobody operates one.
-- **Reproducible builds for the mobile app.** The Go server and
-  `tildra-auditor` now build reproducibly and CI checks it on every push, host
-  target and cross-compiled. The app does not: Expo release builds pull in the
-  Android SDK/NDK, Gradle and Hermes, and making that byte-identical is
-  unstarted work. This is the half that matters for most users. See
+- **Reproducible builds for the app's native shell.** The server, the auditor
+  and the app's JavaScript bundle — Hermes bytecode included — all reproduce,
+  checked in CI. The `.ipa` and `.aab` do not: that is Xcode and Gradle with
+  the Android SDK/NDK involved, and it is unstarted. See
   `docs/REPRODUCIBLE_BUILDS.md`.
 
 ## Needs a human, not code
