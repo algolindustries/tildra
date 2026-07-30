@@ -181,120 +181,32 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
-- **Three call tests fail on this developer machine and pass on CI, and it is
-  not established that anything is wrong with the product.** They are
-  `withholds a direct address until the call is answered`, `tells a second
-  caller the line is busy`, and `ends the call on both sides when one side
-  hangs up`.
+- **Three call tests fail on this developer machine, pass on CI, and nothing
+  found so far points at the product.** They are `withholds a direct address
+  until the call is answered`, `tells a second caller the line is busy`, and
+  `ends the call on both sides when one side hangs up`.
 
-  Four structural explanations were probed on runs that then failed, and all
-  four are ruled out. The addressing agrees byte for byte — the callee targets
-  exactly the mailbox in the caller's listening set. Both sockets report
-  `open`. A subscription issued before the socket opens is not lost;
-  `TildraSocket.subscribe` adds to a set that `onopen` replays. And an
-  envelope is always enqueued before live delivery is attempted, so a dropped
-  live push leaves it in the queue, and `Serve` drains every registered
-  mailbox on connect.
+  Four explanations were probed on runs that then failed, and all four are
+  ruled out. The addressing agrees byte for byte — the callee targets exactly
+  the mailbox in the caller's listening set. Both sockets report `open`. A
+  subscription issued before the socket opens is not lost; `TildraSocket.
+  subscribe` adds to a set that `onopen` replays. And an envelope is enqueued
+  before live delivery is attempted, so a dropped live push stays in the queue
+  and `Serve` — handed `MailboxesFor(account, device)` — drains every
+  registered mailbox on connect. The `if c.owns(mb) { continue }` skip in
+  `Hub.subscribe` therefore cannot strand anything either.
 
   What correlates is load. This machine runs a local model server, a VM and
-  several other things; the load average sits between two and seven, and
-  individual integration tests that normally take two seconds take forty. In
-  the quietest window available the failing test passed five runs out of five.
+  other work; its load average sits between two and seven, and integration
+  tests that normally take two seconds take forty. In the quietest window
+  available, the failing test passed five runs out of five.
 
   Two earlier commits called this "a delivery defect rather than a test
-  defect". That was more than the evidence supported and this note replaces
+  defect". That was more than the evidence supported, and this note replaces
   it. What is fair to say: the integration suite is sensitive to a busy
-  machine, the sensitivity is not understood, and nothing found so far points
-  at the product. Anyone who reproduces it on an idle machine has found
-  something real — that would be worth knowing.
-
-## Needs a human, not code
-
-- A domain. `tildra.chat` and `tildra.dev` were both free when the name was
-  chosen; neither is registered.
-- A server deployment. The app defaults to `https://api.tildra.chat`, which does
-  not exist. Point it elsewhere with `EXPO_PUBLIC_TILDRA_SERVER`.
-- Apple and Google developer accounts for store builds.
-- Someone to run `tildra-auditor` who is not the operator.
-
-## Things worth knowing before changing anything
-
-- **The store conformance suite fails rather than skips in CI.** If you add a
-  method to `store.Store`, add it to the suite too, or Postgres and memory are
-  free to drift.
-- **The client tests build and run the actual Go server.** Twice now, unit tests
-  on both sides passed while real delivery was completely broken. Anything that
-  claims two components agree is tested by making them agree.
-- **`expo-file-system`'s top-level read/write functions throw at runtime.** All
-  media modules use `expo-file-system/legacy`. Typecheck does not catch this
-  because the deprecated stubs are still declared.
-- **Go and TypeScript both implement the Merkle log.** They are kept honest by a
-  cross-language test where Go produces proofs and TypeScript verifies them, not
-  by reading both files.
-- **Run the Go suite with `-race`.** A data race in a test double slipped through
-  once because it was run without.
-- **`docs/THREAT_MODEL.md` lists what Tildra does not defend against.** If a
-  change would move something off that list, or onto it, the doc changes in the
-  same commit.
-- **Published key material must reach disk before it is published.** The
-  top-up generated a hundred one-time secrets, published their public halves,
-  and stored nothing; after a restart the server handed out keys the device no
-  longer held. Anything that changes `PreKeySecrets` goes through
-  `onPreKeysChanged`. The serialisation lives in `storage/prekeys.ts` rather
-  than in `state/app.ts` so it can be tested at all.
-- **A test that holds a live object is not testing persistence.** The first
-  version of the test above kept a reference to the secrets and passed with the
-  persistence call deleted, because the top-up mutates the same maps in place.
-  It serialises on the way in now. Run the negative control.
-- **The unlinkability claim now has tests.** `deriveMailboxSecret` and
-  `contactInbox` carry what `docs/PROTOCOL.md` §5.1 promises — that the
-  contact inbox is a one-event leak per conversation and everything after it
-  is unlinkable — and neither had a test.
-- **The integration suites take a port from the OS.** They used fixed ones,
-  and a killed run leaves `tildrad` behind — `afterAll` does not run when
-  vitest is killed — so the orphan held the port and the next run's tests
-  quietly talked to a stale server. Asking the OS removes the failure mode
-  instead of documenting it.
-- **`waitFor` throws on timeout, and says what it was waiting for.** It used
-  to return silently, which is the worst of both worlds: a test whose
-  assertion happened to hold anyway passed while measuring nothing, and one
-  whose assertion then failed reported a value mismatch that reads as a logic
-  bug rather than "the reply never came". Making it throw immediately
-  revealed three call tests that had been passing on a wait that never
-  completed.
-- **An open defect, narrowed but not found.** Three call tests fail on a
-  developer machine and pass on CI: `withholds a direct address until the call
-  is answered`, `tells a second caller the line is busy`, and `ends the call on
-  both sides when one side hangs up`. All three fail the same way, and it is
-  not a slow machine — thirty seconds is not enough, and the tests around them
-  complete in two.
-
-  What is known. The caller places a call, the callee answers, and the answer
-  never arrives. **Neither side reports an error**: the callee's send
-  succeeded, the server accepted the envelope, and the caller's manager never
-  raises a decryption or verification failure. So an envelope is accepted for a
-  mailbox the recipient has registered and subscribed to, and is not delivered.
-  The gateway does drain a mailbox's backlog both on connect and on subscribe,
-  and `publishMailboxes` registers with the server before telling the socket,
-  so the obvious ordering bug is not it.
-
-  That is a delivery defect rather than a test defect, and a fast machine
-  hiding it is not the same as it not being there.
-
-  Narrowed further, by probing a failing run rather than reasoning about it.
-  Ruled out: the addressing (the callee targets exactly the mailbox in the
-  caller's listening set, checked byte for byte in a run that then failed);
-  the socket being down (both report `open` at the moment of failure); a
-  subscription issued before the socket opens (`TildraSocket.subscribe` adds
-  to a set that `onopen` replays); and the hub dropping envelopes under load
-  (a slow consumer has its socket closed and the envelope stays queued).
-
-  The remaining lead is in `Hub.subscribe`: `if c.owns(mb) { continue }` skips
-  an already-owned mailbox, which also excludes it from the `drain` that
-  follows — so a repeat subscribe never re-reads that mailbox's backlog.
-  Whether that can strand an envelope depends on what `Serve` is handed as its
-  connect-time mailbox list, which is the next thing to read. The failure rate
-  in isolation is about one run in three.
+  machine, the sensitivity is not understood, and it is not established that
+  anything is wrong with the product. Anyone who reproduces it on an idle
+  machine has found something real — that would be worth knowing.
 - **A bound with no test is a number in a file.** `MAX_SKIP`,
   `MAX_SKIPPED_KEYS` and `SKIPPED_KEY_TTL_MS` had been there from the start,
   are quoted in `docs/PROTOCOL.md` §3 as what bounds a device compromise, and
