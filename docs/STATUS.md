@@ -198,9 +198,22 @@ knowing before trusting a UI change.
   so the obvious ordering bug is not it.
 
   That is a delivery defect rather than a test defect, and a fast machine
-  hiding it is not the same as it not being there. Whoever picks this up:
-  start by logging on the server side which mailbox the answer was queued
-  against and which ones the caller's connection is subscribed to.
+  hiding it is not the same as it not being there.
+
+  Narrowed further, by probing a failing run rather than reasoning about it.
+  Ruled out: the addressing (the callee targets exactly the mailbox in the
+  caller's listening set, checked byte for byte in a run that then failed);
+  the socket being down (both report `open` at the moment of failure); a
+  subscription issued before the socket opens (`TildraSocket.subscribe` adds
+  to a set that `onopen` replays); and the hub dropping envelopes under load
+  (a slow consumer has its socket closed and the envelope stays queued).
+
+  The remaining lead is in `Hub.subscribe`: `if c.owns(mb) { continue }` skips
+  an already-owned mailbox, which also excludes it from the `drain` that
+  follows — so a repeat subscribe never re-reads that mailbox's backlog.
+  Whether that can strand an envelope depends on what `Serve` is handed as its
+  connect-time mailbox list, which is the next thing to read. The failure rate
+  in isolation is about one run in three.
 - **A bound with no test is a number in a file.** `MAX_SKIP`,
   `MAX_SKIPPED_KEYS` and `SKIPPED_KEY_TTL_MS` had been there from the start,
   are quoted in `docs/PROTOCOL.md` §3 as what bounds a device compromise, and
