@@ -1,4 +1,4 @@
-.PHONY: dev build test test-postgres postgres-up postgres-down lint fmt tidy clean
+.PHONY: dev build release reproduce test test-postgres postgres-up postgres-down lint fmt tidy clean
 
 BIN := bin/tildrad
 PG_CONTAINER := tildra-pg
@@ -11,6 +11,20 @@ dev:
 build:
 	go build -trimpath -ldflags="-s -w" -o $(BIN) ./cmd/tildrad
 	go build -trimpath -ldflags="-s -w" -o bin/tildra-auditor ./cmd/tildra-auditor
+
+# The exact flags a published binary is built with. Anyone can run this and
+# compare hashes against a release — see docs/REPRODUCIBLE_BUILDS.md. `build`
+# above is for development and is deliberately not the same command; use this
+# one for anything anybody else will run.
+release:
+	CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" \
+		-o $(BIN) ./cmd/tildrad
+	CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" \
+		-o bin/tildra-auditor ./cmd/tildra-auditor
+
+# Build twice from two different source paths and fail unless the bytes match.
+reproduce:
+	./scripts/reproduce.sh
 
 test:
 	go test -race -count=1 ./...

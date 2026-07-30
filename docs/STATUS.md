@@ -26,6 +26,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Device linking: commitment over a camera + six-digit pairing code | done |
 | Call signalling: SDP hardening, DTLS fingerprint bound to the identity key, ICE address policy, call state machine | done |
 | Call signalling carried end to end through `SessionManager`: ring all devices, first answer wins, busy, hangup | done |
+| Reproducible builds for the Go server and `tildra-auditor`, checked in CI | done |
 
 Counts at time of writing: 310 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
@@ -56,7 +57,12 @@ store implementations passing the same conformance suite, Metro bundle builds.
 - **QR scanning for device links.** Codes are pasted. The security property is
   identical — what matters is the code crossing between two screens the user can
   see — but scanning is what people expect.
-- **Reproducible builds.** Listed as a goal in the README, not achieved.
+- **Reproducible builds for the mobile app.** The Go server and
+  `tildra-auditor` now build reproducibly and CI checks it on every push, host
+  target and cross-compiled. The app does not: Expo release builds pull in the
+  Android SDK/NDK, Gradle and Hermes, and making that byte-identical is
+  unstarted work. This is the half that matters for most users. See
+  `docs/REPRODUCIBLE_BUILDS.md`.
 
 ## Needs a human, not code
 

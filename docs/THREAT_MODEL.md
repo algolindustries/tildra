@@ -153,9 +153,12 @@ isn't there:
   deployment can force relay for the whole call at the cost of routing all
   media through its TURN server, but the default after you pick up is that the
   person you are talking to can see where you are.
-- **Malicious client builds.** Reproducible builds are a project goal, tracked in
-  CI, not yet achieved. Until then, "open source" means auditable source, not
-  verified binaries.
+- **Malicious client builds.** The Go server and `tildra-auditor` build
+  reproducibly and CI proves it on every push, so a self-hoster and — more to
+  the point — anyone running an auditor can check the binary against the
+  source. **The mobile app does not.** That is the gap that matters for most
+  users: an installed Tildra app is still something you trust the publisher
+  for. See [`docs/REPRODUCIBLE_BUILDS.md`](REPRODUCIBLE_BUILDS.md).
 - **Legal compulsion of the operator.** We defend by not having the data — but a
   compelled operator can still be forced to log connection timing going forward,
   or to serve a modified client. This is a structural limit of any centralised

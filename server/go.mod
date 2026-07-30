@@ -2,6 +2,11 @@ module github.com/tildra/tildra/server
 
 go 1.25.0
 
+// Pinned exactly, not as a floor. A newer patch release produces a
+// different binary, which is the difference between a reproducible build and
+// a build that happens to match today. See docs/REPRODUCIBLE_BUILDS.md.
+toolchain go1.25.3
+
 require (
 	github.com/coder/websocket v1.8.12
 	github.com/jackc/pgx/v5 v5.10.0
