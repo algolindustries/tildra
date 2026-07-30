@@ -42,9 +42,10 @@ tested by running the real Go server and pushing real traffic through it.
 | Socket lifecycle: close, reconnect, backoff, subscription replay and ack durability, against a fake WebSocket | done |
 | Text the server chooses is attributed, stripped of reordering characters and bounded before it reaches a banner | done |
 | The error funnel: every failure's user-facing sentence, over both locales, with the identity codec's length check | done |
+| Startup: the offline paths of `bootstrap`, including damaged storage and an unavailable keystore | done |
 | Media adapter logic: ICE restart on widening, candidate filtering, connection-state mapping, teardown order — against a double of `react-native-webrtc`, not a device | done |
 
-Counts at time of writing: 552 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 563 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -197,6 +198,35 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **`state/app.ts` is testable after all, and the reason it looked otherwise
+  was two imports.** It reaches `react-native` transitively, which vitest
+  cannot parse — but only through `expo-secure-store` and `expo-sqlite`, and
+  nothing else in its graph is native. Replacing those two is enough to import
+  the store and drive it.
+
+  So `bootstrap` now has tests, which matters because the file's own header
+  says the ordering is not incidental. Eleven of them, over the paths that do
+  not reach the network: a fresh device stopping at onboarding with the vault
+  and database it will need seconds later, credentials without an identity,
+  an identity blob of the wrong length, an identity that will not decrypt,
+  missing prekeys, a keystore that throws, a device with no secure storage at
+  all, and the locale being applied before the first thing that can fail —
+  because the error a failed startup shows has to be in the user's language.
+
+  The worst outcome for startup is not an error screen, it is a spinner:
+  nothing times out a bootstrap, so a phase left at `starting` is permanent.
+  Two tests exist for that alone.
+
+  Everything except the database is real — a real vault, a real master key, a
+  real identity, real decryption. Seven deliberate breakages; the one that
+  stayed green was mine, not the code's: "keeps what onboarding will need"
+  asserted that a runtime object existed and nothing about what was in it, so
+  nulling the database sailed through. It checks the vault and the database
+  by capability now.
+
+  Still untested: everything in that file that reaches the network, which is
+  most of it.
+
 - **The fix for that was incomplete, and the audit caught it rather than a
   user.** `ApiError.detail` was attributed; the socket's error frame was not.
   `frame.error` is also the server's text, and it was wrapped in a plain
