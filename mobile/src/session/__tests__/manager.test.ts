@@ -18,6 +18,17 @@ import { IdentityChangedError, SessionManager } from '../manager';
 import { MemorySessionStore } from './memory-store';
 import { generateIdentity, generatePreKeys } from '../../crypto/identity';
 import { equal, fromUtf8, randomBytes, toBase64, utf8 } from '../../crypto/primitives';
+import {
+  CallSession,
+  CallSignal,
+  CallSignalKind,
+  encodeCallSignal,
+  sdpFingerprint,
+  signCallSdp,
+} from '../../crypto/calling';
+import { callSignalContent, encodeContent } from '../../crypto/content';
+import { encrypt } from '../../crypto/ratchet';
+import { sealEnvelope } from '../../crypto/sealed';
 
 const SERVER_DIR = join(__dirname, '../../../../server');
 const PORT = 8792;
@@ -61,6 +72,10 @@ interface Device {
   received: string[];
   errors: Error[];
   groupReceived: { groupId: string; text: string }[];
+  incomingCalls: { call: CallSession; sdp: string }[];
+  answers: { call: CallSession; sdp: string }[];
+  candidates: string[];
+  callChanges: CallSession[];
   member: () => { accountId: string; deviceId: string };
 }
 
@@ -77,6 +92,10 @@ async function bringUp(name: string): Promise<Device> {
   const received: string[] = [];
   const groupReceived: { groupId: string; text: string }[] = [];
   const errors: Error[] = [];
+  const incomingCalls: { call: CallSession; sdp: string }[] = [];
+  const answers: { call: CallSession; sdp: string }[] = [];
+  const candidates: string[] = [];
+  const callChanges: CallSession[] = [];
 
   // The socket is created first so the manager can hand it new mailboxes as
   // sessions appear — the wiring the real app uses.
@@ -94,6 +113,10 @@ async function bringUp(name: string): Promise<Device> {
     events: {
       onMessage: (message) => received.push(message.text),
       onGroupMessage: (groupId, message) => groupReceived.push({ groupId, text: message.text }),
+      onIncomingCall: (call, sdp) => incomingCalls.push({ call, sdp }),
+      onCallAnswer: (call, sdp) => answers.push({ call, sdp }),
+      onCallCandidate: (_call, candidate) => candidates.push(candidate),
+      onCallChange: (call) => callChanges.push(call),
       onError: (error) => errors.push(error),
     },
   });
@@ -119,6 +142,10 @@ async function bringUp(name: string): Promise<Device> {
     received,
     errors,
     groupReceived,
+    incomingCalls,
+    answers,
+    candidates,
+    callChanges,
     member: () => ({ accountId, deviceId }),
   };
 }
@@ -764,4 +791,371 @@ describeIntegration('encrypted groups', () => {
     expect(stored?.members.length).toBe(3);
     g.close();
   }, 90_000);
+});
+
+// ---------------------------------------------------------------------------
+// Calls
+// ---------------------------------------------------------------------------
+
+/** An SDP with a distinct fingerprint per seed, so sides are distinguishable. */
+function callSdp(seed: number): string {
+  const bytes: string[] = [];
+  for (let i = 0; i < 32; i++) {
+    bytes.push(((i * 11 + seed * 41) % 256).toString(16).padStart(2, '0').toUpperCase());
+  }
+  return [
+    'v=0',
+    'o=- 1 2 IN IP4 127.0.0.1',
+    's=-',
+    't=0 0',
+    'm=audio 9 UDP/TLS/RTP/SAVPF 111',
+    'c=IN IP4 0.0.0.0',
+    'a=setup:actpass',
+    `a=fingerprint:sha-256 ${bytes.join(':')}`,
+    '',
+  ].join('\r\n');
+}
+
+const HOST_CANDIDATE = 'candidate:1 1 UDP 2130706431 192.168.1.42 54321 typ host';
+const RELAY_CANDIDATE = 'candidate:4 1 UDP 41885439 203.0.113.9 54324 typ relay';
+
+/**
+ * Hand a device an envelope directly, bypassing the socket.
+ *
+ * Used only for the offers a *malicious client* would send — ones this
+ * codebase deliberately cannot produce, because `placeCall` signs the
+ * fingerprint it is actually sending. The crypto is real: a real session, a
+ * real ratchet step, a real sealed envelope. What is skipped is the network
+ * hop, which has nothing to do with what these tests assert.
+ */
+async function injectSignal(from: Device, to: Device, signal: CallSignal): Promise<void> {
+  const session = await from.store.loadSession(to.accountId, to.deviceId);
+  if (!session) throw new Error('no session to inject over');
+
+  const message = encrypt(
+    session.ratchet,
+    encodeContent(callSignalContent(encodeCallSignal(signal))),
+    session.associatedData,
+  );
+  await from.store.saveSession(session);
+
+  const ciphertext = sealEnvelope(to.identity.publicKey, {
+    senderAccountId: from.accountId,
+    senderDeviceId: from.deviceId,
+    senderIdentityKey: from.identity.publicKey,
+    sessionInit: session.confirmed ? undefined : session.pendingInit,
+    message,
+  });
+
+  await to.manager.receiveEnvelope({
+    id: toBase64(randomBytes(12)),
+    mailbox: 'direct',
+    ciphertext,
+    serverTs: new Date().toISOString(),
+  });
+}
+
+describeIntegration('calls', () => {
+  it('rings the other side and pins the media to the caller fingerprint', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) });
+    await waitFor(() => bob.incomingCalls.length > 0);
+
+    expect(bob.incomingCalls).toHaveLength(1);
+    const [ring] = bob.incomingCalls;
+    expect(ring.call.direction).toBe('incoming');
+    expect(ring.call.phase).toBe('ringing');
+    expect(ring.call.peerAccountId).toBe(alice.accountId);
+    expect(ring.call.peerDeviceId).toBe(alice.deviceId);
+    // The fingerprint Bob will pin the DTLS handshake to is the one in the SDP
+    // Alice actually sent, not a value carried alongside it.
+    expect(ring.call.peerFingerprint).toEqual(sdpFingerprint(callSdp(1)));
+    expect(ring.sdp).toBe(callSdp(1));
+    expect([...alice.errors, ...bob.errors]).toEqual([]);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
+  it('completes an offer and answer between two real devices', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    const placed = await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1), video: true });
+    await waitFor(() => bob.incomingCalls.length > 0);
+    expect(bob.incomingCalls[0].call.video).toBe(true);
+
+    await bob.manager.answerCall(placed.callId, callSdp(2));
+    await waitFor(() => alice.answers.length > 0);
+
+    expect(alice.answers[0].sdp).toBe(callSdp(2));
+    // Each side ends up pinned to the other's fingerprint, and neither to its
+    // own — the check that would fail if the binding were self-referential.
+    expect(alice.manager.currentCall()?.peerFingerprint).toEqual(sdpFingerprint(callSdp(2)));
+    expect(bob.manager.currentCall()?.peerFingerprint).toEqual(sdpFingerprint(callSdp(1)));
+    expect(alice.manager.currentCall()?.phase).toBe('connecting');
+    expect(bob.manager.currentCall()?.phase).toBe('connecting');
+    expect(alice.manager.currentCall()?.peerDeviceId).toBe(bob.deviceId);
+    expect([...alice.errors, ...bob.errors]).toEqual([]);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
+  it('does not ring for an offer whose fingerprint is not the one signed', async () => {
+    // The attack the binding exists for, arriving from a client that lies. The
+    // phone must stay silent: a user who answers believes the call is private.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.sendMessage(bob.accountId, 'kuruyorum');
+    await waitFor(() => bob.received.length > 0);
+
+    const honest = signCallSdp(alice.identity, {
+      kind: CallSignalKind.Offer,
+      callId: 'call-tampered1',
+      sdp: callSdp(1),
+      fromAccountId: alice.accountId,
+      toAccountId: bob.accountId,
+    });
+    await injectSignal(alice, bob, { ...honest, body: callSdp(9) });
+
+    expect(bob.incomingCalls).toEqual([]);
+    expect(bob.manager.currentCall()).toBeNull();
+    expect(bob.errors.map((e) => e.message).join('\n')).toMatch(/not signed by the identity key/);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
+  it('does not ring for an offer signed by someone other than the caller', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.sendMessage(bob.accountId, 'kuruyorum');
+    await waitFor(() => bob.received.length > 0);
+
+    const mallory = generateIdentity();
+    const forged = signCallSdp(mallory, {
+      kind: CallSignalKind.Offer,
+      callId: 'call-forged123',
+      sdp: callSdp(3),
+      fromAccountId: alice.accountId,
+      toAccountId: bob.accountId,
+    });
+    await injectSignal(alice, bob, forged);
+
+    expect(bob.incomingCalls).toEqual([]);
+    expect(bob.errors.map((e) => e.message).join('\n')).toMatch(/not signed by the identity key/);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
+  it('does not ring for an offer addressed to somebody else', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.sendMessage(bob.accountId, 'kuruyorum');
+    await waitFor(() => bob.received.length > 0);
+
+    // Alice's genuine signature, for a call she meant for Carol. Relaying it
+    // to Bob must not ring Bob.
+    const forCarol = signCallSdp(alice.identity, {
+      kind: CallSignalKind.Offer,
+      callId: 'call-relayed12',
+      sdp: callSdp(4),
+      fromAccountId: alice.accountId,
+      toAccountId: 'acct-carol',
+    });
+    await injectSignal(alice, bob, forCarol);
+
+    expect(bob.incomingCalls).toEqual([]);
+    expect(bob.manager.currentCall()).toBeNull();
+    // Asserted, not just "nothing happened": a silently dropped injection
+    // would satisfy the two checks above without exercising anything.
+    expect(bob.errors.map((e) => e.message).join('\n')).toMatch(/not signed by the identity key/);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
+  it('withholds a direct address until the call is answered', async () => {
+    // A call you never picked up must not tell the caller where you are — and
+    // must not make your ICE agent probe an address they chose, which tells
+    // them the same thing from the other direction.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    const placed = await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) });
+    await waitFor(() => bob.incomingCalls.length > 0);
+
+    await alice.manager.sendCallCandidate(placed.callId, HOST_CANDIDATE);
+    await alice.manager.sendCallCandidate(placed.callId, RELAY_CANDIDATE);
+    await waitFor(() => bob.candidates.length > 0);
+    expect(bob.candidates).toEqual([RELAY_CANDIDATE]);
+
+    // Bob's own host candidate is withheld by the send-side policy too.
+    expect(await bob.manager.sendCallCandidate(placed.callId, HOST_CANDIDATE)).toBe(false);
+
+    await bob.manager.answerCall(placed.callId, callSdp(2));
+    await waitFor(() => alice.answers.length > 0);
+
+    expect(await bob.manager.sendCallCandidate(placed.callId, HOST_CANDIDATE)).toBe(true);
+    await waitFor(() => alice.candidates.length > 0);
+    expect(alice.candidates).toEqual([HOST_CANDIDATE]);
+
+    await alice.manager.sendCallCandidate(placed.callId, HOST_CANDIDATE);
+    await waitFor(() => bob.candidates.length > 1);
+    expect(bob.candidates).toEqual([RELAY_CANDIDATE, HOST_CANDIDATE]);
+    expect([...alice.errors, ...bob.errors]).toEqual([]);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+
+  it('tells a second caller the line is busy without ringing again', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    const carol = await bringUp('Carol');
+
+    await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) });
+    await waitFor(() => bob.incomingCalls.length > 0);
+
+    await carol.manager.placeCall(bob.accountId, { sdp: callSdp(5) });
+    await waitFor(() => carol.manager.currentCall() === null, 15_000);
+
+    expect(bob.incomingCalls).toHaveLength(1);
+    expect(bob.incomingCalls[0].call.peerAccountId).toBe(alice.accountId);
+    expect(carol.callChanges.at(-1)?.endedReason).toBe('busy');
+    expect(bob.manager.currentCall()?.peerAccountId).toBe(alice.accountId);
+
+    [alice, bob, carol].forEach((d) => d.socket.close());
+  }, 90_000);
+
+  it('ends the call on both sides when one side hangs up', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    const placed = await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) });
+    await waitFor(() => bob.incomingCalls.length > 0);
+    await bob.manager.answerCall(placed.callId, callSdp(2));
+    await waitFor(() => alice.answers.length > 0);
+
+    alice.manager.markCallConnected(placed.callId);
+    expect(alice.manager.currentCall()?.phase).toBe('active');
+
+    await alice.manager.endCall(placed.callId, 'hangup');
+    expect(alice.manager.currentCall()).toBeNull();
+
+    await waitFor(() => bob.manager.currentCall() === null);
+    expect(bob.callChanges.at(-1)?.endedReason).toBe('hangup');
+    expect([...alice.errors, ...bob.errors]).toEqual([]);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+
+  it('reads a declined call as declined rather than as a hangup', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    const placed = await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) });
+    await waitFor(() => bob.incomingCalls.length > 0);
+
+    await bob.manager.endCall(placed.callId, 'declined');
+    await waitFor(() => alice.manager.currentCall() === null);
+
+    expect(alice.callChanges.at(-1)?.endedReason).toBe('declined');
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
+  it('ignores a signal for a call that is not happening', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.sendMessage(bob.accountId, 'kuruyorum');
+    await waitFor(() => bob.received.length > 0);
+
+    await injectSignal(alice, bob, {
+      kind: CallSignalKind.Candidate,
+      callId: 'call-nothing12',
+      body: RELAY_CANDIDATE,
+    });
+    await injectSignal(alice, bob, {
+      kind: CallSignalKind.Hangup,
+      callId: 'call-nothing12',
+      body: 'hangup',
+    });
+
+    expect(bob.candidates).toEqual([]);
+    expect(bob.manager.currentCall()).toBeNull();
+    expect(bob.errors).toEqual([]);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
+  it('does not resurrect a call with a late candidate', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    const placed = await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) });
+    await waitFor(() => bob.incomingCalls.length > 0);
+    await bob.manager.answerCall(placed.callId, callSdp(2));
+    await waitFor(() => alice.answers.length > 0);
+
+    await bob.manager.endCall(placed.callId, 'hangup');
+    await waitFor(() => alice.manager.currentCall() === null);
+
+    await injectSignal(bob, alice, {
+      kind: CallSignalKind.Candidate,
+      callId: placed.callId,
+      body: RELAY_CANDIDATE,
+    });
+
+    expect(alice.candidates).toEqual([]);
+    expect(alice.manager.currentCall()).toBeNull();
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+
+  it('refuses to place a second call while one is live', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    const carol = await bringUp('Carol');
+
+    await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) });
+    await expect(alice.manager.placeCall(carol.accountId, { sdp: callSdp(6) })).rejects.toThrow(
+      /already in a call/,
+    );
+
+    [alice, bob, carol].forEach((d) => d.socket.close());
+  }, 60_000);
+
+  it('keeps the call off the server', async () => {
+    // Signalling is content type 6 inside the same ratchet as chat, so what
+    // the server sees is a handful of envelopes to a mailbox and nothing that
+    // says a call happened. This asserts the absence of any call endpoint.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    const placed = await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) });
+    await waitFor(() => bob.incomingCalls.length > 0);
+
+    for (const path of [`/v1/calls`, `/v1/calls/${placed.callId}`]) {
+      const response = await fetch(`${BASE_URL}${path}`, {
+        headers: { Authorization: `Bearer ${alice.client.getCredentials()!.token}` },
+      });
+      expect(response.status).toBe(404);
+    }
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
 });

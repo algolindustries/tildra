@@ -38,6 +38,7 @@ import {
   ContentType,
   Profile,
   attachmentContent,
+  callSignalContent,
   gossipContent,
   decodeContent,
   decodeProfile,
@@ -46,6 +47,23 @@ import {
   senderKeyContent,
   textContent,
 } from '../crypto/content';
+import {
+  CallEndReason,
+  CallError,
+  CallSession,
+  CallSignal,
+  CallSignalKind,
+  advanceCall,
+  beginIncomingCall,
+  beginOutgoingCall,
+  decodeCallSignal,
+  encodeCallSignal,
+  filterIceCandidates,
+  iceTransportPolicyFor,
+  signCallSdp,
+  toCallId,
+  verifyCallSdp,
+} from '../crypto/calling';
 import {
   LogCheckpoint,
   SignedTreeHead,
@@ -246,6 +264,19 @@ export interface ManagerEvents {
   onGroupChange?: (groupId: string) => void;
   onProfileChange?: (accountId: string, profile: Profile) => void;
   onIdentityChange?: (accountId: string) => void;
+  /**
+   * The phone should ring. Only fires once the offer's DTLS fingerprint has
+   * been verified against the caller's identity key — an offer that fails that
+   * check never reaches the user, because a call they answer is a call they
+   * believe is private.
+   */
+  onIncomingCall?: (call: CallSession, offerSdp: string) => void;
+  /** The peer picked up; `answerSdp` is theirs to feed to the peer connection. */
+  onCallAnswer?: (call: CallSession, answerSdp: string) => void;
+  /** One remote ICE candidate, already filtered by the call's address policy. */
+  onCallCandidate?: (call: CallSession, candidate: string) => void;
+  /** Any change to the live call's phase, including it ending. */
+  onCallChange?: (call: CallSession) => void;
   onError?: (error: Error) => void;
 }
 
@@ -662,6 +693,15 @@ export class SessionManager {
     }
     if (decoded.type === ContentType.TransparencyGossip) {
       await this.acceptGossip(content.senderAccountId, decoded.payload!);
+      return null;
+    }
+    if (decoded.type === ContentType.CallSignal) {
+      await this.receiveCallSignal(
+        content.senderAccountId,
+        content.senderDeviceId,
+        content.senderIdentityKey,
+        decoded.payload!,
+      );
       return null;
     }
     if (decoded.type === ContentType.Profile) {
@@ -1187,6 +1227,393 @@ export class SessionManager {
 
   async listGroups(): Promise<StoredGroup[]> {
     return this.store.listGroups();
+  }
+
+  // -------------------------------------------------------------------------
+  // Calls
+  // -------------------------------------------------------------------------
+
+  /**
+   * Calls are not persisted. A call that outlives the process is not a call —
+   * it is a stale row that would ring a phone about something that stopped
+   * happening when the app was killed.
+   */
+  private call: CallSession | null = null;
+
+  /**
+   * Devices an outgoing offer went to. The first to answer wins the call and
+   * the rest are told to stop ringing.
+   */
+  private ringing: { deviceId: string; identityKey: Uint8Array }[] = [];
+
+  /** The live call, if any. */
+  currentCall(): CallSession | null {
+    return this.call && this.call.phase !== 'ended' ? this.call : null;
+  }
+
+  /**
+   * Ring every device on an account.
+   *
+   * Fanning out is what makes a call reach the phone the person is actually
+   * holding. The offer is signed once and delivered per device, each through
+   * its own session, so the signature covers the same fingerprint everywhere
+   * and there is nothing per-device to get wrong.
+   */
+  async placeCall(
+    accountId: string,
+    params: { sdp: string; video?: boolean },
+  ): Promise<CallSession> {
+    if (this.currentCall()) {
+      throw new CallError('already in a call');
+    }
+
+    const devices = await this.client.listDevices(accountId);
+    if (devices.length === 0) {
+      throw new NoDevicesError(`Tildra: ${accountId} has no registered devices`);
+    }
+    await this.ensureConversation(accountId, devices[0].identityKey);
+
+    const callId = toCallId(this.randomId());
+    const signal = signCallSdp(this.identity, {
+      kind: CallSignalKind.Offer,
+      callId,
+      sdp: params.sdp,
+      fromAccountId: this.accountId,
+      toAccountId: accountId,
+      video: params.video,
+      now: this.now(),
+    });
+
+    const call = beginOutgoingCall({
+      callId,
+      peerAccountId: accountId,
+      video: params.video,
+      now: this.now(),
+    });
+    this.call = call;
+    this.ringing = devices.map((d) => ({ deviceId: d.deviceId, identityKey: d.identityKey }));
+
+    let delivered = 0;
+    for (const device of devices) {
+      try {
+        await this.sendToDevice(
+          accountId,
+          device.deviceId,
+          device.identityKey,
+          callSignalContent(encodeCallSignal(signal)),
+        );
+        delivered += 1;
+      } catch (err) {
+        if (err instanceof IdentityChangedError) {
+          this.finishCall('failed');
+          throw err;
+        }
+        this.events.onError?.(err instanceof Error ? err : new Error(String(err)));
+      }
+    }
+
+    if (delivered === 0) {
+      this.finishCall('failed');
+      throw new CallError('the call could not be delivered to any device');
+    }
+
+    this.events.onCallChange?.(call);
+    return call;
+  }
+
+  /** Pick up a ringing call with our own SDP answer. */
+  async answerCall(callId: string, sdp: string): Promise<CallSession> {
+    const call = this.requireCall(callId);
+    if (call.direction !== 'incoming') {
+      throw new CallError('only the receiving side can answer');
+    }
+    if (!call.peerDeviceId) {
+      throw new CallError('the call has no device to answer to');
+    }
+
+    // Validate the transition before sending anything: `advanceCall` throws on
+    // an illegal one, and an answer that goes out for a call that is already
+    // connecting is a second answer at the far end.
+    const next = advanceCall(call, { type: 'accept' }, this.now());
+
+    const signal = signCallSdp(this.identity, {
+      kind: CallSignalKind.Answer,
+      callId,
+      sdp,
+      fromAccountId: this.accountId,
+      toAccountId: call.peerAccountId,
+      now: this.now(),
+    });
+    await this.sendCallSignalTo(call.peerAccountId, call.peerDeviceId, signal);
+
+    this.call = next;
+    this.events.onCallChange?.(next);
+    return next;
+  }
+
+  /**
+   * Offer one of our ICE candidates to the peer.
+   *
+   * Returns whether it was sent. A candidate the policy withholds is not an
+   * error — it is the policy working — so this reports rather than throws.
+   */
+  async sendCallCandidate(callId: string, candidate: string): Promise<boolean> {
+    const call = this.requireCall(callId);
+    if (filterIceCandidates([candidate], iceTransportPolicyFor(call)).length === 0) {
+      return false;
+    }
+
+    const signal: CallSignal = { kind: CallSignalKind.Candidate, callId, body: candidate };
+    // Before a device has answered, we do not know which one will, so the
+    // candidate goes to all of them — they are all still ringing.
+    const targets = call.peerDeviceId
+      ? [call.peerDeviceId]
+      : this.ringing.map((d) => d.deviceId);
+    for (const deviceId of targets) {
+      await this.sendCallSignalTo(call.peerAccountId, deviceId, signal);
+    }
+    return true;
+  }
+
+  /** Media is up. */
+  markCallConnected(callId: string): CallSession {
+    const call = this.requireCall(callId);
+    this.call = advanceCall(call, { type: 'connected' }, this.now());
+    this.events.onCallChange?.(this.call);
+    return this.call;
+  }
+
+  /** Hang up, decline, or give up on a call, and tell the far end. */
+  async endCall(callId: string, reason: CallEndReason = 'hangup'): Promise<void> {
+    const call = this.call;
+    if (!call || call.callId !== callId || call.phase === 'ended') return;
+
+    const signal: CallSignal = { kind: CallSignalKind.Hangup, callId, body: reason };
+    const targets = call.peerDeviceId
+      ? [call.peerDeviceId]
+      : this.ringing.map((d) => d.deviceId);
+    for (const deviceId of targets) {
+      // Best effort. A hangup that fails to send must still end the call
+      // locally, or the UI stays on a call screen for a call that is over.
+      await this.sendCallSignalTo(call.peerAccountId, deviceId, signal).catch((err) =>
+        this.events.onError?.(err instanceof Error ? err : new Error(String(err))),
+      );
+    }
+    this.finishCall(reason);
+  }
+
+  private requireCall(callId: string): CallSession {
+    const call = this.currentCall();
+    if (!call || call.callId !== callId) {
+      throw new CallError(`no live call with id ${callId}`);
+    }
+    return call;
+  }
+
+  private finishCall(reason: CallEndReason): void {
+    if (!this.call) return;
+    this.call = advanceCall(this.call, { type: 'end', reason }, this.now());
+    this.ringing = [];
+    this.events.onCallChange?.(this.call);
+  }
+
+  private async sendCallSignalTo(
+    accountId: string,
+    deviceId: string,
+    signal: CallSignal,
+  ): Promise<void> {
+    const identityKey =
+      this.ringing.find((d) => d.deviceId === deviceId)?.identityKey ??
+      (await this.store.getConversation(accountId))?.identityKey;
+    if (!identityKey || identityKey.length === 0) {
+      throw new CallError(`no identity key known for ${accountId}/${deviceId}`);
+    }
+    await this.sendToDevice(
+      accountId,
+      deviceId,
+      identityKey,
+      callSignalContent(encodeCallSignal(signal)),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Receiving call signals
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handle a signal from the peer.
+   *
+   * Nothing in here throws to the caller: a malformed or unwanted signal must
+   * not leave the envelope unacked, because the server would then redeliver it
+   * forever. Everything that goes wrong is reported and dropped.
+   */
+  private async receiveCallSignal(
+    senderAccountId: string,
+    senderDeviceId: string,
+    senderIdentityKey: Uint8Array,
+    payload: Uint8Array,
+  ): Promise<void> {
+    let signal: CallSignal;
+    try {
+      signal = decodeCallSignal(payload);
+    } catch (err) {
+      this.events.onError?.(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
+
+    try {
+      switch (signal.kind) {
+        case CallSignalKind.Offer:
+          await this.receiveCallOffer(senderAccountId, senderDeviceId, senderIdentityKey, signal);
+          return;
+        case CallSignalKind.Answer:
+          await this.receiveCallAnswer(senderAccountId, senderDeviceId, senderIdentityKey, signal);
+          return;
+        case CallSignalKind.Candidate:
+          this.receiveCallCandidate(senderAccountId, senderDeviceId, signal);
+          return;
+        case CallSignalKind.Hangup:
+        case CallSignalKind.Busy:
+          this.receiveCallEnd(senderAccountId, senderDeviceId, signal);
+          return;
+      }
+    } catch (err) {
+      this.events.onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+
+  private async receiveCallOffer(
+    senderAccountId: string,
+    senderDeviceId: string,
+    senderIdentityKey: Uint8Array,
+    signal: CallSignal,
+  ): Promise<void> {
+    const live = this.currentCall();
+    if (live) {
+      // The same offer twice is the server redelivering an envelope, not a
+      // second call. Ringing again, or replying busy to ourselves, would both
+      // be wrong.
+      if (live.callId === signal.callId) return;
+
+      await this.sendCallSignalTo(senderAccountId, senderDeviceId, {
+        kind: CallSignalKind.Busy,
+        callId: signal.callId,
+        body: 'busy',
+      }).catch((err) => this.events.onError?.(err instanceof Error ? err : new Error(String(err))));
+      return;
+    }
+
+    // `senderIdentityKey` has already been checked against the conversation by
+    // assertIdentityUnchanged, which runs before content is dispatched — so
+    // this is the key the user's safety number covers, not one the envelope
+    // asserted for itself.
+    //
+    // A failure here does not ring the phone. That is the point: an
+    // unverifiable fingerprint means the media could be terminated by someone
+    // else, and a call the user answers is a call they believe is private.
+    const fingerprint = verifyCallSdp(signal, senderIdentityKey, {
+      callId: signal.callId,
+      fromAccountId: senderAccountId,
+      toAccountId: this.accountId,
+      now: this.now(),
+    });
+
+    const call = beginIncomingCall({
+      callId: signal.callId,
+      peerAccountId: senderAccountId,
+      peerDeviceId: senderDeviceId,
+      peerFingerprint: fingerprint,
+      video: signal.video,
+      now: this.now(),
+    });
+    this.call = call;
+    this.ringing = [{ deviceId: senderDeviceId, identityKey: senderIdentityKey }];
+
+    this.events.onIncomingCall?.(call, signal.body);
+    this.events.onCallChange?.(call);
+  }
+
+  private async receiveCallAnswer(
+    senderAccountId: string,
+    senderDeviceId: string,
+    senderIdentityKey: Uint8Array,
+    signal: CallSignal,
+  ): Promise<void> {
+    const call = this.currentCall();
+    if (!call || call.callId !== signal.callId || call.peerAccountId !== senderAccountId) return;
+    // An answer from a device we never rang is not this call's answer.
+    if (!this.ringing.some((d) => d.deviceId === senderDeviceId)) return;
+
+    const fingerprint = verifyCallSdp(signal, senderIdentityKey, {
+      callId: signal.callId,
+      fromAccountId: senderAccountId,
+      toAccountId: this.accountId,
+      now: this.now(),
+    });
+
+    const next = advanceCall(
+      call,
+      { type: 'signal', kind: CallSignalKind.Answer, fingerprint, deviceId: senderDeviceId },
+      this.now(),
+    );
+    this.call = next;
+
+    // Every other device is still ringing for a call that has been picked up.
+    const losers = this.ringing.filter((d) => d.deviceId !== senderDeviceId);
+    this.ringing = this.ringing.filter((d) => d.deviceId === senderDeviceId);
+    for (const device of losers) {
+      await this.sendToDevice(
+        senderAccountId,
+        device.deviceId,
+        device.identityKey,
+        callSignalContent(
+          encodeCallSignal({
+            kind: CallSignalKind.Hangup,
+            callId: signal.callId,
+            body: 'answered elsewhere',
+          }),
+        ),
+      ).catch((err) => this.events.onError?.(err instanceof Error ? err : new Error(String(err))));
+    }
+
+    this.events.onCallAnswer?.(next, signal.body);
+    this.events.onCallChange?.(next);
+  }
+
+  private receiveCallCandidate(
+    senderAccountId: string,
+    senderDeviceId: string,
+    signal: CallSignal,
+  ): void {
+    const call = this.currentCall();
+    if (!call || call.callId !== signal.callId || call.peerAccountId !== senderAccountId) return;
+    if (call.peerDeviceId && call.peerDeviceId !== senderDeviceId) return;
+
+    // The same policy applies to what we accept as to what we send. Adding a
+    // peer's host candidate while our phone is still ringing makes our ICE
+    // agent probe their address, which tells them where we are — the leak the
+    // send-side policy exists to prevent, arriving from the other direction.
+    if (filterIceCandidates([signal.body], iceTransportPolicyFor(call)).length === 0) return;
+
+    this.events.onCallCandidate?.(call, signal.body);
+  }
+
+  private receiveCallEnd(
+    senderAccountId: string,
+    senderDeviceId: string,
+    signal: CallSignal,
+  ): void {
+    const call = this.currentCall();
+    if (!call || call.callId !== signal.callId || call.peerAccountId !== senderAccountId) return;
+    if (call.peerDeviceId && call.peerDeviceId !== senderDeviceId) return;
+
+    this.call = advanceCall(
+      call,
+      { type: 'signal', kind: signal.kind, deviceId: senderDeviceId },
+      this.now(),
+    );
+    this.ringing = [];
+    this.events.onCallChange?.(this.call);
   }
 
   // -------------------------------------------------------------------------

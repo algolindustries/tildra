@@ -25,23 +25,28 @@ tested by running the real Go server and pushing real traffic through it.
 | `tildra-auditor`: standalone log watcher, publishable checkpoints | done |
 | Device linking: commitment over a camera + six-digit pairing code | done |
 | Call signalling: SDP hardening, DTLS fingerprint bound to the identity key, ICE address policy, call state machine | done |
+| Call signalling carried end to end through `SessionManager`: ring all devices, first answer wins, busy, hangup | done |
 
-Counts at time of writing: 297 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 310 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 ## Not done
 
 - **Voice and video calls — the media half.** The part that decides whether a
-  call is private is done and tested: `mobile/src/crypto/calling.ts` parses and
+  call is private is done and tested. `mobile/src/crypto/calling.ts` parses and
   hardens the SDP, binds the DTLS fingerprint to the sender's identity key with
   a role- and peer-bound signature, holds an unanswered incoming call to
   relay-only candidates so it cannot be used to find out where you are, and
-  refuses every out-of-order signal. See `docs/PROTOCOL.md` §10.
+  refuses every out-of-order signal. `SessionManager` carries those signals
+  over the pairwise ratchet: it rings every device, gives the call to the first
+  that answers, replies busy to a second caller, and **does not ring at all
+  when the fingerprint does not verify** — tested against a real Go server with
+  a hand-forged offer. See `docs/PROTOCOL.md` §10.
 
   What does not exist: `react-native-webrtc` (so a dev build, not Expo Go), a
-  TURN deployment, wiring the signals through `SessionManager`, and a call UI.
-  **No media has ever flowed.** The signalling logic is testable headlessly and
-  is tested; the media path is not, and nothing here should be read as "calls
+  TURN deployment, and a call UI — nothing calls `placeCall` yet.
+  **No media has ever flowed.** The signalling is testable headlessly and is
+  tested; the media path is not, and nothing here should be read as "calls
   work".
 - **An independent security audit.** Not something that can be done from inside
   the repo. The crypto uses standard primitives and is heavily tested, but it has

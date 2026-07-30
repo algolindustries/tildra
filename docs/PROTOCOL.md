@@ -506,6 +506,23 @@ answer gets nothing. After the call is accepted, direct paths are allowed.
 Candidates that do not parse are dropped rather than forwarded: an unclassified
 candidate might be a host candidate, and a leaked address cannot be taken back.
 
+The same policy governs what is *accepted*, not only what is sent. Adding a
+caller's host candidate while the phone is still ringing makes the callee's ICE
+agent send binding requests to an address the caller chose, which tells the
+caller where the callee is — the same leak arriving from the other direction.
+
+**Ringing, and which device.** An offer is signed once and delivered to every
+device on the account through its own pairwise session, so the same fingerprint
+is covered everywhere and there is nothing per-device to get wrong. The first
+device to answer wins: it becomes the only device whose signals count for that
+call, and the others are told to stop ringing. A second incoming call while one
+is live is answered with `Busy` and never rings — one call at a time is a
+property of a phone, and it also means a peer cannot flood the call UI.
+
+**Calls are not persisted.** A call that outlives the process is not a call; it
+is a row that would ring a phone about something that stopped happening when
+the app was killed.
+
 **There is no spoken verification code, deliberately.** ZRTP-style short
 authentication strings exist because ZRTP has no long-term identity to sign
 with. Tildra does. An attacker who substitutes the fingerprint cannot produce

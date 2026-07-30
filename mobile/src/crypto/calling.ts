@@ -173,6 +173,21 @@ function assertCallId(callId: string): void {
   }
 }
 
+/**
+ * Force a random string into the call-id alphabet.
+ *
+ * The manager's id source is base64, which carries `+`, `/` and `=`. Rather
+ * than give the manager a second random source to keep deterministic in tests,
+ * strip what does not belong and insist on what is left being long enough.
+ */
+export function toCallId(raw: string): string {
+  const cleaned = raw.replace(/[^A-Za-z0-9_-]/g, '');
+  if (cleaned.length < 8) {
+    throw new CallError('not enough usable characters for a call id');
+  }
+  return cleaned.slice(0, MAX_CALL_ID_LENGTH);
+}
+
 // ---------------------------------------------------------------------------
 // SDP
 // ---------------------------------------------------------------------------
@@ -507,6 +522,14 @@ export type CallEndReason =
 export interface CallSession {
   callId: string;
   peerAccountId: string;
+  /**
+   * The peer device the call settled on.
+   *
+   * An outgoing call rings every device the account has, so this is unset
+   * until one of them answers; from then on it is the only device whose
+   * signals count. An incoming call knows it from the offer.
+   */
+  peerDeviceId?: string;
   direction: CallDirection;
   phase: CallPhase;
   video: boolean;
@@ -526,7 +549,13 @@ export type CallEvent =
   /** This side is ending the call. */
   | { type: 'end'; reason: CallEndReason }
   /** Something arrived from the peer. Authenticity is checked before this. */
-  | { type: 'signal'; kind: CallSignalKind; fingerprint?: SdpFingerprint };
+  | {
+      type: 'signal';
+      kind: CallSignalKind;
+      fingerprint?: SdpFingerprint;
+      /** Which of the peer's devices sent it. */
+      deviceId?: string;
+    };
 
 export function beginOutgoingCall(params: {
   callId: string;
@@ -550,6 +579,7 @@ export function beginOutgoingCall(params: {
 export function beginIncomingCall(params: {
   callId: string;
   peerAccountId: string;
+  peerDeviceId?: string;
   peerFingerprint: SdpFingerprint;
   video?: boolean;
   now?: number;
@@ -559,6 +589,7 @@ export function beginIncomingCall(params: {
   return {
     callId: params.callId,
     peerAccountId: params.peerAccountId,
+    peerDeviceId: params.peerDeviceId,
     direction: 'incoming',
     phase: 'ringing',
     video: params.video ?? false,
@@ -632,10 +663,12 @@ function applySignal(
       if (call.phase !== 'ringing') {
         throw new CallError(`an answer arrived while the call was ${call.phase}`);
       }
+      // The device that answered is the device the call is with, from here on.
       return {
         ...call,
         phase: 'connecting',
         peerFingerprint: event.fingerprint ?? call.peerFingerprint,
+        peerDeviceId: event.deviceId ?? call.peerDeviceId,
         phaseAt: at,
       };
 
