@@ -22,6 +22,7 @@ import {
   groupConversationKey,
 } from '../manager';
 import { MemorySessionStore } from './memory-store';
+import { freePort } from '../../__tests__/free-port';
 import {
   SIGNED_PREKEY_ROTATION_MS,
   generateIdentity,
@@ -51,8 +52,9 @@ import { encrypt } from '../../crypto/ratchet';
 import { sealEnvelope } from '../../crypto/sealed';
 
 const SERVER_DIR = join(__dirname, '../../../../server');
-const PORT = 8792;
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+// Assigned in beforeAll from a port the OS hands out. A fixed one is fine
+// until a killed run leaves its server behind holding it.
+let BASE_URL = '';
 
 function goAvailable(): boolean {
   try {
@@ -189,15 +191,33 @@ async function bringUp(name: string): Promise<Device> {
   };
 }
 
+/**
+ * Wait for something to become true, and say so loudly when it does not.
+ *
+ * This used to return silently on timeout, which is the worst of both worlds.
+ * A test whose assertion happened to hold anyway passed while measuring
+ * nothing — one of mine did, for fifteen seconds — and a test whose assertion
+ * then failed reported a value mismatch, which reads as a logic bug rather
+ * than as "the reply never arrived". Both cost real time to diagnose.
+ *
+ * The predicate's own source goes in the message, so a timeout names what it
+ * was waiting for without every call site having to describe itself.
+ */
 async function waitFor(
   predicate: () => boolean | Promise<boolean>,
-  timeoutMs = 10_000,
+  // Thirty seconds against per-test budgets of sixty to a hundred and eighty.
+  // Ten was chosen when the suite was fast, and on a loaded machine it turned
+  // a slow round trip through a real server into what looked like a bug. A
+  // wait returns the moment its predicate holds, so a generous ceiling costs
+  // nothing when things work and only buys patience when they are slow.
+  timeoutMs = 30_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await predicate()) return;
     await new Promise((r) => setTimeout(r, 50));
   }
+  throw new Error(`timed out after ${timeoutMs}ms waiting for: ${predicate}`);
 }
 
 // One server for the whole file. Starting it inside a single describe block
@@ -205,6 +225,8 @@ async function waitFor(
 // "fetch failed" rather than as a missing-server error.
 beforeAll(async () => {
   if (!goAvailable()) return;
+  const port = await freePort();
+  BASE_URL = `http://127.0.0.1:${port}`;
   const binary = join(mkdtempSync(join(tmpdir(), 'tildra-mgr-')), 'tildrad');
   execFileSync('go', ['build', '-o', binary, './cmd/tildrad'], {
     cwd: SERVER_DIR,
@@ -213,7 +235,7 @@ beforeAll(async () => {
   server = spawn(binary, [], {
     env: {
       ...process.env,
-      TILDRA_ADDR: `:${PORT}`,
+      TILDRA_ADDR: `:${port}`,
       TILDRA_DATABASE_URL: '',
       // A relay, so the ICE configuration path is exercised against a real
       // /v1/turn rather than against a stub that agrees with itself.
@@ -1317,7 +1339,7 @@ describeIntegration('relay credentials', () => {
   it('reports no relay rather than falling back, when the deployment has none', async () => {
     // A second server, started without TURN — the default for a fresh
     // deployment, and the case where a silent downgrade would leak.
-    const port = PORT + 1;
+    const port = await freePort();
     const binary = join(mkdtempSync(join(tmpdir(), 'tildra-noturn-')), 'tildrad');
     execFileSync('go', ['build', '-o', binary, './cmd/tildrad'], { cwd: SERVER_DIR, stdio: 'inherit' });
     const bare = spawn(binary, [], {

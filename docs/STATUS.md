@@ -169,11 +169,25 @@ knowing before trusting a UI change.
   `contactInbox` carry what `docs/PROTOCOL.md` §5.1 promises — that the
   contact inbox is a one-event leak per conversation and everything after it
   is unlinkable — and neither had a test.
-- **A killed test run leaves its server behind.** The integration harness
-  stops `tildrad` in `afterAll`, which does not run if vitest itself is
-  killed. The orphan keeps port 8792, the next run's server cannot bind, and
-  its tests quietly talk to a stale server instead. Two failures and a hang
-  were traced to that. `pkill -f tildrad` before re-running.
+- **The integration suites take a port from the OS.** They used fixed ones,
+  and a killed run leaves `tildrad` behind — `afterAll` does not run when
+  vitest is killed — so the orphan held the port and the next run's tests
+  quietly talked to a stale server. Asking the OS removes the failure mode
+  instead of documenting it.
+- **`waitFor` throws on timeout, and says what it was waiting for.** It used
+  to return silently, which is the worst of both worlds: a test whose
+  assertion happened to hold anyway passed while measuring nothing, and one
+  whose assertion then failed reported a value mismatch that reads as a logic
+  bug rather than "the reply never came". Making it throw immediately
+  revealed three call tests that had been passing on a wait that never
+  completed.
+- **Three call tests are flaky on a loaded developer machine and pass on CI.**
+  `withholds a direct address until the call is answered`, `tells a second
+  caller the line is busy`, and `ends the call on both sides when one side
+  hangs up` time out locally waiting for a signal that a fast machine
+  delivers. Raising the ceiling to thirty seconds fixed several others and not
+  these three, so "it is just slow" is not established — it is an open
+  question, and it is written here rather than dismissed.
 - **A bound with no test is a number in a file.** `MAX_SKIP`,
   `MAX_SKIPPED_KEYS` and `SKIPPED_KEY_TTL_MS` had been there from the start,
   are quoted in `docs/PROTOCOL.md` §3 as what bounds a device compromise, and

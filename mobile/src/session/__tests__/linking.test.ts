@@ -24,10 +24,10 @@ import {
   verifyIdentityCommitment,
 } from '../../crypto/provisioning';
 import { approveDeviceLink, beginDeviceLink } from '../linking';
+import { freePort } from '../../__tests__/free-port';
 
 const SERVER_DIR = join(__dirname, '../../../../server');
-const PORT = 8795;
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+let BASE_URL = '';
 
 function goAvailable(): boolean {
   try {
@@ -66,13 +66,15 @@ async function primaryDevice(name = 'Primary') {
 
 beforeAll(async () => {
   if (!goAvailable()) return;
+  const port = await freePort();
+  BASE_URL = `http://127.0.0.1:${port}`;
   const binary = join(mkdtempSync(join(tmpdir(), 'tildra-link-')), 'tildrad');
   execFileSync('go', ['build', '-o', binary, './cmd/tildrad'], {
     cwd: SERVER_DIR,
     stdio: 'inherit',
   });
   server = spawn(binary, [], {
-    env: { ...process.env, TILDRA_ADDR: `:${PORT}`, TILDRA_DATABASE_URL: '' },
+    env: { ...process.env, TILDRA_ADDR: `:${port}`, TILDRA_DATABASE_URL: '' },
     stdio: 'ignore',
   });
   await waitForHealth();

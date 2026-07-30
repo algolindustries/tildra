@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { TildraClient } from '../../api/client';
+import { freePort } from '../../__tests__/free-port';
 import { generateIdentity, generatePreKeys } from '../identity';
 import { equal, fromBase64, randomBytes, toBase64 } from '../primitives';
 import {
@@ -33,8 +34,7 @@ import {
 import { AuditorError, crossCheckAuditor, verifyAuditorCheckpoint } from '../auditor';
 
 const SERVER_DIR = join(__dirname, '../../../../server');
-const PORT = 8793;
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+let BASE_URL = '';
 
 function goAvailable(): boolean {
   try {
@@ -63,25 +63,6 @@ async function waitForHealth(timeoutMs = 30_000): Promise<void> {
   throw new Error('server did not start');
 }
 
-/** Ask the OS for a port nobody is using, then release it. */
-async function freePort(): Promise<number> {
-  const net = await import('node:net');
-  return new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.on('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const address = probe.address();
-      if (typeof address === 'string' || address === null) {
-        probe.close();
-        reject(new Error('could not determine a free port'));
-        return;
-      }
-      const { port } = address;
-      probe.close(() => resolve(port));
-    });
-  });
-}
-
 /** Register a device and claim a handle through the real server. */
 async function claimHandle(handle: string) {
   const identity = generateIdentity();
@@ -98,6 +79,8 @@ async function claimHandle(handle: string) {
 // rather than as a missing server — a mistake worth making only once.
 beforeAll(async () => {
   if (!goAvailable()) return;
+  const port = await freePort();
+  BASE_URL = `http://127.0.0.1:${port}`;
   const binary = join(mkdtempSync(join(tmpdir(), 'tildra-kt-')), 'tildrad');
   execFileSync('go', ['build', '-o', binary, './cmd/tildrad'], {
     cwd: SERVER_DIR,
@@ -106,7 +89,7 @@ beforeAll(async () => {
   server = spawn(binary, [], {
     env: {
       ...process.env,
-      TILDRA_ADDR: `:${PORT}`,
+      TILDRA_ADDR: `:${port}`,
       TILDRA_DATABASE_URL: '',
       // A throwaway log key. Real deployments hold this outside the database.
       TILDRA_TRANSPARENCY_KEY: logKeySeed,
