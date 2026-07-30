@@ -91,6 +91,7 @@ const ALLOWED = new Map([
   ['SessionManager.addGroupMember', 'no group UI; see docs/STATUS.md'],
   ['SessionManager.removeGroupMember', 'no group UI; see docs/STATUS.md'],
   ['SessionManager.listGroups', 'no group UI; see docs/STATUS.md'],
+  ['groupConversationKey', 'called within manager.ts; the screens that will use it do not exist yet'],
 
   // Account recovery: the protocol specifies it, the client never calls it.
   // Also recorded under "Not done".

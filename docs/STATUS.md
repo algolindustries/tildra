@@ -39,7 +39,7 @@ tested by running the real Go server and pushing real traffic through it.
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 428 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 431 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -133,6 +133,14 @@ knowing before trusting a UI change.
   claimed groups as a finished feature in two places and now says what is
   actually true. This is the fifth time this project has shipped something
   that works, is tested, and cannot be reached; it is the largest one.
+
+  What was missing underneath is now there: a group has a conversation of its
+  own, so there is something for a screen to render. Before this a received
+  group message was filed under the *sender's* pairwise conversation — a group
+  of five scattered its history across five one-to-one chats — and an outgoing
+  group message was not stored at all, so the sender never saw what they had
+  said. Both are fixed and tested across a real server. What remains is the
+  screens: create, member list, and opening a group from the chat list.
 - **Account recovery.** `docs/PROTOCOL.md` §1.1 described a recovery-phrase
   backup in the present tense. The server endpoints exist; the client calls
   them only from tests, and no onboarding screen shows a phrase. Losing a
@@ -177,6 +185,10 @@ knowing before trusting a UI change.
   version of the test above kept a reference to the secrets and passed with the
   persistence call deleted, because the top-up mutates the same maps in place.
   It serialises on the way in now. Run the negative control.
+- **A group is a conversation whose account id is `group:<id>`.** That prefix
+  is not a valid account id — those are Crockford base32 — so a group can never
+  collide with a person, and the chat list, unread counts and message list work
+  for one without a second implementation.
 - **Two storage designs where one is unreachable is worse than one.** The
   database had a `prekeys` table with per-key rows and a comment saying a
   one-time secret is destroyed "after a session is established" — which never
