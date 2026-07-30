@@ -33,7 +33,14 @@ export class TildraSocket {
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closedByUs = false;
-  /** Envelopes seen but not yet acked, so a drop mid-ack does not lose them. */
+  /**
+   * Envelopes handled successfully whose ack has not reached the server.
+   *
+   * Held until the send is on the wire, not until it is attempted: a socket
+   * that dies between handling an envelope and acking it used to drop the
+   * record, so the reconnect had nothing to replay and the server redelivered
+   * a message the client had already stored.
+   */
   private readonly pendingAcks = new Map<string, Set<string>>();
   /** Mailboxes added since connect, replayed after a reconnect. */
   private readonly subscribed = new Set<string>();
@@ -73,13 +80,28 @@ export class TildraSocket {
       if (this.subscribed.size > 0) {
         ws.send(JSON.stringify({ type: 'subscribe', mailboxes: [...this.subscribed] }));
       }
-      // Re-ack anything that was in flight when the previous socket died.
+      // Re-ack anything whose ack did not make it out before the previous
+      // socket died. Cleared only on a send that succeeded, so a second death
+      // mid-replay leaves the record for the socket after it.
       for (const [mailbox, ids] of this.pendingAcks) {
-        this.sendAck(mailbox, [...ids]);
+        if (this.sendAck(mailbox, [...ids])) this.pendingAcks.delete(mailbox);
       }
     };
 
     ws.onmessage = (event: WebSocketMessageEvent) => {
+      // A socket the caller has closed, or one a reconnect has already
+      // replaced, must not keep delivering. `close()` returns before the
+      // WebSocket finishes closing, so an envelope already in flight would
+      // otherwise advance a ratchet, write session state and surface as a
+      // message in an app that has torn that session down — after a logout,
+      // say. A stale socket delivering into the session that replaced it is
+      // the same hazard from the other direction.
+      //
+      // Dropping it loses nothing. The ack is sent only after the handler
+      // succeeds, so an envelope that was never handled is still queued on
+      // the server and arrives again on the next connect.
+      if (this.closedByUs || this.ws !== ws) return;
+
       // Serialized, not fired in parallel. Each envelope advances a ratchet
       // and writes the result back, so two handlers running concurrently read
       // the same state and one of them overwrites the other — the message is
@@ -134,14 +156,15 @@ export class TildraSocket {
       serverTs: frame.envelope.serverTs,
     };
 
-    this.track(envelope);
     try {
       await this.handlers.onEnvelope(envelope);
     } catch (err) {
       // Delivery failed locally — leave it unacked so the server redelivers
-      // on the next connect. Acking here would lose the message permanently.
+      // on the next connect. Acking here would lose the message permanently,
+      // which is also why nothing is recorded as pending until the handler
+      // has returned: a pending ack replayed on reconnect would ack an
+      // envelope whose handler was still running, or had since failed.
       this.handlers.onError?.(err instanceof Error ? err : new Error(String(err)));
-      this.untrack(envelope);
       return;
     }
     this.ack(envelope);
@@ -180,13 +203,15 @@ export class TildraSocket {
 
   /** Tell the server the envelope is safely stored, so it can destroy it. */
   private ack(envelope: IncomingEnvelope): void {
-    this.untrack(envelope);
-    this.sendAck(envelope.mailbox, [envelope.id]);
+    this.track(envelope);
+    if (this.sendAck(envelope.mailbox, [envelope.id])) this.untrack(envelope);
   }
 
-  private sendAck(mailbox: string, ids: string[]): void {
-    if (!ids.length || this.ws?.readyState !== 1) return;
+  /** Reports whether the frame actually went out, which `ack` depends on. */
+  private sendAck(mailbox: string, ids: string[]): boolean {
+    if (!ids.length || this.ws?.readyState !== 1) return false;
     this.ws.send(JSON.stringify({ type: 'ack', mailbox, ids }));
+    return true;
   }
 
   private scheduleReconnect(): void {

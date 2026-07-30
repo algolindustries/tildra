@@ -39,9 +39,10 @@ tested by running the real Go server and pushing real traffic through it.
 | Renegotiation, with the DTLS fingerprint pinned for the life of the call | done |
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
+| Socket lifecycle: close, reconnect, backoff, subscription replay and ack durability, against a fake WebSocket | done |
 | Media adapter logic: ICE restart on widening, candidate filtering, connection-state mapping, teardown order — against a double of `react-native-webrtc`, not a device | done |
 
-Counts at time of writing: 507 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 526 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -194,6 +195,33 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **Two bugs were hiding behind `socket.ts` having no unit tests.** It was
+  covered only by the integration suite, which drives it against a real
+  server and can therefore only reach the states that happen when things go
+  right. Both bugs live in the states that happen when they do not.
+
+  A socket kept delivering after it was no longer the live one. `close()`
+  returns before the WebSocket has finished closing, and `onmessage` checked
+  nothing, so an envelope already in flight at logout still advanced a
+  ratchet, wrote session state and surfaced as a message in an app that had
+  torn that session down. The same hole let a socket a reconnect had already
+  replaced deliver into the session that replaced it. Dropping those costs
+  nothing, because the ack is only sent after the handler succeeds: an
+  envelope that was never handled is still queued on the server.
+
+  Acks were not durable, despite a comment saying they were. `pendingAcks`
+  was documented as holding envelopes "so a drop mid-ack does not lose them",
+  and `ack()` removed the entry *before* trying to send — so when the socket
+  died in between, the record was gone and the reconnect had nothing to
+  replay. The server then redelivered a message the client had already
+  stored. Entries are now cleared only on a send that actually went out, and
+  nothing is recorded until the handler has returned, so a replayed ack can
+  never ack an envelope that was still being handled.
+
+  Nineteen tests, against a fake WebSocket, and nine deliberate breakages to
+  check they bite. One of those breakages did not go red, which is how the
+  twentieth test got written: closing during a backoff wait was not covered.
+
 - **A test that asserts an absence needs a moment it can prove has passed.**
   `TestNoPushWithoutARegisteredToken` sent a message to a device with no push
   token, slept 300 milliseconds, and checked that no notification had gone

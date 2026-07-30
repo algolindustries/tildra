@@ -175,7 +175,11 @@ async function bringUp(
     onError: (error) => errors.push(error),
   });
   socket.connect();
-  await new Promise((r) => setTimeout(r, 300));
+  // Waiting for the socket rather than guessing at it. A fixed 300ms here
+  // meant every device in this file started its test on a socket that was
+  // merely probably open, and on a loaded machine probably was not enough —
+  // the same shape as the ringing timeout that broke six call tests.
+  await waitFor(() => socket!.currentState === 'open');
 
   return {
     name,
@@ -326,8 +330,13 @@ describeIntegration('session manager', () => {
     // is no chance he processes message 1 in between.
     const alice = await bringUp('Alice');
     const bob = await bringUp('Bob');
+    // No wait needed: close() takes effect on the client synchronously, and
+    // an envelope the server pushes to the closing socket is ignored rather
+    // than handled, so it stays unacked and arrives on reconnect. Before that
+    // guard existed this was a 200ms sleep, and losing that race meant Bob
+    // quietly processed message 1 live — the test still passed, having tested
+    // something else.
     bob.socket.close();
-    await new Promise((r) => setTimeout(r, 200));
 
     await alice.manager.sendMessage(bob.accountId, 'bir');
     await alice.manager.sendMessage(bob.accountId, 'iki');
