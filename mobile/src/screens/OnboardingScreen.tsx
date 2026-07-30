@@ -13,7 +13,7 @@ import { useApp } from '../state/app';
  * device list. There is no phone number field to leave out, because there was
  * never a phone number.
  */
-export function OnboardingScreen() {
+export function OnboardingScreen({ onJoinExisting }: { onJoinExisting: () => void }) {
   const t = useApp((s) => s.t);
   const createAccount = useApp((s) => s.createAccount);
   const error = useApp((s) => s.error);
@@ -74,6 +74,16 @@ export function OnboardingScreen() {
           label={busy ? t.creatingAccount : t.createAccount}
           onPress={onCreate}
           loading={busy}
+        />
+
+        {/* Someone installing on a second phone is not creating a second
+            account, and until this button existed there was no way for them
+            to say so. */}
+        <Button
+          label={t.joinExisting}
+          variant="secondary"
+          onPress={onJoinExisting}
+          disabled={busy}
         />
 
         {/* Stated at the point of account creation, not buried in an about

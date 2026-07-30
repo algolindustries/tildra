@@ -20,6 +20,15 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Tildra uses the camera only to read a linking or verification code off another screen. Nothing is recorded or uploaded.",
+          "recordAudioAndroid": false
+        }
+      ]
+    ]
   }
 }

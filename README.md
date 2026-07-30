@@ -9,7 +9,7 @@ Post-quantum key agreement. No phone number. Fully self-hostable server.
 
 [![CI](https://github.com/tildra/tildra/actions/workflows/ci.yml/badge.svg)](https://github.com/tildra/tildra/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Go 1.24](https://img.shields.io/badge/go-1.24-00ADD8.svg?logo=go&logoColor=white)](server/go.mod)
+[![Go 1.25](https://img.shields.io/badge/go-1.25-00ADD8.svg?logo=go&logoColor=white)](server/go.mod)
 [![React Native](https://img.shields.io/badge/react%20native-Expo%20SDK%2057-000020.svg?logo=expo&logoColor=white)](mobile/package.json)
 [![Post-quantum](https://img.shields.io/badge/key%20agreement-X25519%20%2B%20ML--KEM--768-3DD6C0.svg)](docs/PROTOCOL.md)
 [![Audit status](https://img.shields.io/badge/audit-not%20yet%20audited-orange.svg)](SECURITY.md)
@@ -42,7 +42,7 @@ that doesn't feel like homework) and rebuilds the parts that aren't.
 | E2EE by default | ❌ opt-in, 1:1 only | ✅ | ✅ |
 | E2EE group chats | ❌ | ✅ | ✅ |
 | E2EE on every device/platform | ❌ no desktop secret chats | ✅ | ✅ |
-| Linking a device without trusting the server | ❌ | ✅ | ✅ commitment + pairing code |
+| Linking a device without trusting the server | ❌ | ✅ | ✅ QR commitment + pairing code on both screens |
 | Post-quantum key agreement | ❌ | ✅ (PQXDH) | ✅ (X25519 + ML-KEM-768) |
 | Works without a phone number | ❌ | ❌ | ✅ |
 | Profile name and photo hidden from the server | ❌ | ⚠️ stored encrypted | ✅ never uploaded |
@@ -91,7 +91,7 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 |---|---|
 | Account creation without a phone number | ✅ |
 | 1:1 messaging | ✅ |
-| Multi-device: linking a second device with a pairing code | ✅ |
+| Multi-device: link a second device by QR, pairing code compared on both screens | ✅ |
 | Encrypted group chats with membership rotation | ✅ |
 | Encrypted profiles (name, photo, about) | ✅ |
 | Safety numbers and identity-change blocking | ✅ |
@@ -124,7 +124,7 @@ tildra/
 
 ## Quick start
 
-**Server** (Go 1.24+; Postgres 16+ optional):
+**Server** (Go 1.25.3, pinned in `go.mod` so builds reproduce; Postgres 16+ optional):
 
 ```bash
 cd server
@@ -132,6 +132,7 @@ cp .env.example .env
 make dev            # in-memory store, starts on :8080
 make test           # unit + store conformance
 make test-postgres  # brings up Postgres in Docker and runs the same suite
+make reproduce      # build twice from different paths, fail unless bytes match
 ```
 
 With `TILDRA_DATABASE_URL` set, migrations are applied on startup.

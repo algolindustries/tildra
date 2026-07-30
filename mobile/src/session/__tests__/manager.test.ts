@@ -27,6 +27,7 @@ import {
   signCallSdp,
 } from '../../crypto/calling';
 import { callSignalContent, encodeContent } from '../../crypto/content';
+import { readSafetyCode } from '../../crypto/scan';
 import { encrypt } from '../../crypto/ratchet';
 import { sealEnvelope } from '../../crypto/sealed';
 
@@ -1158,4 +1159,60 @@ describeIntegration('calls', () => {
     alice.socket.close();
     bob.socket.close();
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// Safety-number QR
+// ---------------------------------------------------------------------------
+
+describeIntegration('safety number codes', () => {
+  it('both sides produce the same code, and it survives the scanner', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.sendMessage(bob.accountId, 'merhaba');
+    await waitFor(() => bob.received.length > 0);
+
+    const aliceQr = await alice.manager.safetyQrFor(bob.accountId);
+    const bobQr = await bob.manager.safetyQrFor(alice.accountId);
+    expect(aliceQr).toBeTruthy();
+    // Sorted before hashing, so neither side needs to know who is "first".
+    expect(aliceQr).toBe(bobQr);
+
+    // Through the scanner's validation, which is what the screen calls.
+    expect(readSafetyCode(bobQr!)).toBe(bobQr);
+    expect(await alice.manager.matchesSafetyCode(bob.accountId, bobQr!)).toBe(true);
+    expect(await bob.manager.matchesSafetyCode(alice.accountId, aliceQr!)).toBe(true);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
+  it('refuses a code from a different pair of people', async () => {
+    // Scanning the code off the wrong screen is the mistake this catches, and
+    // a MITM presenting their own key is the attack.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    const carol = await bringUp('Carol');
+
+    await alice.manager.sendMessage(bob.accountId, 'merhaba');
+    await waitFor(() => bob.received.length > 0);
+    await alice.manager.sendMessage(carol.accountId, 'merhaba');
+    await waitFor(() => carol.received.length > 0);
+
+    const aliceCarol = await alice.manager.safetyQrFor(carol.accountId);
+    expect(await alice.manager.matchesSafetyCode(bob.accountId, aliceCarol!)).toBe(false);
+    expect(await bob.manager.matchesSafetyCode(alice.accountId, aliceCarol!)).toBe(false);
+
+    [alice, bob, carol].forEach((d) => d.socket.close());
+  }, 90_000);
+
+  it('has no code for somebody we have never spoken to', async () => {
+    const alice = await bringUp('Alice');
+    expect(await alice.manager.safetyQrFor('acct-stranger')).toBeNull();
+    expect(await alice.manager.matchesSafetyCode('acct-stranger', 'tildra:verify:1:aa:bb')).toBe(
+      false,
+    );
+    alice.socket.close();
+  }, 40_000);
 });

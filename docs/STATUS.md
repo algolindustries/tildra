@@ -15,7 +15,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Sealed sender, rotating mailboxes, contact inbox for first contact | done |
 | Encrypted local storage: keystore master key + vault-encrypted SQLite | done |
 | Session manager: fanout per device, identity-change blocking, prekey top-up | done |
-| Screens: onboarding, chat list, conversation, safety number, profile, device link | done |
+| Screens: onboarding, chat list, conversation, safety number, profile, device link (both halves) | done |
 | Encrypted groups: sender keys, signed messages, rotation on removal | done |
 | Encrypted profiles (name, photo, about), mutual introduction on first contact | done |
 | Encrypted attachments; photo and voice messages with waveforms | done |
@@ -23,13 +23,19 @@ tested by running the real Go server and pushing real traffic through it.
 | Key transparency: Merkle log, inclusion + consistency proofs verified by the client | done |
 | Gossip between contacts for split-view detection | done |
 | `tildra-auditor`: standalone log watcher, publishable checkpoints | done |
-| Device linking: commitment over a camera + six-digit pairing code | done |
+| Device linking, both halves: the new device shows a QR, the signed-in device scans it, six-digit pairing code compared on both screens | done |
+| QR scanning and display for device links and safety numbers, with a hardened parser for what comes off the camera | done |
 | Call signalling: SDP hardening, DTLS fingerprint bound to the identity key, ICE address policy, call state machine | done |
 | Call signalling carried end to end through `SessionManager`: ring all devices, first answer wins, busy, hangup | done |
 | Reproducible builds for the Go server and `tildra-auditor`, checked in CI | done |
 
-Counts at time of writing: 310 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 342 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
+
+The screens themselves have no tests — this project has no React Native test
+renderer. What stands behind them is typecheck plus the Metro bundle, and the
+logic they call is tested directly. That is weaker than it sounds and is worth
+knowing before trusting a UI change.
 
 ## Not done
 
@@ -54,9 +60,6 @@ store implementations passing the same conformance suite, Metro bundle builds.
   not been reviewed by anyone outside this work, and nothing should carry real
   traffic until it has.
 - **A public auditor instance.** The tool ships; nobody operates one.
-- **QR scanning for device links.** Codes are pasted. The security property is
-  identical — what matters is the code crossing between two screens the user can
-  see — but scanning is what people expect.
 - **Reproducible builds for the mobile app.** The Go server and
   `tildra-auditor` now build reproducibly and CI checks it on every push, host
   target and cross-compiled. The app does not: Expo release builds pull in the
@@ -92,3 +95,12 @@ store implementations passing the same conformance suite, Metro bundle builds.
 - **`docs/THREAT_MODEL.md` lists what Tildra does not defend against.** If a
   change would move something off that list, or onto it, the doc changes in the
   same commit.
+- **A protocol that supports something is not a feature.** This table said
+  device linking was done while the only screen was the *approving* half —
+  there was nothing in the app that could produce a code for it to approve. The
+  same mistake had already been made once with "multi-device". Before writing
+  "done", find the entry point a user would actually press.
+- **The camera is an input the attacker controls.** Everything scanned goes
+  through `crypto/scan.ts`, which decides what kind of code it is, refuses the
+  wrong kind by name, and validates the server address inside a link code
+  before anything can act on it.

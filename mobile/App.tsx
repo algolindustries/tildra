@@ -18,6 +18,7 @@ import { ConversationScreen } from './src/screens/ConversationScreen';
 import { SafetyNumberScreen } from './src/screens/SafetyNumberScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
 import { LinkDeviceScreen } from './src/screens/LinkDeviceScreen';
+import { JoinDeviceScreen } from './src/screens/JoinDeviceScreen';
 import { Banner, Button } from './src/ui/components';
 import { palette, spacing } from './src/ui/theme';
 
@@ -37,6 +38,13 @@ export default function App() {
   const closeConversation = useApp((s) => s.closeConversation);
 
   const [route, setRoute] = useState<Route>({ name: 'list' });
+  const [joining, setJoining] = useState(false);
+
+  // Leaving this set would drop the user back on the linking screen the next
+  // time they signed out.
+  useEffect(() => {
+    if (phase !== 'onboarding') setJoining(false);
+  }, [phase]);
 
   useEffect(() => {
     void bootstrap({
@@ -59,7 +67,11 @@ export default function App() {
             <Button label={t.retry} onPress={() => void bootstrap()} style={styles.retry} />
           </View>
         ) : phase === 'onboarding' ? (
-          <OnboardingScreen />
+          joining ? (
+            <JoinDeviceScreen onCancel={() => setJoining(false)} />
+          ) : (
+            <OnboardingScreen onJoinExisting={() => setJoining(true)} />
+          )
         ) : route.name === 'conversation' ? (
           <ConversationScreen
             accountId={route.accountId}

@@ -37,6 +37,22 @@ export interface Strings {
   linkConfirm: string;
   linkWaiting: string;
   linkDone: string;
+  joinExisting: string;
+  joinTitle: string;
+  joinBody: string;
+  joinStart: string;
+  joinShowThis: string;
+  joinCompare: string;
+  scan: string;
+  scanHint: string;
+  scanOrPaste: string;
+  cameraPermissionTitle: string;
+  cameraPermissionBody: string;
+  cameraPermissionGrant: string;
+  cameraPermissionDenied: string;
+  verifyScanTitle: string;
+  verifyScanMatch: string;
+  verifyScanMismatch: string;
   attachPhoto: string;
   attachment: string;
   attachmentFailed: string;
@@ -138,6 +154,27 @@ const en: Strings = {
   linkConfirm: 'The digits match',
   linkWaiting: 'Waiting for approval on your other device…',
   linkDone: 'Device linked',
+  joinExisting: 'Add this device to an account I already have',
+  joinTitle: 'Add this device',
+  joinBody:
+    'This device gets its own key. Show the code below to a device that is already signed in, then check that the six digits match on both screens before you continue.',
+  joinStart: 'Show my code',
+  joinShowThis: 'Show this to your other device',
+  joinCompare:
+    'Both screens must show these six digits. If they differ, stop — something is between your two devices.',
+  scan: 'Scan a code',
+  scanHint: 'Point the camera at the code on the other screen',
+  scanOrPaste: 'or paste it instead',
+  cameraPermissionTitle: 'Camera access',
+  cameraPermissionBody:
+    'Tildra reads the code off the other screen. Nothing is recorded and nothing is uploaded.',
+  cameraPermissionGrant: 'Allow the camera',
+  cameraPermissionDenied:
+    'The camera is turned off for Tildra in your system settings. You can paste the code instead.',
+  verifyScanTitle: 'Scan their code',
+  verifyScanMatch: 'Verified. You are talking to the right device.',
+  verifyScanMismatch:
+    'That code does not match this conversation. Do not carry on until you know why — this is what a key substitution looks like.',
   attachPhoto: 'Send a photo',
   attachment: 'Attachment',
   attachmentFailed: 'Could not load this attachment.',
@@ -239,6 +276,27 @@ const tr: Strings = {
   linkConfirm: 'Haneler aynı',
   linkWaiting: 'Diğer cihazınızda onay bekleniyor…',
   linkDone: 'Cihaz eşleştirildi',
+  joinExisting: 'Bu cihazı zaten sahip olduğum bir hesaba ekle',
+  joinTitle: 'Bu cihazı ekle',
+  joinBody:
+    'Bu cihaz kendi anahtarını alır. Aşağıdaki kodu zaten oturum açmış bir cihaza gösterin, sonra devam etmeden önce altı hanenin iki ekranda da aynı olduğunu kontrol edin.',
+  joinStart: 'Kodumu göster',
+  joinShowThis: 'Bunu diğer cihazınıza gösterin',
+  joinCompare:
+    'Her iki ekran da bu altı haneyi göstermeli. Farklılarsa durun — iki cihazınızın arasına bir şey girmiş demektir.',
+  scan: 'Kod tara',
+  scanHint: 'Kamerayı diğer ekrandaki koda doğrultun',
+  scanOrPaste: 'ya da yapıştırın',
+  cameraPermissionTitle: 'Kamera erişimi',
+  cameraPermissionBody:
+    'Tildra kodu diğer ekrandan okur. Hiçbir şey kaydedilmez ve hiçbir şey yüklenmez.',
+  cameraPermissionGrant: 'Kameraya izin ver',
+  cameraPermissionDenied:
+    'Sistem ayarlarınızda Tildra için kamera kapalı. Bunun yerine kodu yapıştırabilirsiniz.',
+  verifyScanTitle: 'Kodlarını tarayın',
+  verifyScanMatch: 'Doğrulandı. Doğru cihazla konuşuyorsunuz.',
+  verifyScanMismatch:
+    'Bu kod bu konuşmayla eşleşmiyor. Nedenini öğrenmeden devam etmeyin — anahtar değişimi tam olarak böyle görünür.',
   attachPhoto: 'Fotoğraf gönder',
   attachment: 'Ek dosya',
   attachmentFailed: 'Bu ek dosya yüklenemedi.',

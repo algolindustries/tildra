@@ -96,7 +96,7 @@ import {
   deliveryMailbox,
   deriveMailboxSecret,
 } from '../crypto/mailbox';
-import { safetyNumber } from '../crypto/safety';
+import { safetyNumber, safetyQrPayload, verifyQrPayload } from '../crypto/safety';
 import {
   ONE_TIME_PREKEY_TARGET,
   generatePreKeys,
@@ -1674,6 +1674,27 @@ export class SessionManager {
     const conversation = await this.store.getConversation(accountId);
     if (!conversation) return null;
     return safetyNumber(this.identity.publicKey, conversation.identityKey);
+  }
+
+  /** The same value as a QR payload, for the camera path. */
+  async safetyQrFor(accountId: string): Promise<string | null> {
+    const conversation = await this.store.getConversation(accountId);
+    if (!conversation || conversation.identityKey.length === 0) return null;
+    return safetyQrPayload(this.identity.publicKey, conversation.identityKey);
+  }
+
+  /**
+   * Check a scanned code against this conversation.
+   *
+   * Returns false rather than throwing, and does *not* mark anything verified:
+   * a match is evidence for the user, and recording the verification stays an
+   * explicit act. A scanner that silently verified on a match would make the
+   * one screen in the app that requires a human decision not require one.
+   */
+  async matchesSafetyCode(accountId: string, scanned: string): Promise<boolean> {
+    const conversation = await this.store.getConversation(accountId);
+    if (!conversation || conversation.identityKey.length === 0) return false;
+    return verifyQrPayload(scanned, this.identity.publicKey, conversation.identityKey);
   }
 
   /**

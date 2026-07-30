@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Banner, Button } from '../ui/components';
+import { QrCode, QrScanner } from '../ui/qr';
 import { palette, radius, spacing, typography } from '../ui/theme';
 import { formatAccountId, safetyNumberRows } from '../ui/format';
 import { useApp } from '../state/app';
+import { describeScanError, readSafetyCode } from '../crypto/scan';
 
 /**
  * Safety number comparison.
@@ -18,15 +20,41 @@ import { useApp } from '../state/app';
 export function SafetyNumberScreen({ accountId, onDone }: { accountId: string; onDone: () => void }) {
   const t = useApp((s) => s.t);
   const safetyNumber = useApp((s) => s.safetyNumber);
+  const safetyQr = useApp((s) => s.safetyQr);
   const conversations = useApp((s) => s.conversations);
   const markVerified = useApp((s) => s.markVerified);
+  const matchesSafetyCode = useApp((s) => s.matchesSafetyCode);
 
   const conversation = conversations.find((c) => c.accountId === accountId);
   const rows = safetyNumber ? safetyNumberRows(safetyNumber) : [];
 
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<'match' | 'mismatch' | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+
   async function onConfirm() {
     await markVerified(accountId);
     onDone();
+  }
+
+  /**
+   * A scan is evidence, not a decision. Even on a match the user still presses
+   * the button that says the numbers match — the one screen in the app that
+   * requires a human is not going to start verifying things by itself.
+   */
+  async function onScan(payload: string) {
+    setChecking(true);
+    setScanError(null);
+    try {
+      const code = readSafetyCode(payload);
+      setScanResult((await matchesSafetyCode(accountId, code)) ? 'match' : 'mismatch');
+      setScanning(false);
+    } catch (err) {
+      setScanError(describeScanError(err));
+    } finally {
+      setChecking(false);
+    }
   }
 
   return (
@@ -53,6 +81,44 @@ export function SafetyNumberScreen({ accountId, onDone }: { accountId: string; o
             </Text>
           ))}
         </View>
+
+        {safetyQr ? <QrCode value={safetyQr} size={180} /> : null}
+
+        {scanning ? (
+          <>
+            <QrScanner
+              paused={checking}
+              onScan={(payload) => void onScan(payload)}
+              onCancel={() => setScanning(false)}
+              strings={{
+                cancel: t.cancel,
+                permissionTitle: t.cameraPermissionTitle,
+                permissionBody: t.cameraPermissionBody,
+                permissionGrant: t.cameraPermissionGrant,
+                permissionDenied: t.cameraPermissionDenied,
+                hint: t.scanHint,
+              }}
+            />
+            {scanError ? <Banner tone="warning" title={t.errorGeneric} body={scanError} /> : null}
+          </>
+        ) : (
+          <Button
+            label={t.verifyScanTitle}
+            variant="secondary"
+            onPress={() => {
+              setScanResult(null);
+              setScanError(null);
+              setScanning(true);
+            }}
+            disabled={!safetyQr}
+          />
+        )}
+
+        {scanResult === 'match' ? (
+          <Banner tone="info" title={t.verified} body={t.verifyScanMatch} />
+        ) : scanResult === 'mismatch' ? (
+          <Banner tone="danger" title={t.identityChangedTitle} body={t.verifyScanMismatch} />
+        ) : null}
 
         <Button
           label={t.markVerified}

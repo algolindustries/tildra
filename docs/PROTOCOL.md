@@ -451,6 +451,34 @@ the log it signs can be used to rewrite the whole thing.
 
 No primitive here is novel. That is the point.
 
+## 9.1 Scanned codes
+
+Two flows put a value on one screen and a camera on another: device linking
+(§1 of `docs/STATUS.md`, protocol in the provisioning module) and safety-number
+verification (§7). Both are `tildra:`-scheme payloads and both are read by the
+same parser, which applies three rules.
+
+**Every code declares its kind, and every caller declares what it wants.** The
+link screen refuses a safety code and the verification screen refuses a link
+code, each by name. Two flows that both accept "whatever was scanned" is how
+somebody gets talked into pointing their camera at the wrong square.
+
+**The server address inside a link code is hostile input.** It must be HTTPS,
+or HTTP only on loopback; embedded credentials and query strings are refused.
+The approving device does not use the field at all — it talks to the server it
+is already authenticated against — but a field parsed and returned unchecked is
+a trap for the next caller.
+
+**A scanner fires repeatedly.** `onBarcodeScanned` delivers the same code many
+times a second for as long as it is in frame. Repeats of the same value are
+suppressed and a different value is let through immediately; once a scan has
+been acted on, the gate closes entirely. Without that, one poster held in frame
+for two seconds adds fifty devices to an account.
+
+A scanned safety code is *evidence*, not a decision: a match is shown to the
+user and the conversation is still only marked verified when they press the
+button that says the numbers match.
+
 ## 10. Calls
 
 Media is WebRTC: DTLS-SRTP between the two endpoints, with a TURN server for

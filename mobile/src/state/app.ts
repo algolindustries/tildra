@@ -75,12 +75,26 @@ export interface AppState {
   activeAccountId: string | null;
   messages: Message[];
   safetyNumber: string | null;
+  safetyQr: string | null;
+
+  /**
+   * The new device's side of a link, while it is happening. `code` arrives
+   * only once the other device has approved — until then there is nothing for
+   * the user to compare, and showing a placeholder where a security-critical
+   * value goes is how people learn to skim past it.
+   */
+  pendingLink: { payload: string; code: string | null } | null;
 
   // Actions
   bootstrap: (options?: { serverUrl?: string; localeTag?: string }) => Promise<void>;
   createAccount: (deviceName: string, displayName?: string) => Promise<void>;
   setProfile: (profile: { displayName: string; about?: string; avatar?: Uint8Array }) => Promise<void>;
   approveLink: (scanned: string) => Promise<string>;
+  /** New-device side: open a provisioning channel and show a code. */
+  startLinking: (deviceName: string) => Promise<void>;
+  /** New-device side: the user says the digits match, so finish signing in. */
+  confirmLink: () => Promise<void>;
+  cancelLinking: () => void;
   openConversation: (accountId: string) => Promise<void>;
   closeConversation: () => void;
   send: (text: string) => Promise<void>;
@@ -90,6 +104,8 @@ export interface AppState {
   loadAttachment: (messageId: string) => Promise<Uint8Array | null>;
   startConversation: (input: string) => Promise<string>;
   markVerified: (accountId: string) => Promise<void>;
+  /** Whether a scanned code belongs to this conversation. Verifying stays a separate act. */
+  matchesSafetyCode: (accountId: string, scanned: string) => Promise<boolean>;
   claimHandle: (handle: string) => Promise<void>;
   signOut: () => Promise<void>;
   setLocale: (locale: Locale) => void;
@@ -113,6 +129,19 @@ let runtime: Runtime | null = null;
 /** The in-flight voice recorder, if any. Not store state: it is a live handle. */
 let activeRecording: import('../media/voice').Recording | null = null;
 
+/**
+ * The secret half of an in-flight device link. Kept out of the store because
+ * it holds an identity secret key, and store state is read by every screen.
+ */
+interface ActiveLink {
+  identity: KeyPair;
+  deviceName: string;
+  approval?: import('../crypto/provisioning').LinkApproval;
+  cancelled: boolean;
+}
+
+let activeLink: ActiveLink | null = null;
+
 export function currentRuntime(): Runtime | null {
   return runtime;
 }
@@ -135,6 +164,8 @@ export const useApp = create<AppState>((set, get) => ({
   activeAccountId: null,
   messages: [],
   safetyNumber: null,
+  safetyQr: null,
+  pendingLink: null,
 
   setLocale: (locale) => set({ locale, t: strings(locale) }),
 
@@ -250,12 +281,13 @@ export const useApp = create<AppState>((set, get) => ({
       activeAccountId: accountId,
       messages: await runtime.db.listMessages(conversation.id),
       safetyNumber: await runtime.manager.safetyNumberFor(accountId),
+      safetyQr: await runtime.manager.safetyQrFor(accountId),
     });
     await get().refreshConversations();
   },
 
   closeConversation() {
-    set({ activeAccountId: null, messages: [], safetyNumber: null });
+    set({ activeAccountId: null, messages: [], safetyNumber: null, safetyQr: null });
   },
 
   async send(text) {
@@ -416,6 +448,11 @@ export const useApp = create<AppState>((set, get) => ({
     return accountId;
   },
 
+  async matchesSafetyCode(accountId, scanned) {
+    if (!runtime?.manager) return false;
+    return runtime.manager.matchesSafetyCode(accountId, scanned);
+  },
+
   async markVerified(accountId) {
     if (!runtime?.manager) return;
     await runtime.manager.markVerified(accountId);
@@ -453,6 +490,89 @@ export const useApp = create<AppState>((set, get) => ({
       accountId,
     );
     return code;
+  },
+
+  async startLinking(deviceName) {
+    const base = runtime;
+    if (!base) throw new Error('Tildra: bootstrap has not run');
+
+    set({ error: null });
+    // A fresh identity key, generated here and never sent anywhere. What
+    // travels is its public half, through the server, and a hash of it over
+    // the camera — the hash is what makes a substituted key detectable.
+    const identity = generateIdentity();
+    const { beginDeviceLink } = await import('../session/linking');
+    const pending = await beginDeviceLink(base.client, base.serverUrl, identity);
+
+    const link: ActiveLink = { identity, deviceName, cancelled: false };
+    activeLink = link;
+    set({ pendingLink: { payload: pending.payload, code: null } });
+
+    // Poll in the background so the code is on screen immediately. The user
+    // has to carry this device to the other one; blocking the render until
+    // approval arrives would show a spinner for as long as that takes.
+    void pending
+      .await({ timeoutMs: 5 * 60_000, pollMs: 1_000 })
+      .then(({ approval, code }) => {
+        if (activeLink !== link || link.cancelled) return;
+        link.approval = approval;
+        set({ pendingLink: { payload: pending.payload, code } });
+      })
+      .catch((err) => {
+        if (activeLink !== link || link.cancelled) return;
+        activeLink = null;
+        set({ pendingLink: null, error: describeError(err, get().t) });
+      });
+  },
+
+  async confirmLink() {
+    const base = runtime;
+    const link = activeLink;
+    if (!base || !link?.approval) return;
+    const approval = link.approval;
+
+    try {
+      set({ error: null });
+      const credentials = await base.client.login(
+        link.identity,
+        approval.accountId,
+        approval.deviceId,
+      );
+
+      const { secrets, upload } = generatePreKeys(link.identity);
+      await base.client.publishKeys(upload);
+
+      // Persisted before going online, for the same reason as account
+      // creation: a crash in between would leave a device on the account that
+      // can never sign in again, and no way to notice from this side.
+      await base.db.setMeta(
+        IDENTITY_META_KEY,
+        base.vault.encrypt('identity', IDENTITY_META_KEY, encodeIdentity(link.identity)),
+      );
+      await base.db.setMeta(
+        PREKEYS_META_KEY,
+        base.vault.encryptJson('prekeys', PREKEYS_META_KEY, encodePreKeys(secrets)),
+      );
+      await saveCredentials(credentials);
+
+      await startSession({ ...base, identity: link.identity, preKeys: secrets, credentials }, set, get);
+      activeLink = null;
+
+      // No profile and no history come across. Message history is not synced
+      // between devices by design, and the profile lives in the other
+      // device's encrypted store — the user sets it again here, or leaves it.
+      set({ phase: 'ready', accountId: approval.accountId, pendingLink: null });
+      await get().refreshConversations();
+    } catch (err) {
+      set({ error: describeError(err, get().t) });
+      throw err;
+    }
+  },
+
+  cancelLinking() {
+    if (activeLink) activeLink.cancelled = true;
+    activeLink = null;
+    set({ pendingLink: null, error: null });
   },
 
   async claimHandle(handle) {
