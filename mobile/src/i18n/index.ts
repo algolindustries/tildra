@@ -119,6 +119,20 @@ export interface Strings {
   errorTransparency: string;
   errorSplitView: string;
   dismiss: string;
+  callAudio: string;
+  callVideo: string;
+  callRinging: string;
+  callIncoming: string;
+  callConnecting: string;
+  callAnswer: string;
+  callDecline: string;
+  callHangUp: string;
+  callMute: string;
+  callUnmute: string;
+  callVerified: string;
+  callUnverified: string;
+  callKeyChanged: string;
+  callNoRelay: string;
   retry: string;
   cancel: string;
   copy: string;
@@ -242,6 +256,23 @@ const en: Strings = {
   errorSplitView:
     'This server showed you and someone else different key transparency logs. That should never happen and may mean your messages are being intercepted. Verify safety numbers before continuing.',
   dismiss: 'Dismiss',
+  callAudio: 'Call',
+  callVideo: 'Video call',
+  callRinging: 'Ringing…',
+  callIncoming: 'Incoming call',
+  callConnecting: 'Connecting…',
+  callAnswer: 'Answer',
+  callDecline: 'Decline',
+  callHangUp: 'Hang up',
+  callMute: 'Mute',
+  callUnmute: 'Unmute',
+  callVerified: 'Verified — the media is pinned to the key you checked.',
+  callUnverified:
+    'You have not verified this person\u2019s safety number. The call is encrypted and bound to whatever key the server gave you for them, which is not the same as knowing who they are.',
+  callKeyChanged:
+    'This contact\u2019s key changed and you have not confirmed why. Do not treat this call as private until you have.',
+  callNoRelay:
+    'No relay is configured, so this call needs a direct path between the two devices and may not connect.',
   retry: 'Try again',
   cancel: 'Cancel',
   copy: 'Copy',
@@ -365,6 +396,23 @@ const tr: Strings = {
   errorSplitView:
     'Bu sunucu size ve bir başkasına farklı anahtar şeffaflık kayıtları gösterdi. Bu asla olmamalı ve mesajlarınızın araya girilerek okunduğu anlamına gelebilir. Devam etmeden önce güvenlik numaralarını doğrulayın.',
   dismiss: 'Kapat',
+  callAudio: 'Ara',
+  callVideo: 'Görüntülü ara',
+  callRinging: 'Çalıyor…',
+  callIncoming: 'Gelen arama',
+  callConnecting: 'Bağlanıyor…',
+  callAnswer: 'Cevapla',
+  callDecline: 'Reddet',
+  callHangUp: 'Kapat',
+  callMute: 'Sesi kapat',
+  callUnmute: 'Sesi aç',
+  callVerified: 'Doğrulandı — medya, kontrol ettiğiniz anahtara bağlı.',
+  callUnverified:
+    'Bu kişinin güvenlik numarasını doğrulamadınız. Arama şifreli ve sunucunun size verdiği anahtara bağlı; bu, karşınızdakinin kim olduğunu bilmekle aynı şey değil.',
+  callKeyChanged:
+    'Bu kişinin anahtarı değişti ve nedenini onaylamadınız. Onaylayana kadar bu aramayı gizli saymayın.',
+  callNoRelay:
+    'Yapılandırılmış röle yok; bu arama iki cihaz arasında doğrudan bir yol gerektiriyor ve bağlanmayabilir.',
   retry: 'Tekrar dene',
   cancel: 'Vazgeç',
   copy: 'Kopyala',

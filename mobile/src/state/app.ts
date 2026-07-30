@@ -37,6 +37,9 @@ import {
 } from '../crypto/transparency';
 import { CHECKPOINT_META_KEY } from '../session/manager';
 import { PinnedAuditor, parsePinnedAuditors } from '../crypto/auditor';
+import { CallEndReason, CallSession } from '../crypto/calling';
+import { CallDriver, CallDriverDeps } from '../session/call-driver';
+import type { WebRtcPeer } from '../session/webrtc-peer';
 import {
   dismissWakeNotifications,
   presentLocalNotification,
@@ -127,6 +130,11 @@ export interface AppState {
   /** How many pinned auditors last answered, and when. Null before the first check. */
   auditorStatus: { checked: number; of: number; at: number } | null;
 
+  /** The live call, mirrored from the manager so screens can render it. */
+  call: CallSession | null;
+  /** Set while the media stack is being brought up or torn down. */
+  callBusy: boolean;
+
   // Actions
   bootstrap: (options?: { serverUrl?: string; localeTag?: string }) => Promise<void>;
   createAccount: (deviceName: string, displayName?: string) => Promise<void>;
@@ -148,6 +156,10 @@ export interface AppState {
   markVerified: (accountId: string) => Promise<void>;
   /** Ask every pinned auditor whether it saw the same log. */
   checkAuditors: () => Promise<void>;
+  placeCall: (accountId: string, options?: { video?: boolean }) => Promise<void>;
+  answerCall: () => Promise<void>;
+  endCall: (reason?: CallEndReason) => Promise<void>;
+  setCallMuted: (muted: boolean) => void;
   dismissSplitView: () => void;
   /** Whether a scanned code belongs to this conversation. Verifying stays a separate act. */
   matchesSafetyCode: (accountId: string, scanned: string) => Promise<boolean>;
@@ -187,6 +199,41 @@ interface ActiveLink {
 
 let activeLink: ActiveLink | null = null;
 
+/**
+ * The live call, and the media stack under it. Handles, not state: a peer
+ * connection is not something a screen should be holding a reference to.
+ */
+let activeCall: CallDriver | null = null;
+let activePeer: WebRtcPeer | null = null;
+
+/**
+ * How the driver reaches the media stack.
+ *
+ * `react-native-webrtc` is imported lazily so that touching a native module
+ * only happens when somebody actually places or answers a call. Importing it
+ * at module load would make the whole app — messaging included — require a
+ * development build, when only calls do.
+ */
+function callDeps(
+  set: (partial: Partial<AppState>) => void,
+  get: () => AppState,
+): CallDriverDeps {
+  return {
+    signalling: runtime!.manager,
+    onError: (error) => set({ error: describeError(error, get().t) }),
+    async createPeerConnection(config, handlers) {
+      const { createWebRtcPeer } = await import('../session/webrtc-peer');
+      activePeer = await createWebRtcPeer({
+        config,
+        handlers,
+        video: get().call?.video ?? false,
+        onRemoteStream: () => set({ call: activeCall?.call ?? get().call }),
+      });
+      return activePeer;
+    },
+  };
+}
+
 export function currentRuntime(): Runtime | null {
   return runtime;
 }
@@ -213,6 +260,8 @@ export const useApp = create<AppState>((set, get) => ({
   pendingLink: null,
   splitView: null,
   auditorStatus: null,
+  call: null,
+  callBusy: false,
 
   setLocale: (locale) => set({ locale, t: strings(locale) }),
 
@@ -509,6 +558,53 @@ export const useApp = create<AppState>((set, get) => ({
     set({ auditorStatus: { checked, of: auditors.length, at: Date.now() } });
   },
 
+  async placeCall(accountId, options = {}) {
+    if (!runtime?.manager || get().callBusy || get().call) return;
+    set({ callBusy: true, error: null });
+    try {
+      activeCall = await CallDriver.place(callDeps(set, get), accountId, {
+        video: options.video,
+      });
+      set({ call: activeCall.call });
+    } catch (err) {
+      activeCall = null;
+      set({ call: null, error: describeError(err, get().t) });
+    } finally {
+      set({ callBusy: false });
+    }
+  },
+
+  async answerCall() {
+    if (!activeCall || get().callBusy) return;
+    set({ callBusy: true, error: null });
+    try {
+      set({ call: await activeCall.accept() });
+    } catch (err) {
+      set({ error: describeError(err, get().t) });
+      await get().endCall('failed');
+    } finally {
+      set({ callBusy: false });
+    }
+  },
+
+  async endCall(reason = 'hangup') {
+    const driver = activeCall;
+    activeCall = null;
+    // Cleared before the hangup goes out. A hangup that fails to send must
+    // still take the call screen down, or the user is looking at a call that
+    // is over and cannot leave it.
+    set({ call: null, callBusy: false });
+    if (driver) {
+      await driver.hangUp(reason).catch((err: unknown) =>
+        set({ error: describeError(err, get().t) }),
+      );
+    }
+  },
+
+  setCallMuted(muted) {
+    activePeer?.setMuted(muted);
+  },
+
   dismissSplitView() {
     set({ splitView: null });
   },
@@ -708,6 +804,41 @@ async function startSession(
       },
       onIdentityChange: () => {
         void get().refreshConversations();
+      },
+      onIncomingCall: (call, offerSdp) => {
+        // The offer's fingerprint was verified against the caller's identity
+        // key before this fired — an offer that failed never rings.
+        set({ call });
+        void CallDriver.receive(callDeps(set, get), call, offerSdp)
+          .then((driver) => {
+            activeCall = driver;
+          })
+          .catch((err) => {
+            set({ call: null, error: describeError(err, get().t) });
+            void runtime?.manager.endCall(call.callId, 'failed');
+          });
+      },
+      onCallAnswer: (call, answerSdp) => {
+        set({ call });
+        void activeCall?.acceptAnswer(call, answerSdp).catch((err) => {
+          set({ error: describeError(err, get().t) });
+          void get().endCall('failed');
+        });
+      },
+      onCallCandidate: (_call, candidate) => {
+        void activeCall?.addRemoteCandidate(candidate).catch(() => undefined);
+      },
+      onCallChange: (call) => {
+        if (call.phase === 'ended') {
+          // The far end hung up, or the manager gave up. Tear down the media
+          // without sending a second hangup back.
+          activeCall = null;
+          activePeer?.close();
+          activePeer = null;
+          set({ call: null, callBusy: false });
+          return;
+        }
+        set({ call });
       },
       onSplitView: (source, error) => {
         // Its own field, deliberately. This is not a request that failed, it

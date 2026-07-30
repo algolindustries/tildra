@@ -23,10 +23,12 @@ export function ConversationScreen({
   accountId,
   onBack,
   onVerify,
+  onCall,
 }: {
   accountId: string;
   onBack: () => void;
   onVerify: () => void;
+  onCall: (video: boolean) => void;
 }) {
   const t = useApp((s) => s.t);
   const locale = useApp((s) => s.locale);
@@ -78,6 +80,27 @@ export function ConversationScreen({
           <Text style={[styles.headerSub, conversation?.verified && styles.headerVerified]}>
             {conversation?.verified ? `✓ ${t.verified}` : t.notVerified}
           </Text>
+        </Pressable>
+        {/* Disabled while the key is in question rather than hidden: a
+            missing button is a puzzle, a disabled one next to the banner
+            explaining why is an answer. */}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t.callAudio}
+          disabled={blocked}
+          onPress={() => onCall(false)}
+          hitSlop={10}
+        >
+          <Text style={[styles.headerAction, blocked && styles.headerActionOff]}>☎</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t.callVideo}
+          disabled={blocked}
+          onPress={() => onCall(true)}
+          hitSlop={10}
+        >
+          <Text style={[styles.headerAction, blocked && styles.headerActionOff]}>▣</Text>
         </Pressable>
       </View>
 
@@ -246,6 +269,8 @@ function Bubble({
 }
 
 const styles = StyleSheet.create({
+  headerAction: { color: palette.accent, fontSize: 22, paddingHorizontal: spacing.xs },
+  headerActionOff: { color: palette.textFaint },
   screen: { flex: 1, backgroundColor: palette.bg },
   flex: { flex: 1 },
   header: {

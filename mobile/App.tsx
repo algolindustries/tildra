@@ -19,6 +19,7 @@ import { SafetyNumberScreen } from './src/screens/SafetyNumberScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
 import { LinkDeviceScreen } from './src/screens/LinkDeviceScreen';
 import { JoinDeviceScreen } from './src/screens/JoinDeviceScreen';
+import { CallScreen } from './src/screens/CallScreen';
 import { Banner, Button } from './src/ui/components';
 import { palette, spacing } from './src/ui/theme';
 
@@ -38,6 +39,8 @@ export default function App() {
   const closeConversation = useApp((s) => s.closeConversation);
 
   const [route, setRoute] = useState<Route>({ name: 'list' });
+  const call = useApp((s) => s.call);
+  const placeCall = useApp((s) => s.placeCall);
   const [joining, setJoining] = useState(false);
 
   // Leaving this set would drop the user back on the linking screen the next
@@ -66,6 +69,11 @@ export default function App() {
             <Banner tone="warning" title={t.errorGeneric} body={error ?? ''} />
             <Button label={t.retry} onPress={() => void bootstrap()} style={styles.retry} />
           </View>
+        ) : call ? (
+          // Above the route entirely. A ringing phone is not a place in a
+          // navigation stack, and a call the user cannot see is a microphone
+          // they have forgotten about.
+          <CallScreen />
         ) : phase === 'onboarding' ? (
           joining ? (
             <JoinDeviceScreen onCancel={() => setJoining(false)} />
@@ -80,6 +88,7 @@ export default function App() {
               setRoute({ name: 'list' });
             }}
             onVerify={() => setRoute({ name: 'verify', accountId: route.accountId })}
+            onCall={(video) => void placeCall(route.accountId, { video })}
           />
         ) : route.name === 'verify' ? (
           <SafetyNumberScreen

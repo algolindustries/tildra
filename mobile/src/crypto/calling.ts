@@ -793,3 +793,48 @@ function describe(event: CallEvent): string {
   if (event.type === 'signal') return `a ${CallSignalKind[event.kind].toLowerCase()} signal`;
   return `a ${event.type} event`;
 }
+
+// ---------------------------------------------------------------------------
+// What the call screen needs to say
+// ---------------------------------------------------------------------------
+
+/**
+ * How much this device knows about who is on the other end.
+ *
+ * There is no spoken verification code — the reasoning is at the top of this
+ * file — so the call screen is where the identity state has to be visible
+ * instead. A call is the moment a user is most likely to act on believing they
+ * know who they are talking to, and the least likely to go looking for a
+ * safety-number screen.
+ */
+export type CallTrust = 'verified' | 'unverified' | 'changed';
+
+export function callTrust(conversation: {
+  verified: boolean;
+  identityChanged: boolean;
+} | null | undefined): CallTrust {
+  // A changed key outranks a previous verification: the thing that was
+  // verified is not the thing on the other end now.
+  if (!conversation) return 'unverified';
+  if (conversation.identityChanged) return 'changed';
+  return conversation.verified ? 'verified' : 'unverified';
+}
+
+/**
+ * How long the call has been up, as mm:ss.
+ *
+ * Measured from when the media connected, not from when the phone started
+ * ringing — a call log that counts thirty seconds of ringing as talk time is
+ * wrong in the direction that matters for anyone reading it later.
+ */
+export function callDurationLabel(call: CallSession, now: number): string {
+  if (call.phase !== 'active') return '';
+  const seconds = Math.max(0, Math.floor((now - call.phaseAt) / 1000));
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    return `${hours}:${String(minutes % 60).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
+  }
+  return `${minutes}:${String(rest).padStart(2, '0')}`;
+}

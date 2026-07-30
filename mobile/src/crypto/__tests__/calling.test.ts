@@ -5,13 +5,16 @@ import {
   CALL_SIGNAL_MAX_AGE_MS,
   CALL_SIGNAL_MAX_SKEW_MS,
   CallError,
+  CallSession,
   CallSignal,
   CallSignalKind,
   MAX_SDP_BYTES,
   advanceCall,
   beginIncomingCall,
   beginOutgoingCall,
+  callDurationLabel,
   callHasTimedOut,
+  callTrust,
   decodeCallSignal,
   encodeCallSignal,
   filterIceCandidates,
@@ -797,5 +800,67 @@ describe('building the ICE configuration', () => {
     expect(iceConfigurationFor(iceTransportPolicyFor(answered), RELAY, { now: NOW }).iceTransportPolicy).toBe(
       'all',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// What the call screen shows
+// ---------------------------------------------------------------------------
+
+describe('call trust', () => {
+  it('reports a verified contact as verified', () => {
+    expect(callTrust({ verified: true, identityChanged: false })).toBe('verified');
+  });
+
+  it('reports an unverified contact as unverified', () => {
+    expect(callTrust({ verified: false, identityChanged: false })).toBe('unverified');
+  });
+
+  it('lets a changed key outrank a previous verification', () => {
+    // The thing that was verified is not the thing on the other end now, and
+    // a call screen that still says "verified" is actively misleading at the
+    // exact moment it matters most.
+    expect(callTrust({ verified: true, identityChanged: true })).toBe('changed');
+  });
+
+  it('treats somebody we have no conversation with as unverified', () => {
+    expect(callTrust(null)).toBe('unverified');
+    expect(callTrust(undefined)).toBe('unverified');
+  });
+});
+
+describe('call duration', () => {
+  const active = (phaseAt: number): CallSession => ({
+    ...beginOutgoingCall({ callId: CALL_ID, peerAccountId: BOB, now: NOW }),
+    phase: 'active',
+    phaseAt,
+  });
+
+  it('counts from when the media connected, not from when it started ringing', () => {
+    // A call log that counts ringing as talk time is wrong in the direction
+    // that matters to whoever reads it later.
+    const call = active(NOW + 30_000);
+    expect(callDurationLabel(call, NOW + 30_000 + 5_000)).toBe('0:05');
+  });
+
+  it('formats minutes and seconds', () => {
+    expect(callDurationLabel(active(NOW), NOW)).toBe('0:00');
+    expect(callDurationLabel(active(NOW), NOW + 9_000)).toBe('0:09');
+    expect(callDurationLabel(active(NOW), NOW + 61_000)).toBe('1:01');
+    expect(callDurationLabel(active(NOW), NOW + 599_000)).toBe('9:59');
+  });
+
+  it('grows an hours field rather than showing 90 minutes', () => {
+    expect(callDurationLabel(active(NOW), NOW + 3_600_000)).toBe('1:00:00');
+    expect(callDurationLabel(active(NOW), NOW + 3_723_000)).toBe('1:02:03');
+  });
+
+  it('never shows a negative duration when the clock moves backwards', () => {
+    expect(callDurationLabel(active(NOW), NOW - 5_000)).toBe('0:00');
+  });
+
+  it('shows nothing for a call that is not up yet', () => {
+    const ringing = beginOutgoingCall({ callId: CALL_ID, peerAccountId: BOB, now: NOW });
+    expect(callDurationLabel(ringing, NOW + 10_000)).toBe('');
   });
 });

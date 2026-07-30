@@ -33,10 +33,11 @@ tested by running the real Go server and pushing real traffic through it.
 | Reproducible app JavaScript bundle including Hermes bytecode, iOS and Android, checked in CI | done |
 | Native iOS and Android projects generate identically from the same source, checked in CI | done |
 | `react-native-webrtc` and its config plugin, with the generated native permissions and usage strings asserted in CI | done |
+| Call UI: place, ring, answer, decline, mute, hang up, and the peer's identity state shown on the call itself | done |
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 395 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 404 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -76,11 +77,16 @@ knowing before trusting a UI change.
   project. Verified it bites by removing the plugin and watching four
   permissions disappear.
 
+  There is now a call UI: a phone button in the conversation header, a ring
+  screen above everything else, answer and decline, mute, hang up, and — since
+  Tildra deliberately has no spoken verification code — the peer's identity
+  state stated in words on the call itself, because that is the moment somebody
+  is most likely to act on believing they know who they are talking to. The
+  adapter is loaded lazily, so only calls need a development build; messaging
+  still runs in Expo Go.
+
   What does not exist:
 
-  - **A call UI.** Nothing imports `webrtc-peer.ts` and nothing calls
-    `CallDriver.place`, so the adapter is not even in the JavaScript bundle —
-    its hash did not change when the dependency was added.
   - **A deployed coturn.**
   - **Renegotiation.** `setConfiguration` widens the policy and calls
     `restartIce()`, but an ICE restart changes the ufrag and pwd and strictly
@@ -89,10 +95,11 @@ knowing before trusting a UI change.
     filters in `SessionManager`, not the ICE agent. The property is kept; the
     second layer under it is not yet.
 
-  **No media has ever flowed.** Every test in this area drives a double, and
-  nothing here should be read as "calls work". What the CI checks establish is
-  that the native project a build would come from is configured the way the
-  code expects — not that the resulting app works.
+  **No media has ever flowed, and nothing here has run on a phone.** Every
+  test in this area drives a double; the media adapter and the call screen are
+  covered by typecheck, the Metro bundle and the native-config check, and by
+  nothing else. The first person to run this on two devices should expect to
+  find things. Nothing here should be read as "calls work".
 
   One thing for whoever writes the adapter: `setConfiguration` must trigger an
   ICE restart when the policy widens from `relay` to `all`.

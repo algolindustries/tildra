@@ -101,7 +101,7 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 | Encrypted photo and file attachments | ✅ |
 | Push notifications (content-free payload) | ✅ |
 | Voice messages with waveforms | ✅ |
-| Voice and video calls | ⬜ signalling, fingerprint binding, relay and media adapter done; **no call UI, no media yet** |
+| Voice and video calls | ⬜ end to end in code — signalling, fingerprint binding, relay, media adapter, UI; **never run on a phone** |
 | Key transparency for the handle directory | ✅ log, proofs verified by the client |
 | Gossip between contacts for split-view detection | ✅ |
 | Independent log auditor (`tildra-auditor`) | ✅ signs checkpoints, clients verify pinned auditors; no public instance |
