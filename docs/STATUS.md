@@ -40,7 +40,7 @@ tested by running the real Go server and pushing real traffic through it.
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 473 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 479 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -165,6 +165,10 @@ knowing before trusting a UI change.
   version of the test above kept a reference to the secrets and passed with the
   persistence call deleted, because the top-up mutates the same maps in place.
   It serialises on the way in now. Run the negative control.
+- **A bound with no test is a number in a file.** `MAX_SKIP`,
+  `MAX_SKIPPED_KEYS` and `SKIPPED_KEY_TTL_MS` had been there from the start,
+  are quoted in `docs/PROTOCOL.md` §3 as what bounds a device compromise, and
+  nothing exercised any of them.
 - **Test the thing that crosses the wire, not the helper.** `bucketSize` and
   `pad` were well tested and nothing checked an actual envelope. Writing that
   test found the claim was true and my expectation of it was wrong — the

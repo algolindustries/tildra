@@ -211,6 +211,11 @@ Standard Signal Double Ratchet, with two deliberate choices:
 Skipped message keys are cached for at most 1000 messages / 7 days per session,
 then dropped. This bounds the damage of a device compromise.
 
+The age bound is enforced on activity, not by a timer: every message sent or
+received on a session expires whatever has aged out of its cache. A session
+with no traffic at all keeps what it holds until it next sees any — which is
+the residue, and it is stated here rather than left to be discovered.
+
 ### 3.1 Post-compromise security
 
 Every DH ratchet step (i.e. every time the conversation changes direction) heals

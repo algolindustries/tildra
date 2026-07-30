@@ -209,6 +209,11 @@ export function encrypt(
   plaintext: Uint8Array,
   associatedData: Uint8Array = new Uint8Array(0),
 ): RatchetMessage {
+  // The bound used to be enforced from the receive path alone, so a session
+  // that only sent kept its cache for as long as the other side stayed quiet
+  // — and docs/PROTOCOL.md §3 is a claim about how long a stolen device is
+  // worth reading. Sending is activity too.
+  pruneSkipped(state);
   if (!state.sendingChain || !state.headerKeySending) {
     throw new Error('Tildra: cannot send before the first ratchet step completes');
   }
@@ -241,6 +246,10 @@ export function decrypt(
   message: RatchetMessage,
   associatedData: Uint8Array = new Uint8Array(0),
 ): Uint8Array {
+  // Pruning also happens inside skipMessageKeys, which every decrypt reaches;
+  // this is here so the bound does not depend on that being true tomorrow.
+  pruneSkipped(state);
+
   const fromSkipped = trySkippedKeys(state, message, associatedData);
   if (fromSkipped) return fromSkipped;
 

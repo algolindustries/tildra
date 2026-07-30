@@ -28,6 +28,7 @@ import { openEnvelope, sealEnvelope, SealedEnvelopeError } from '../sealed';
 import { safetyNumber, safetyQrPayload, verifyQrPayload } from '../safety';
 import { currentMailboxes, dayNumber, deliveryMailbox, mailboxFor } from '../mailbox';
 import { bucketSize, frame, pad, unframe, unpad } from '../wire';
+import { MAX_SKIPPED_KEYS, SKIPPED_KEY_TTL_MS } from '../ratchet';
 
 /** Build the bundle the server would publish from a device's generated keys. */
 function bundleFrom(
@@ -619,5 +620,118 @@ describe('what an envelope size tells an observer', () => {
         ...fixed,
       }).length,
     );
+  });
+});
+
+describe('how long a stolen device is worth reading', () => {
+  // docs/PROTOCOL.md §3: skipped message keys are cached for at most 1000
+  // messages / 7 days per session, then dropped, and that bounds the damage
+  // of a device compromise. The constants existed and nothing checked either
+  // bound.
+  function pair() {
+    const bob = generateIdentity();
+    const { secrets, upload } = generatePreKeys(bob, { count: 5 });
+    const alice = initiateSession(generateIdentity(), bundleFrom(bob, upload));
+    const accepted = acceptSession(secrets, alice.init);
+    return { sending: alice.ratchet, receiving: accepted.ratchet, ad: alice.associatedData };
+  }
+
+  /** Send `count` messages and deliver only the last, leaving a gap. */
+  function skipAhead(
+    session: { sending: RatchetState; receiving: RatchetState; ad: Uint8Array },
+    count: number,
+  ) {
+    let last = encrypt(session.sending, utf8('m'), session.ad);
+    for (let i = 1; i < count; i++) last = encrypt(session.sending, utf8('m'), session.ad);
+    decrypt(session.receiving, last, session.ad);
+  }
+
+  function cachedNumbers(state: RatchetState): number[] {
+    return [...state.skipped.keys()].map((id) => Number(id.slice(id.lastIndexOf(':') + 1)));
+  }
+
+  it('caches the keys it skipped, so late messages still arrive', () => {
+    // The feature the bounds are bounding. Without this the rest is just a
+    // test that a cache is empty.
+    const { sending, receiving, ad } = pair();
+    const first = encrypt(sending, utf8('birinci'), ad);
+    const second = encrypt(sending, utf8('ikinci'), ad);
+
+    expect(fromUtf8(decrypt(receiving, second, ad))).toBe('ikinci');
+    expect(receiving.skipped.size).toBe(1);
+    expect(fromUtf8(decrypt(receiving, first, ad))).toBe('birinci');
+    expect(receiving.skipped.size).toBe(0);
+  });
+
+  it('refuses to skip further than the cap', () => {
+    // An attacker who can inject a header claiming message number 10,000,000
+    // must not make the recipient derive ten million keys.
+    const { sending, receiving, ad } = pair();
+    let last = encrypt(sending, utf8('m'), ad);
+    for (let i = 0; i < MAX_SKIP + 5; i++) last = encrypt(sending, utf8('m'), ad);
+    expect(() => decrypt(receiving, last, ad)).toThrow(/refusing to skip more than/);
+  });
+
+  it('caches every key below the message it delivered', () => {
+    const session = pair();
+    skipAhead(session, 600);
+    // Delivering message 599 caches the keys for 0..598; 599 was consumed.
+    expect(session.receiving.skipped.size).toBe(599);
+    expect(Math.max(...cachedNumbers(session.receiving))).toBe(598);
+  });
+
+  it('never holds more than the cap, and evicts the oldest first', () => {
+    // Two gaps, because one is limited to MAX_SKIP. Together they would cache
+    // more than the cap allows.
+    const session = pair();
+    skipAhead(session, 600);
+    skipAhead(session, 600);
+
+    expect(session.receiving.skipped.size).toBe(MAX_SKIPPED_KEYS);
+    // The keys that survive are the recent ones. An old undelivered message
+    // is the one least likely to still be coming, and the one whose key is
+    // most worth not having on a stolen device.
+    expect(Math.min(...cachedNumbers(session.receiving))).toBeGreaterThan(0);
+  });
+
+  it('drops a key past its age on an ordinary in-order message', () => {
+    // Not a regression this fixed — the receive path always pruned — but the
+    // bound had no test at all, and it is the one that decides how long a
+    // stolen device is worth reading.
+    const { sending, receiving, ad } = pair();
+    const stale = encrypt(sending, utf8('eski'), ad);
+    const next = encrypt(sending, utf8('yeni'), ad);
+    decrypt(receiving, next, ad);
+    expect(receiving.skipped.size).toBe(1);
+
+    for (const entry of receiving.skipped.values()) {
+      entry.storedAt = Date.now() - SKIPPED_KEY_TTL_MS - 1000;
+    }
+
+    // An ordinary in-order message, with no skipping involved at all.
+    const third = encrypt(sending, utf8('üçüncü'), ad);
+    decrypt(receiving, third, ad);
+    expect(receiving.skipped.size).toBe(0);
+
+    // And the expired message is genuinely unreadable now.
+    expect(() => decrypt(receiving, stale, ad)).toThrow();
+  });
+
+  it('drops an expired key when the session only sends', () => {
+    // This one was a real gap. Pruning ran from the receive path alone, so a
+    // session whose other side went quiet kept its cache indefinitely while
+    // this device carried on talking.
+    const { sending, receiving, ad } = pair();
+    decrypt(receiving, encrypt(sending, utf8('a'), ad), ad);
+    encrypt(sending, utf8('b'), ad);
+    const late = encrypt(sending, utf8('c'), ad);
+    decrypt(receiving, late, ad);
+    expect(receiving.skipped.size).toBe(1);
+
+    for (const entry of receiving.skipped.values()) {
+      entry.storedAt = Date.now() - SKIPPED_KEY_TTL_MS - 1000;
+    }
+    encrypt(receiving, utf8('reply'), ad);
+    expect(receiving.skipped.size).toBe(0);
   });
 });
