@@ -181,13 +181,26 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
-- **Three call tests are flaky on a loaded developer machine and pass on CI.**
-  `withholds a direct address until the call is answered`, `tells a second
-  caller the line is busy`, and `ends the call on both sides when one side
-  hangs up` time out locally waiting for a signal that a fast machine
-  delivers. Raising the ceiling to thirty seconds fixed several others and not
-  these three, so "it is just slow" is not established — it is an open
-  question, and it is written here rather than dismissed.
+- **An open defect, narrowed but not found.** Three call tests fail on a
+  developer machine and pass on CI: `withholds a direct address until the call
+  is answered`, `tells a second caller the line is busy`, and `ends the call on
+  both sides when one side hangs up`. All three fail the same way, and it is
+  not a slow machine — thirty seconds is not enough, and the tests around them
+  complete in two.
+
+  What is known. The caller places a call, the callee answers, and the answer
+  never arrives. **Neither side reports an error**: the callee's send
+  succeeded, the server accepted the envelope, and the caller's manager never
+  raises a decryption or verification failure. So an envelope is accepted for a
+  mailbox the recipient has registered and subscribed to, and is not delivered.
+  The gateway does drain a mailbox's backlog both on connect and on subscribe,
+  and `publishMailboxes` registers with the server before telling the socket,
+  so the obvious ordering bug is not it.
+
+  That is a delivery defect rather than a test defect, and a fast machine
+  hiding it is not the same as it not being there. Whoever picks this up:
+  start by logging on the server side which mailbox the answer was queued
+  against and which ones the caller's connection is subscribed to.
 - **A bound with no test is a number in a file.** `MAX_SKIP`,
   `MAX_SKIPPED_KEYS` and `SKIPPED_KEY_TTL_MS` had been there from the start,
   are quoted in `docs/PROTOCOL.md` §3 as what bounds a device compromise, and
