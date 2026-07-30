@@ -1,11 +1,13 @@
 /**
  * The real media stack behind `CallDriver`'s `PeerConnection` interface.
  *
- * Everything in this file needs a device. It cannot run in the test suite,
- * which is exactly why the ordering and policy logic lives in
- * `call-driver.ts` behind an interface and is tested against a fake — this
- * file is deliberately as thin as it can be, because nothing in it is checked
- * by anything but a person holding a phone.
+ * The media needs a device. The logic does not, and saying otherwise was how
+ * this file went untested: `webrtc-peer.test.ts` drives it against a double of
+ * `react-native-webrtc` and pins the rules below. That double is not the
+ * library — if the library disagrees with it the tests pass and a call still
+ * fails — so the ordering and policy logic still lives in `call-driver.ts`
+ * behind an interface, and this file is still deliberately as thin as it can
+ * be.
  *
  * Three things here are not boilerplate and are the reason it is not thinner.
  */

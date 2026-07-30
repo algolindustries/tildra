@@ -39,8 +39,9 @@ tested by running the real Go server and pushing real traffic through it.
 | Renegotiation, with the DTLS fingerprint pinned for the life of the call | done |
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
+| Media adapter logic: ICE restart on widening, candidate filtering, connection-state mapping, teardown order — against a double of `react-native-webrtc`, not a device | done |
 
-Counts at time of writing: 479 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 507 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -101,16 +102,28 @@ knowing before trusting a UI change.
   changes it ends the call.
 
   **No media has ever flowed, and nothing here has run on a phone.** Every
-  test in this area drives a double; the media adapter and the call screen are
-  covered by typecheck, the Metro bundle and the native-config check, and by
-  nothing else. The first person to run this on two devices should expect to
-  find things. Nothing here should be read as "calls work".
+  test in this area drives a double. The first person to run this on two
+  devices should expect to find things. Nothing here should be read as "calls
+  work".
 
-  One thing for whoever writes the adapter: `setConfiguration` must trigger an
-  ICE restart when the policy widens from `relay` to `all`.
-  `RTCPeerConnection.setConfiguration` alone does not go back for the host
-  candidates it skipped while relay-only, so an answered call would sit on the
-  relay forever with nothing indicating anything was wrong.
+  The adapter's own logic is now tested — `webrtc-peer.test.ts` runs it
+  against a double of `react-native-webrtc` and pins the rules that a phone
+  would otherwise report as something vague: tracks are added before any SDP
+  is built, the end-of-gathering marker is not forwarded as a candidate,
+  `disconnected` does not end a call and nothing is reported after close,
+  widening from `relay` to `all` triggers exactly one ICE restart and
+  narrowing triggers none, and hanging up stops the tracks *before* closing
+  the connection. Each of those was checked by breaking it and watching the
+  test go red. What it cannot check is the library or the media: if
+  `react-native-webrtc` disagrees with the double, these tests pass and the
+  call still fails. The call screen is still covered by typecheck, the Metro
+  bundle and the native-config check, and by nothing else.
+
+  The ICE-restart rule is the one worth restating, because getting it wrong is
+  invisible. `RTCPeerConnection.setConfiguration` does not go back for the
+  host candidates it skipped while relay-only, so without the restart an
+  answered call sits on the relay forever with nothing indicating anything is
+  wrong.
 - **An independent security audit.** Not something that can be done from inside
   the repo. The crypto uses standard primitives and is heavily tested, but it has
   not been reviewed by anyone outside this work, and nothing should carry real
@@ -181,32 +194,38 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
-- **Three call tests fail on this developer machine, pass on CI, and nothing
-  found so far points at the product.** They are `withholds a direct address
-  until the call is answered`, `tells a second caller the line is busy`, and
-  `ends the call on both sides when one side hangs up`.
+- **A test fixture shortened a product timer, and it broke fifteen other
+  tests.** `SessionManager` gives up on a call nobody answers after
+  `CALL_RINGING_TIMEOUT_MS`, 45 seconds. One test asserts that, and rather
+  than wait three quarters of a minute the fixture built *every* device in
+  `manager.test.ts` with `ringingTimeoutMs: 700`. So every call test required
+  a full round trip through a real Go server — register, ring, answer, deliver
+  — to complete inside 700 milliseconds, or the manager correctly gave up and
+  the call ended underneath the test.
 
-  Four explanations were probed on runs that then failed, and all four are
-  ruled out. The addressing agrees byte for byte — the callee targets exactly
-  the mailbox in the caller's listening set. Both sockets report `open`. A
-  subscription issued before the socket opens is not lost; `TildraSocket.
-  subscribe` adds to a set that `onopen` replays. And an envelope is enqueued
-  before live delivery is attempted, so a dropped live push stays in the queue
-  and `Serve` — handed `MailboxesFor(account, device)` — drains every
-  registered mailbox on connect. The `if c.owns(mb) { continue }` skip in
-  `Hub.subscribe` therefore cannot strand anything either.
+  This is the failure I chased for four commits and diagnosed wrong three
+  times. It presented as undelivered envelopes, because that is what it looks
+  like from the outside: the answer never arrives, neither side reports an
+  error, and every structural probe comes back clean — the addressing agrees
+  byte for byte, both sockets are open, the envelope is enqueued before live
+  delivery is attempted, and `Serve` drains every registered mailbox on
+  connect. All of that was true. Nothing was lost. The call had been
+  cancelled, by design, before the answer could matter.
 
-  What correlates is load. This machine runs a local model server, a VM and
-  other work; its load average sits between two and seven, and integration
-  tests that normally take two seconds take forty. In the quietest window
-  available, the failing test passed five runs out of five.
+  What identified it was the shape of a failing run rather than another probe:
+  six tests failed and seventy-eight passed, and all six were call tests. A
+  slow machine does not sort its victims by feature.
 
-  Two earlier commits called this "a delivery defect rather than a test
-  defect". That was more than the evidence supported, and this note replaces
-  it. What is fair to say: the integration suite is sensitive to a busy
-  machine, the sensitivity is not understood, and it is not established that
-  anything is wrong with the product. Anyone who reproduces it on an idle
-  machine has found something real — that would be worth knowing.
+  The fixture now defaults to 30 seconds and the two tests that are about the
+  timeout ask for a short one. Confirmed both ways under an artificial load
+  average of 15 to 27, far worse than the conditions that produced the
+  original failures: with the fix all six pass, and with 700ms put back a
+  failure reappears.
+
+  The lesson worth keeping is not about calls. A test fixture that overrides a
+  production constant is applying that override to every test that shares the
+  fixture, including the ones written later by someone who never read it. The
+  override belongs at the test that needs it.
 - **A bound with no test is a number in a file.** `MAX_SKIP`,
   `MAX_SKIPPED_KEYS` and `SKIPPED_KEY_TTL_MS` had been there from the start,
   are quoted in `docs/PROTOCOL.md` §3 as what bounds a device compromise, and

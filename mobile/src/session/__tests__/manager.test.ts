@@ -105,7 +105,10 @@ interface Device {
   member: () => { accountId: string; deviceId: string };
 }
 
-async function bringUp(name: string): Promise<Device> {
+async function bringUp(
+  name: string,
+  options: { ringingTimeoutMs?: number } = {},
+): Promise<Device> {
   const identity = generateIdentity();
   const client = new TildraClient({ baseUrl: BASE_URL });
   const { accountId, deviceId } = await client.register(identity, name);
@@ -140,8 +143,15 @@ async function bringUp(name: string): Promise<Device> {
     preKeys: secrets,
     randomId: () => toBase64(randomBytes(16)),
     stunUrls: ['stun:stun.test:3478'],
-    // Short enough to assert on. The real value is 45 seconds.
-    ringingTimeoutMs: 700,
+    // The real value is 45 seconds. Every device here used to get 700ms so
+    // that one test could assert the give-up path without waiting three
+    // quarters of a minute — and that killed every *other* call test whenever
+    // a round trip through the real server took longer than 700ms, which on a
+    // loaded machine it does. Six call tests failed that way while the rest of
+    // the suite passed, and the failures looked like undelivered envelopes
+    // rather than a call the manager had correctly given up on. The two tests
+    // that are about the timeout ask for the short value; nothing else does.
+    ringingTimeoutMs: options.ringingTimeoutMs ?? 30_000,
     onMailboxesChanged: (mailboxes) => socket?.subscribe(mailboxes),
     events: {
       onMessage: (message) => received.push(message.text),
@@ -1635,8 +1645,8 @@ describeIntegration('a call nobody answers', () => {
     // with nothing calling them, so a call rang forever: no missed-call entry,
     // the line held against a second call, and a notification on the other
     // side for something that had stopped being true.
-    const alice = await bringUp('Alice');
-    const bob = await bringUp('Bob');
+    const alice = await bringUp('Alice', { ringingTimeoutMs: 700 });
+    const bob = await bringUp('Bob', { ringingTimeoutMs: 700 });
 
     const placed = await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) });
     await waitFor(() => bob.incomingCalls.length > 0);
@@ -1653,15 +1663,23 @@ describeIntegration('a call nobody answers', () => {
   }, 90_000);
 
   it('does not give up on a call that was answered', async () => {
-    const alice = await bringUp('Alice');
-    const bob = await bringUp('Bob');
+    // This test has to lose a race to be wrong, and it has to win one to run
+    // at all: the answer must arrive before the timeout it is asserting does
+    // not fire. Ten seconds is the margin — enough that a round trip through
+    // a real server on a busy machine cannot eat it, since the failures this
+    // replaces happened at 700ms. The wait afterwards is longer than the
+    // timeout, so surviving it means the timer was cleared rather than merely
+    // slow.
+    const RINGING = 10_000;
+    const alice = await bringUp('Alice', { ringingTimeoutMs: RINGING });
+    const bob = await bringUp('Bob', { ringingTimeoutMs: RINGING });
 
     const placed = await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) });
     await waitFor(() => bob.incomingCalls.length > 0);
     await bob.manager.answerCall(placed.callId, callSdp(2));
     await waitFor(() => alice.answers.length > 0);
 
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, RINGING + 2_000));
     expect(alice.manager.currentCall()?.phase).toBe('connecting');
     expect(bob.manager.currentCall()?.phase).toBe('connecting');
 
