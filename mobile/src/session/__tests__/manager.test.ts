@@ -78,6 +78,8 @@ interface Device {
   answers: { call: CallSession; sdp: string }[];
   candidates: string[];
   callChanges: CallSession[];
+  renegotiations: { call: CallSession; sdp: string }[];
+  renegotiationAnswers: { call: CallSession; sdp: string }[];
   splitViews: { source: string; error: SplitViewError }[];
   member: () => { accountId: string; deviceId: string };
 }
@@ -100,6 +102,8 @@ async function bringUp(name: string): Promise<Device> {
   const candidates: string[] = [];
   const callChanges: CallSession[] = [];
   const splitViews: { source: string; error: SplitViewError }[] = [];
+  const renegotiations: { call: CallSession; sdp: string }[] = [];
+  const renegotiationAnswers: { call: CallSession; sdp: string }[] = [];
 
   // The socket is created first so the manager can hand it new mailboxes as
   // sessions appear — the wiring the real app uses.
@@ -122,6 +126,8 @@ async function bringUp(name: string): Promise<Device> {
       onCallAnswer: (call, sdp) => answers.push({ call, sdp }),
       onCallCandidate: (_call, candidate) => candidates.push(candidate),
       onCallChange: (call) => callChanges.push(call),
+      onCallRenegotiate: (call, sdp) => renegotiations.push({ call, sdp }),
+      onCallRenegotiateAnswer: (call, sdp) => renegotiationAnswers.push({ call, sdp }),
       onSplitView: (source, error) => splitViews.push({ source, error }),
       onError: (error) => errors.push(error),
     },
@@ -152,6 +158,8 @@ async function bringUp(name: string): Promise<Device> {
     answers,
     candidates,
     callChanges,
+    renegotiations,
+    renegotiationAnswers,
     splitViews,
     member: () => ({ accountId, deviceId }),
   };
@@ -1466,4 +1474,107 @@ describeIntegration('auditors', () => {
       alice.socket.close();
     }
   }, 180_000);
+});
+
+// ---------------------------------------------------------------------------
+// Renegotiation
+// ---------------------------------------------------------------------------
+
+describeIntegration('renegotiation', () => {
+  async function connectedPair() {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    const placed = await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) });
+    await waitFor(() => bob.incomingCalls.length > 0);
+    await bob.manager.answerCall(placed.callId, callSdp(2));
+    await waitFor(() => alice.answers.length > 0);
+    return { alice, bob, callId: placed.callId };
+  }
+
+  it('carries a re-offer and its answer between two real devices', async () => {
+    const { alice, bob, callId } = await connectedPair();
+
+    // Same fingerprint, new ICE credentials — what an ICE restart looks like.
+    await bob.manager.renegotiateCall(callId, callSdp(2));
+    await waitFor(() => alice.renegotiations.length > 0);
+    expect(alice.renegotiations[0].sdp).toBe(callSdp(2));
+
+    await alice.manager.answerRenegotiation(callId, callSdp(1));
+    await waitFor(() => bob.renegotiationAnswers.length > 0);
+
+    expect(alice.manager.currentCall()?.phase).toBe('connecting');
+    expect(bob.manager.currentCall()?.phase).toBe('connecting');
+    expect([...alice.errors, ...bob.errors]).toEqual([]);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+
+  it('ends the call when a re-offer changes the DTLS fingerprint', async () => {
+    // The attack the pin exists for. Bob's own key signs this perfectly well,
+    // so the signature cannot catch it — only comparing against what the call
+    // was pinned to can. Carrying on would mean media continuing under a
+    // certificate the user never agreed to.
+    const { alice, bob, callId } = await connectedPair();
+
+    const forged = signCallSdp(bob.identity, {
+      kind: CallSignalKind.Renegotiate,
+      callId,
+      sdp: callSdp(7),
+      fromAccountId: bob.accountId,
+      toAccountId: alice.accountId,
+    });
+    await injectSignal(bob, alice, forged);
+
+    expect(alice.renegotiations).toEqual([]);
+    expect(alice.manager.currentCall()).toBeNull();
+    expect(alice.errors.map((e) => e.message).join('\n')).toMatch(
+      /no longer be with the key this call was pinned to/,
+    );
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+
+  it('ends the call when a re-offer is signed by somebody else', async () => {
+    const { alice, bob, callId } = await connectedPair();
+
+    const mallory = generateIdentity();
+    const forged = signCallSdp(mallory, {
+      kind: CallSignalKind.Renegotiate,
+      callId,
+      sdp: callSdp(2),
+      fromAccountId: bob.accountId,
+      toAccountId: alice.accountId,
+    });
+    await injectSignal(bob, alice, forged);
+
+    expect(alice.renegotiations).toEqual([]);
+    expect(alice.manager.currentCall()).toBeNull();
+    expect(alice.errors.map((e) => e.message).join('\n')).toMatch(/not signed by the identity key/);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+
+  it('ignores a re-offer for a call that is not happening', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    await alice.manager.sendMessage(bob.accountId, 'kuruyorum');
+    await waitFor(() => bob.received.length > 0);
+
+    await injectSignal(alice, bob, {
+      kind: CallSignalKind.Renegotiate,
+      callId: 'call-nothing99',
+      body: callSdp(1),
+      signature: randomBytes(64),
+      timestamp: Date.now(),
+    });
+
+    expect(bob.renegotiations).toEqual([]);
+    expect(bob.errors).toEqual([]);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
 });

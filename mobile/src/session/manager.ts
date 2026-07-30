@@ -289,6 +289,13 @@ export interface ManagerEvents {
   onCallAnswer?: (call: CallSession, answerSdp: string) => void;
   /** One remote ICE candidate, already filtered by the call's address policy. */
   onCallCandidate?: (call: CallSession, candidate: string) => void;
+  /**
+   * The peer re-offered a live call. Its fingerprint has been verified *and*
+   * checked against the one the call is pinned to — a renegotiation that
+   * changes it ends the call instead of reaching here.
+   */
+  onCallRenegotiate?: (call: CallSession, offerSdp: string) => void;
+  onCallRenegotiateAnswer?: (call: CallSession, answerSdp: string) => void;
   /** Any change to the live call's phase, including it ending. */
   onCallChange?: (call: CallSession) => void;
   onError?: (error: Error) => void;
@@ -1457,6 +1464,52 @@ export class SessionManager {
     return true;
   }
 
+  /**
+   * Re-offer a live call.
+   *
+   * Used when the address policy widens on answer: an ICE restart changes the
+   * ICE credentials, and new credentials are a new offer/answer exchange
+   * whether or not anything else moved.
+   */
+  async renegotiateCall(callId: string, sdp: string): Promise<void> {
+    const call = this.requireCall(callId);
+    if (!call.peerDeviceId) {
+      throw new CallError('the call has no device to renegotiate with');
+    }
+    await this.sendCallSignalTo(
+      call.peerAccountId,
+      call.peerDeviceId,
+      signCallSdp(this.identity, {
+        kind: CallSignalKind.Renegotiate,
+        callId,
+        sdp,
+        fromAccountId: this.accountId,
+        toAccountId: call.peerAccountId,
+        now: this.now(),
+      }),
+    );
+  }
+
+  /** Answer a re-offer. */
+  async answerRenegotiation(callId: string, sdp: string): Promise<void> {
+    const call = this.requireCall(callId);
+    if (!call.peerDeviceId) {
+      throw new CallError('the call has no device to renegotiate with');
+    }
+    await this.sendCallSignalTo(
+      call.peerAccountId,
+      call.peerDeviceId,
+      signCallSdp(this.identity, {
+        kind: CallSignalKind.RenegotiateAnswer,
+        callId,
+        sdp,
+        fromAccountId: this.accountId,
+        toAccountId: call.peerAccountId,
+        now: this.now(),
+      }),
+    );
+  }
+
   /** Media is up. */
   markCallConnected(callId: string): CallSession {
     const call = this.requireCall(callId);
@@ -1591,6 +1644,15 @@ export class SessionManager {
         case CallSignalKind.Answer:
           await this.receiveCallAnswer(senderAccountId, senderDeviceId, senderIdentityKey, signal);
           return;
+        case CallSignalKind.Renegotiate:
+        case CallSignalKind.RenegotiateAnswer:
+          await this.receiveRenegotiation(
+            senderAccountId,
+            senderDeviceId,
+            senderIdentityKey,
+            signal,
+          );
+          return;
         case CallSignalKind.Candidate:
           this.receiveCallCandidate(senderAccountId, senderDeviceId, signal);
           return;
@@ -1700,6 +1762,55 @@ export class SessionManager {
 
     this.events.onCallAnswer?.(next, signal.body);
     this.events.onCallChange?.(next);
+  }
+
+  /**
+   * A re-offer or its answer, on a call already in progress.
+   *
+   * The fingerprint is verified against the sender's identity key exactly as
+   * for the original offer, and then `advanceCall` insists it is the *same*
+   * fingerprint the call was pinned to. A peer can legitimately restart ICE;
+   * it cannot legitimately become somebody else halfway through, and a
+   * signature does not distinguish those on its own.
+   *
+   * A renegotiation that fails either check ends the call rather than being
+   * ignored. Carrying on would mean media continuing under terms this device
+   * has refused.
+   */
+  private async receiveRenegotiation(
+    senderAccountId: string,
+    senderDeviceId: string,
+    senderIdentityKey: Uint8Array,
+    signal: CallSignal,
+  ): Promise<void> {
+    const call = this.currentCall();
+    if (!call || call.callId !== signal.callId || call.peerAccountId !== senderAccountId) return;
+    if (call.peerDeviceId && call.peerDeviceId !== senderDeviceId) return;
+
+    let fingerprint;
+    try {
+      fingerprint = verifyCallSdp(signal, senderIdentityKey, {
+        callId: signal.callId,
+        fromAccountId: senderAccountId,
+        toAccountId: this.accountId,
+        now: this.now(),
+      });
+      this.call = advanceCall(
+        call,
+        { type: 'signal', kind: signal.kind, fingerprint, deviceId: senderDeviceId },
+        this.now(),
+      );
+    } catch (err) {
+      this.events.onError?.(err instanceof Error ? err : new Error(String(err)));
+      await this.endCall(call.callId, 'failed');
+      return;
+    }
+
+    if (signal.kind === CallSignalKind.Renegotiate) {
+      this.events.onCallRenegotiate?.(this.call, signal.body);
+    } else {
+      this.events.onCallRenegotiateAnswer?.(this.call, signal.body);
+    }
   }
 
   private receiveCallCandidate(

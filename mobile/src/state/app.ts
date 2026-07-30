@@ -825,6 +825,22 @@ async function startSession(
           void get().endCall('failed');
         });
       },
+      onCallRenegotiate: (call, offerSdp) => {
+        // Reached only after the fingerprint was verified and checked against
+        // the one this call is pinned to; a re-offer that changed it ended the
+        // call instead of arriving here.
+        set({ call });
+        void activeCall?.acceptRenegotiation(call, offerSdp).catch((err) => {
+          set({ error: describeError(err, get().t) });
+          void get().endCall('failed');
+        });
+      },
+      onCallRenegotiateAnswer: (call, answerSdp) => {
+        set({ call });
+        void activeCall?.acceptRenegotiationAnswer(call, answerSdp).catch((err) =>
+          set({ error: describeError(err, get().t) }),
+        );
+      },
       onCallCandidate: (_call, candidate) => {
         void activeCall?.addRemoteCandidate(candidate).catch(() => undefined);
       },

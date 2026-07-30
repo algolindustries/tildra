@@ -41,7 +41,11 @@ export class CallDriverError extends Error {}
 
 /** The part of a peer connection this driver uses. */
 export interface PeerConnection {
-  createOffer(options: { video: boolean }): Promise<string>;
+  /**
+   * `iceRestart` asks the agent to gather again with fresh ICE credentials.
+   * It is what makes a widened address policy take effect on a live call.
+   */
+  createOffer(options: { video: boolean; iceRestart?: boolean }): Promise<string>;
   createAnswer(): Promise<string>;
   setLocalDescription(type: 'offer' | 'answer', sdp: string): Promise<void>;
   setRemoteDescription(type: 'offer' | 'answer', sdp: string): Promise<void>;
@@ -49,11 +53,10 @@ export interface PeerConnection {
   /**
    * Apply a new ICE configuration to a live connection.
    *
-   * The implementation **must re-gather** — an ICE restart — when the policy
-   * widens from `relay` to `all`. `RTCPeerConnection.setConfiguration` on its
-   * own changes the policy for future gathering and does not go back for the
-   * host candidates it skipped while relay-only, so an answered call would
-   * stay on the relay forever with no sign anything was wrong.
+   * `RTCPeerConnection.setConfiguration` changes the policy for future
+   * gathering and does not go back for the host candidates it skipped while
+   * relay-only. The driver follows this with a renegotiation, which is what
+   * actually makes the widened policy take effect.
    */
   setConfiguration(config: IceConfiguration): Promise<void>;
   close(): void;
@@ -77,6 +80,8 @@ export interface CallSignalling {
   answerCall(callId: string, sdp: string): Promise<CallSession>;
   sendCallCandidate(callId: string, candidate: string): Promise<boolean>;
   markCallConnected(callId: string): CallSession;
+  renegotiateCall(callId: string, sdp: string): Promise<void>;
+  answerRenegotiation(callId: string, sdp: string): Promise<void>;
   endCall(callId: string, reason?: CallEndReason): Promise<void>;
   iceConfiguration(target: CallSession | IceTransportPolicy): Promise<IceConfiguration>;
 }
@@ -236,7 +241,51 @@ export class CallDriver {
     this.relayAvailable = config.relayAvailable;
     await this.pc.setConfiguration(config);
 
+    // The configuration alone does not go back for the candidates that were
+    // skipped while relay-only, and an ICE restart changes the ICE
+    // credentials, which is a new offer/answer exchange. Without this the
+    // answered call would sit on the relay for its whole life with nothing
+    // indicating anything was wrong.
+    //
+    // Best effort: a call that is up and talking over the relay is worse than
+    // one on a direct path and much better than one that was torn down for
+    // failing to improve.
+    await this.renegotiate().catch((err) =>
+      this.deps.onError?.(err instanceof Error ? err : new Error(String(err))),
+    );
+
     return this.session;
+  }
+
+  /**
+   * Re-offer the live call.
+   *
+   * The fingerprint does not change — the peer checks that it has not, and
+   * would end the call if it had. What changes is the ICE credentials.
+   */
+  async renegotiate(): Promise<void> {
+    this.assertOpen();
+    const sdp = await this.pc.createOffer({ video: this.session.video, iceRestart: true });
+    await this.pc.setLocalDescription('offer', sdp);
+    await this.deps.signalling.renegotiateCall(this.session.callId, sdp);
+  }
+
+  /** The peer re-offered; answer it. */
+  async acceptRenegotiation(session: CallSession, offerSdp: string): Promise<void> {
+    this.assertOpen();
+    this.session = session;
+
+    await this.pc.setRemoteDescription('offer', offerSdp);
+    const answer = await this.pc.createAnswer();
+    await this.pc.setLocalDescription('answer', answer);
+    await this.deps.signalling.answerRenegotiation(this.session.callId, answer);
+  }
+
+  /** Our re-offer was answered. */
+  async acceptRenegotiationAnswer(session: CallSession, answerSdp: string): Promise<void> {
+    this.assertOpen();
+    this.session = session;
+    await this.pc.setRemoteDescription('answer', answerSdp);
   }
 
   /** The peer picked up; their SDP is theirs to install. */

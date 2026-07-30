@@ -63,8 +63,8 @@ class FakePeer implements PeerConnection {
   handlers!: PeerConnectionHandlers;
   failAddCandidate = false;
 
-  async createOffer(options: { video: boolean }): Promise<string> {
-    this.ops.push(`createOffer(video=${options.video})`);
+  async createOffer(options: { video: boolean; iceRestart?: boolean }): Promise<string> {
+    this.ops.push(`createOffer(video=${options.video}${options.iceRestart ? ',restart' : ''})`);
     return sdp(1);
   }
   async createAnswer(): Promise<string> {
@@ -121,6 +121,15 @@ class FakeSignalling {
     }
     this.sent.push(candidate);
     return true;
+  }
+  reoffers: string[] = [];
+  reanswers: string[] = [];
+
+  async renegotiateCall(_callId: string, sdp: string): Promise<void> {
+    this.reoffers.push(sdp);
+  }
+  async answerRenegotiation(_callId: string, sdp: string): Promise<void> {
+    this.reanswers.push(sdp);
   }
   markCallConnected(callId: string): CallSession {
     this.connectedCalls.push(callId);
@@ -275,6 +284,10 @@ describe('receiving a call', () => {
       'createAnswer',
       'setLocal(answer)',
       'setConfiguration(all)',
+      // The widened policy only takes effect through an ICE restart, and an
+      // ICE restart is a new offer.
+      'createOffer(video=false,restart)',
+      'setLocal(offer)',
     ]);
     expect(r.peer.configs.at(-1)?.iceTransportPolicy).toBe('all');
 
@@ -489,5 +502,68 @@ describe('the signalling interface', () => {
     // would keep passing while nothing real matched.
     const check = (manager: SessionManager): CallSignalling => manager;
     expect(typeof check).toBe('function');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Renegotiation
+// ---------------------------------------------------------------------------
+
+describe('renegotiating', () => {
+  it('re-offers with an ICE restart when the policy widens on answer', async () => {
+    // Without this the answered call stays on the relay for its whole life
+    // with nothing indicating anything is wrong.
+    const r = rig(incoming());
+    const driver = await CallDriver.receive(r.deps, incoming(), sdp(1));
+    await driver.accept();
+
+    expect(r.signalling.reoffers).toHaveLength(1);
+    expect(r.peer.ops.indexOf('setConfiguration(all)')).toBeLessThan(
+      r.peer.ops.indexOf('createOffer(video=false,restart)'),
+    );
+  });
+
+  it('does not tear the call down when the re-offer cannot be sent', async () => {
+    // A call up and talking over the relay is worse than one on a direct path
+    // and much better than one torn down for failing to improve.
+    const r = rig(incoming());
+    const driver = await CallDriver.receive(r.deps, incoming(), sdp(1));
+    r.signalling.renegotiateCall = async () => {
+      throw new Error('socket closed');
+    };
+
+    await driver.accept();
+    expect(r.errors.map((e) => e.message).join()).toMatch(/socket closed/);
+    expect(r.signalling.ended).toEqual([]);
+  });
+
+  it('answers a re-offer from the peer', async () => {
+    const r = rig(outgoing());
+    const driver = await CallDriver.place(r.deps, BOB);
+    await driver.acceptAnswer({ ...outgoing(), phase: 'connecting' }, sdp(2));
+
+    await driver.acceptRenegotiation({ ...outgoing(), phase: 'active' }, sdp(2));
+
+    expect(r.signalling.reanswers).toHaveLength(1);
+    const ops = r.peer.ops.join(',');
+    expect(ops).toContain('setRemote(offer),createAnswer,setLocal(answer)');
+  });
+
+  it('installs the answer to its own re-offer', async () => {
+    const r = rig(incoming());
+    const driver = await CallDriver.receive(r.deps, incoming(), sdp(1));
+    await driver.accept();
+
+    await driver.acceptRenegotiationAnswer({ ...incoming(), phase: 'active' }, sdp(2));
+    expect(r.peer.ops.at(-1)).toBe('setRemote(answer)');
+  });
+
+  it('refuses to renegotiate a call that is over', async () => {
+    const r = rig(outgoing());
+    const driver = await CallDriver.place(r.deps, BOB);
+    await driver.hangUp();
+
+    await expect(driver.renegotiate()).rejects.toThrow(CallDriverError);
+    await expect(driver.acceptRenegotiation(outgoing(), sdp(2))).rejects.toThrow(CallDriverError);
   });
 });

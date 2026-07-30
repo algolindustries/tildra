@@ -21,6 +21,7 @@ import {
   formatFingerprint,
   iceTransportPolicyFor,
   parseIceCandidate,
+  SignedCallKind,
   TurnCredential,
   iceConfigurationFor,
   sdpFingerprint,
@@ -352,7 +353,7 @@ describe('binding the DTLS fingerprint to the identity key', () => {
   it('refuses to look for a binding on kinds that do not carry one', () => {
     for (const kind of [CallSignalKind.Candidate, CallSignalKind.Hangup, CallSignalKind.Busy]) {
       expect(() => verifyCallSdp({ ...offer(), kind }, alice.publicKey, expectation)).toThrow(
-        /only an offer or an answer/,
+        /carries no fingerprint binding/,
       );
     }
   });
@@ -862,5 +863,121 @@ describe('call duration', () => {
   it('shows nothing for a call that is not up yet', () => {
     const ringing = beginOutgoingCall({ callId: CALL_ID, peerAccountId: BOB, now: NOW });
     expect(callDurationLabel(ringing, NOW + 10_000)).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Renegotiation
+// ---------------------------------------------------------------------------
+
+describe('renegotiating a live call', () => {
+  const fingerprint = sdpFingerprint(sdp());
+  const other = sdpFingerprint(sdp({ fingerprints: [`sha-256 ${FP_B}`] }));
+
+  function connecting(): CallSession {
+    return advanceCall(
+      beginOutgoingCall({ callId: CALL_ID, peerAccountId: BOB, now: NOW }),
+      { type: 'signal', kind: CallSignalKind.Answer, fingerprint },
+      NOW + 1000,
+    );
+  }
+  function active(): CallSession {
+    return advanceCall(connecting(), { type: 'connected' }, NOW + 2000);
+  }
+
+  it('lets a reoffer through on a live call without moving the phase', () => {
+    for (const call of [connecting(), active()]) {
+      const next = advanceCall(
+        call,
+        { type: 'signal', kind: CallSignalKind.Renegotiate, fingerprint },
+        NOW + 3000,
+      );
+      expect(next.phase).toBe(call.phase);
+      expect(next.peerFingerprint).toEqual(fingerprint);
+    }
+  });
+
+  it('refuses a renegotiation that changes the fingerprint', () => {
+    // The whole point. A signature alone does not stop this — the peer's own
+    // key signs a reoffer perfectly well — so the pin is what makes "this call
+    // is with the key you checked" true for the whole call rather than for its
+    // first second.
+    for (const kind of [CallSignalKind.Renegotiate, CallSignalKind.RenegotiateAnswer]) {
+      expect(() =>
+        advanceCall(active(), { type: 'signal', kind, fingerprint: other }, NOW + 3000),
+      ).toThrow(/no longer be with the key this call was pinned to/);
+    }
+  });
+
+  it('refuses a renegotiation carrying no fingerprint at all', () => {
+    expect(() =>
+      advanceCall(active(), { type: 'signal', kind: CallSignalKind.Renegotiate }, NOW + 3000),
+    ).toThrow(/no fingerprint to check/);
+  });
+
+  it('refuses a renegotiation before the call has been answered', () => {
+    // Nothing is pinned yet, so there would be nothing to compare against.
+    const ringing = beginOutgoingCall({ callId: CALL_ID, peerAccountId: BOB, now: NOW });
+    expect(() =>
+      advanceCall(ringing, { type: 'signal', kind: CallSignalKind.Renegotiate, fingerprint }, NOW + 100),
+    ).toThrow(/before the call was answered/);
+  });
+
+  it('refuses a renegotiation once the call has ended', () => {
+    const ended = advanceCall(active(), { type: 'end', reason: 'hangup' }, NOW + 3000);
+    expect(() =>
+      advanceCall(ended, { type: 'signal', kind: CallSignalKind.Renegotiate, fingerprint }, NOW + 4000),
+    ).toThrow(/has ended/);
+  });
+});
+
+describe('signing a renegotiation', () => {
+  const alice = generateSigningKeyPair();
+  const expectation = { callId: CALL_ID, fromAccountId: ALICE, toAccountId: BOB, now: NOW };
+
+  function signed(kind: SignedCallKind): CallSignal {
+    return signCallSdp(alice, {
+      kind,
+      callId: CALL_ID,
+      sdp: sdp(),
+      fromAccountId: ALICE,
+      toAccountId: BOB,
+      now: NOW,
+    });
+  }
+
+  it('verifies a reoffer and a reanswer', () => {
+    expect(verifyCallSdp(signed(CallSignalKind.Renegotiate), alice.publicKey, expectation).value).toBe(FP_A);
+    expect(
+      verifyCallSdp(signed(CallSignalKind.RenegotiateAnswer), alice.publicKey, expectation).value,
+    ).toBe(FP_A);
+  });
+
+  it('keeps all four exchanges apart', () => {
+    // Every pair of kinds: a signature made for one must not verify as any
+    // other. Four strings in the transcript is the only thing separating
+    // "answer this call" from "re-key it mid-conversation".
+    const kinds: SignedCallKind[] = [
+      CallSignalKind.Offer,
+      CallSignalKind.Answer,
+      CallSignalKind.Renegotiate,
+      CallSignalKind.RenegotiateAnswer,
+    ];
+    for (const made of kinds) {
+      const signal = signed(made);
+      for (const presented of kinds) {
+        if (presented === made) continue;
+        expect(
+          () => verifyCallSdp({ ...signal, kind: presented }, alice.publicKey, expectation),
+          `${CallSignalKind[made]} presented as ${CallSignalKind[presented]}`,
+        ).toThrow(CallError);
+      }
+    }
+  });
+
+  it('round-trips through the wire format', () => {
+    const decoded = decodeCallSignal(encodeCallSignal(signed(CallSignalKind.Renegotiate)));
+    expect(decoded.kind).toBe(CallSignalKind.Renegotiate);
+    expect(verifyCallSdp(decoded, alice.publicKey, expectation).value).toBe(FP_A);
   });
 });

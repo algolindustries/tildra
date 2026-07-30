@@ -645,12 +645,26 @@ user accepts an incoming call the widened policy has to be applied to the
 *live* connection with an ICE restart; setting the configuration alone does
 not go back for the candidates that were skipped while relay-only.
 
-**Renegotiation is not implemented.** Widening the policy on a live
-connection needs an ICE restart, and an ICE restart changes the ICE ufrag and
-pwd, which strictly requires a fresh offer/answer exchange. The client asks the
-agent to restart but does not renegotiate, so today the address policy is held
-by the signalling filters described above rather than by the ICE agent as well.
-The guarantee stands; the redundancy under it does not yet.
+**Renegotiation.** Widening the policy on a live connection needs an ICE
+restart, and an ICE restart changes the ICE ufrag and pwd, which is a fresh
+offer/answer exchange. Those travel as two more signal kinds, `Renegotiate`
+and `RenegotiateAnswer`, signed exactly like the original pair but with their
+own role strings — `reoffer` and `reanswer` — so a signature made for one
+exchange can never be replayed as another. All four roles are distinct, and
+there is a test that tries every pair.
+
+The rule that makes renegotiation safe is separate from the signature: **a
+renegotiation may change the ICE credentials and may not change the DTLS
+fingerprint.** The peer's own identity key signs a re-offer perfectly well, so
+a signature cannot distinguish "restarting ICE" from "becoming somebody else
+halfway through". Only comparing against the fingerprint the call was pinned to
+can, and that is what makes "this call is with the key you checked" true for
+the whole call rather than for its first second. A re-offer that changes it, or
+that fails verification, ends the call rather than being ignored — carrying on
+would mean media continuing under terms the device has refused.
+
+A renegotiation before the call is answered is refused too: nothing is pinned
+yet, so there would be nothing to compare against.
 
 **Calls are not persisted.** A call that outlives the process is not a call; it
 is a row that would ring a phone about something that stopped happening when

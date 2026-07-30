@@ -103,10 +103,11 @@ export async function createWebRtcPeer(options: WebRtcPeerOptions): Promise<WebR
       return remoteStream;
     },
 
-    async createOffer(offerOptions: { video: boolean }): Promise<string> {
+    async createOffer(offerOptions: { video: boolean; iceRestart?: boolean }): Promise<string> {
       const offer = await pc.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: offerOptions.video,
+        iceRestart: offerOptions.iceRestart ?? false,
       });
       return offer.sdp;
     },
@@ -135,15 +136,10 @@ export async function createWebRtcPeer(options: WebRtcPeerOptions): Promise<WebR
       });
 
       // Widening from relay-only to direct paths does not go back for the
-      // candidates that were skipped, so the transport policy alone would
-      // leave an answered call on the relay forever. restartIce() asks the
-      // agent to gather again.
-      //
-      // INCOMPLETE, and worth knowing: an ICE restart changes the ufrag and
-      // pwd, which strictly needs a fresh offer/answer, and `CallDriver` does
-      // not model renegotiation. Until it does, what actually holds the
-      // address policy is the send and receive filters in `SessionManager`,
-      // not the agent. See docs/STATUS.md.
+      // candidates that were skipped. `CallDriver` follows this call with a
+      // renegotiation carrying an ICE restart, which is what actually
+      // re-gathers; restartIce() here marks the agent so the offer it then
+      // builds carries fresh credentials.
       if (currentPolicy === 'relay' && next.iceTransportPolicy === 'all') {
         pc.restartIce();
       }

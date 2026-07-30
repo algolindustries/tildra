@@ -34,10 +34,11 @@ tested by running the real Go server and pushing real traffic through it.
 | Native iOS and Android projects generate identically from the same source, checked in CI | done |
 | `react-native-webrtc` and its config plugin, with the generated native permissions and usage strings asserted in CI | done |
 | Call UI: place, ring, answer, decline, mute, hang up, and the peer's identity state shown on the call itself | done |
+| Renegotiation, with the DTLS fingerprint pinned for the life of the call | done |
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 404 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 421 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -88,12 +89,14 @@ knowing before trusting a UI change.
   What does not exist:
 
   - **A deployed coturn.**
-  - **Renegotiation.** `setConfiguration` widens the policy and calls
-    `restartIce()`, but an ICE restart changes the ufrag and pwd and strictly
-    needs a fresh offer/answer, which `CallDriver` does not model. Until it
-    does, what actually holds the address policy is the send and receive
-    filters in `SessionManager`, not the ICE agent. The property is kept; the
-    second layer under it is not yet.
+
+  Renegotiation now exists, so widening the address policy on answer actually
+  takes effect: accepting a call re-offers with an ICE restart. The rule that
+  makes it safe is that **a renegotiation may change the ICE credentials and
+  may not change the DTLS fingerprint** — a peer's own key signs a re-offer
+  perfectly well, so the signature cannot catch a mid-call substitution and
+  only comparing against what the call was pinned to can. A re-offer that
+  changes it ends the call.
 
   **No media has ever flowed, and nothing here has run on a phone.** Every
   test in this area drives a double; the media adapter and the call screen are

@@ -104,6 +104,20 @@ export enum CallSignalKind {
   Hangup = 3,
   /** The callee is already in a call. Distinct from a decline. */
   Busy = 4,
+  /**
+   * A fresh offer for a call already in progress.
+   *
+   * Needed because widening the address policy when a call is answered
+   * requires an ICE restart, and an ICE restart changes the ICE ufrag and pwd,
+   * which is a new offer/answer exchange whether or not anything else changed.
+   *
+   * Distinct from `Offer` rather than a flag on it. An offer for a new call
+   * and an offer for a live one are refused in opposite circumstances, and a
+   * type that has to be inferred from state is a type that gets inferred
+   * wrongly.
+   */
+  Renegotiate = 5,
+  RenegotiateAnswer = 6,
 }
 
 export interface CallSignal {
@@ -300,7 +314,33 @@ function assertDtlsMediaLine(line: string): void {
 // Fingerprint binding
 // ---------------------------------------------------------------------------
 
-export type CallRole = 'caller' | 'callee';
+/**
+ * What the signature is *for*.
+ *
+ * Four distinct strings, one per signal kind that carries a fingerprint, so a
+ * signature made for one exchange can never be replayed as another — an
+ * answer presented as an offer, or a mid-call reoffer presented as the
+ * original one.
+ */
+export type CallRole = 'caller' | 'callee' | 'reoffer' | 'reanswer';
+
+/** Signal kinds that carry a signed fingerprint binding. */
+export type SignedCallKind =
+  | CallSignalKind.Offer
+  | CallSignalKind.Answer
+  | CallSignalKind.Renegotiate
+  | CallSignalKind.RenegotiateAnswer;
+
+const ROLES: Record<SignedCallKind, CallRole> = {
+  [CallSignalKind.Offer]: 'caller',
+  [CallSignalKind.Answer]: 'callee',
+  [CallSignalKind.Renegotiate]: 'reoffer',
+  [CallSignalKind.RenegotiateAnswer]: 'reanswer',
+};
+
+function carriesBinding(kind: CallSignalKind): kind is SignedCallKind {
+  return kind in ROLES;
+}
 
 export interface CallBinding {
   callId: string;
@@ -338,7 +378,7 @@ function bindingTranscript(binding: CallBinding): Uint8Array {
 export function signCallSdp(
   identity: KeyPair,
   params: {
-    kind: CallSignalKind.Offer | CallSignalKind.Answer;
+    kind: SignedCallKind;
     callId: string;
     sdp: string;
     fromAccountId: string;
@@ -353,7 +393,7 @@ export function signCallSdp(
   // separately, is what keeps the signature and the media in step.
   const fingerprint = sdpFingerprint(params.sdp);
   const timestamp = params.now ?? Date.now();
-  const role: CallRole = params.kind === CallSignalKind.Offer ? 'caller' : 'callee';
+  const role = ROLES[params.kind];
 
   const signature = sign(
     identity.secretKey,
@@ -399,8 +439,8 @@ export function verifyCallSdp(
     now?: number;
   },
 ): SdpFingerprint {
-  if (signal.kind !== CallSignalKind.Offer && signal.kind !== CallSignalKind.Answer) {
-    throw new CallError('only an offer or an answer carries a fingerprint binding');
+  if (!carriesBinding(signal.kind)) {
+    throw new CallError('this kind of call signal carries no fingerprint binding');
   }
   if (!signal.signature) {
     throw new CallError('call signal is not signed');
@@ -421,7 +461,7 @@ export function verifyCallSdp(
   }
 
   const fingerprint = sdpFingerprint(signal.body);
-  const role: CallRole = signal.kind === CallSignalKind.Offer ? 'caller' : 'callee';
+  const role = ROLES[signal.kind];
 
   const transcript = bindingTranscript({
     callId: expect.callId,
@@ -781,6 +821,44 @@ function applySignal(
         throw new CallError('a busy signal arrived for a call we did not place');
       }
       return { ...call, phase: 'ended', endedReason: 'busy', phaseAt: at };
+
+    case CallSignalKind.Renegotiate:
+    case CallSignalKind.RenegotiateAnswer:
+      if (call.phase === 'ringing') {
+        // Nothing has been negotiated yet, so there is nothing to redo. A
+        // reoffer here is either confusion or an attempt to get a second
+        // fingerprint accepted before the first one is pinned.
+        throw new CallError('a renegotiation arrived before the call was answered');
+      }
+      assertFingerprintPinned(call, event.fingerprint);
+      // The phase does not move: a renegotiation is the same call continuing.
+      return call;
+  }
+}
+
+/**
+ * A renegotiation may change the ICE credentials. It may not change who is on
+ * the other end.
+ *
+ * Without this the fingerprint binding would hold only for the first
+ * offer/answer: anyone able to get a signed reoffer accepted mid-call could
+ * re-key the DTLS association, and the media would carry on under a
+ * certificate the user never agreed to. The signature alone does not stop
+ * that — the peer's own key signs a reoffer perfectly well — so the pin is
+ * what makes "this call is with the key you checked" true for the whole call
+ * and not just its first second.
+ */
+function assertFingerprintPinned(call: CallSession, offered?: SdpFingerprint): void {
+  if (!call.peerFingerprint) {
+    throw new CallError('a renegotiation arrived for a call with no pinned fingerprint');
+  }
+  if (!offered) {
+    throw new CallError('a renegotiation arrived with no fingerprint to check');
+  }
+  if (offered.hash !== call.peerFingerprint.hash || offered.value !== call.peerFingerprint.value) {
+    throw new CallError(
+      'the renegotiation changes the DTLS fingerprint; the media would no longer be with the key this call was pinned to',
+    );
   }
 }
 
