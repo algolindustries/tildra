@@ -17,7 +17,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Session manager: fanout per device, identity-change blocking, prekey top-up | done |
 | Signed prekey rotation every 48h, with the replaced pair honoured for one more window, and every change to the secrets written to disk | done |
 | Screens: onboarding, chat list, conversation, safety number, profile, device link (both halves) | done |
-| Encrypted groups: sender keys, signed messages, rotation on removal | done |
+| Encrypted groups: sender keys, signed messages, rotation on removal — protocol only, no screens | done at the protocol layer |
 | Encrypted profiles (name, photo, about), mutual introduction on first contact | done |
 | Encrypted attachments; photo and voice messages with waveforms | done |
 | Push notifications with a content-free payload | done |
@@ -126,6 +126,19 @@ knowing before trusting a UI change.
   Xcode and Gradle over them to get an `.ipa` and an `.aab`. That needs the
   toolchains and has not been started. See `docs/REPRODUCIBLE_BUILDS.md`.
 
+- **Group screens.** `createGroup`, `sendGroupMessage`, `addGroupMember`,
+  `removeGroupMember` and `listGroups` are implemented, tested end to end
+  against a real server, and called by nothing but the tests. There is no way
+  for a user to create a group, open one, or see that one exists. The README
+  claimed groups as a finished feature in two places and now says what is
+  actually true. This is the fifth time this project has shipped something
+  that works, is tested, and cannot be reached; it is the largest one.
+- **Account recovery.** `docs/PROTOCOL.md` §1.1 described a recovery-phrase
+  backup in the present tense. The server endpoints exist; the client calls
+  them only from tests, and no onboarding screen shows a phrase. Losing a
+  device today means losing the account. The protocol document now says
+  "specified, not implemented".
+
 ## Needs a human, not code
 
 - A domain. `tildra.chat` and `tildra.dev` were both free when the name was
@@ -164,15 +177,23 @@ knowing before trusting a UI change.
   version of the test above kept a reference to the secrets and passed with the
   persistence call deleted, because the top-up mutates the same maps in place.
   It serialises on the way in now. Run the negative control.
+- **Two storage designs where one is unreachable is worse than one.** The
+  database had a `prekeys` table with per-key rows and a comment saying a
+  one-time secret is destroyed "after a session is established" — which never
+  happened, because nothing called it and prekeys live in a `meta` blob. Both
+  the table and its accessors are gone.
 - **`npm run check:reachable` looks for the recurring bug in this project.**
   Something that works, is tested, and cannot be reached from the app has
   shipped four times: device linking with only its approving half,
   `safetyQrPayload` with no renderer, `checkAuditors` with no caller, and a
   split-view alarm written to a field the app never displays. The check
   reports exported functions and classes whose only callers are tests, with an
-  allowlist where every entry carries a reason somebody can check. It found
-  the signed-prekey rotation gap above and a ringing timeout that never fired.
-  It cannot see methods, which is a real limit — two of the four were methods.
+  allowlist where every entry carries a reason somebody can check. It reads
+  public methods too, since a class the app holds a reference to is reachable
+  while any number of its methods are not. It has found: a ringing timeout
+  that never fired, signed prekeys that never rotated, one-time secrets that
+  were published and never stored, groups with no screens, and a recovery flow
+  that exists only in the protocol document.
 - **A protocol that supports something is not a feature.** This table said
   device linking was done while the only screen was the *approving* half —
   there was nothing in the app that could produce a code for it to approve. The

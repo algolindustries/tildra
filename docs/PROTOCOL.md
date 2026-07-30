@@ -60,14 +60,16 @@ push token. It does not require or store a phone number or an email address.
 ### 1.1 Account recovery
 
 There is no server-side password reset, because the server has nothing to reset.
-Recovery is a 24-word BIP-39-style **recovery phrase** that seeds a
-recovery key pair. The client encrypts a backup blob (contact list, group
-memberships, and a device-provisioning secret) under a key derived from the
-phrase with Argon2id (m=64 MiB, t=3, p=4) and uploads the ciphertext. The server
-stores bytes it cannot read.
 
-Losing the phrase means losing the account. This is stated plainly during
-onboarding, twice, and the phrase must be re-entered to continue.
+**Specified, not implemented.** Recovery is to be a 24-word BIP-39-style
+**recovery phrase** seeding a recovery key pair; the client would encrypt a
+backup blob (contact list, group memberships, and a device-provisioning
+secret) under a key derived from the phrase with Argon2id (m=64 MiB, t=3, p=4)
+and upload the ciphertext, and the server would store bytes it cannot read.
+The endpoints exist and the client never calls them: `putBackup` and
+`getBackup` are reached only by tests, and no onboarding screen shows a
+phrase. Losing a device today means losing the account. Tracked in
+`docs/STATUS.md`.
 
 ## 2. Session establishment — PQXDH-hybrid
 

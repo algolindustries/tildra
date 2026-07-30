@@ -18,9 +18,9 @@
  * things gets silenced rather than fixed. Matching is by identifier, not by
  * resolved reference — a tool that needed a type checker would not be run.
  *
- * It cannot see methods, which is a real limit: two of the four were methods
- * on SessionManager. It catches the module-level half of the problem, and
- * nothing here should be read as saying the other half is covered.
+ * Public methods of exported classes are checked too, because two of the four
+ * were methods on SessionManager — a class the app holds a reference to is
+ * reachable while any number of its methods are not.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -66,6 +66,37 @@ const ALLOWED = new Map([
 
   ['isSupportedLocale', 'called by resolveLocale'],
 
+  // Client and socket surface the app does not need but a caller reasonably
+  // would. Kept because a REST client that cannot report its own state is a
+  // worse client, not a tidier one.
+  ['ApiError.isAuthFailure', 'for callers deciding whether to re-authenticate'],
+  ['TildraClient.getCredentials', 'used by the tests to build a socket the way the app does'],
+  ['TildraClient.health', 'a liveness probe for whoever is running the thing'],
+  ['TildraSocket.currentState', 'the app subscribes to onStateChange instead'],
+  ['TildraClient.transparencyHead', 'the client verifies heads through resolveHandle'],
+
+  // Retention helpers with nothing scheduling them yet. Deleting a correct,
+  // tested one to satisfy a checker would be the wrong trade; leaving them
+  // undeclared would hide that no client-side retention runs.
+  ['Database.deleteMessagesOlderThan', 'no client-side retention is scheduled yet'],
+  ['Database.deleteSessions', 'used by a full reset the UI does not offer yet'],
+  ['Database.acknowledgeIdentityChange', 'markVerified clears the flag through upsertConversation'],
+  ['SessionManager.resetSession', 'no screen offers starting a session over yet'],
+
+  // Groups: implemented, tested end to end, and with no user interface at all.
+  // Recorded under "Not done" in docs/STATUS.md rather than left to look
+  // finished. Remove these entries when the screens exist.
+  ['SessionManager.createGroup', 'no group UI; see docs/STATUS.md'],
+  ['SessionManager.sendGroupMessage', 'no group UI; see docs/STATUS.md'],
+  ['SessionManager.addGroupMember', 'no group UI; see docs/STATUS.md'],
+  ['SessionManager.removeGroupMember', 'no group UI; see docs/STATUS.md'],
+  ['SessionManager.listGroups', 'no group UI; see docs/STATUS.md'],
+
+  // Account recovery: the protocol specifies it, the client never calls it.
+  // Also recorded under "Not done".
+  ['TildraClient.putBackup', 'no recovery-phrase flow in the client; see docs/STATUS.md'],
+  ['TildraClient.getBackup', 'no recovery-phrase flow in the client; see docs/STATUS.md'],
+
   ['signedPreKeyIsStale', 'called by rotateSignedPreKeysIfStale'],
   ['rotateSignedPreKeys', 'called by rotateSignedPreKeysIfStale'],
   ['encodeSigned', 'called by encodePreKeys'],
@@ -97,6 +128,45 @@ const PATTERNS = [
   /^export\s+(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/gm,
 ];
 
+/**
+ * Public method names of every exported class in a file.
+ *
+ * Brace counting rather than a parser, for the same reason as everything else
+ * here. `private` and `protected` members are skipped: they are internal by
+ * construction and unreachable is what they are for.
+ */
+function publicMethods(body) {
+  const found = [];
+  const classStart = /^export\s+(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/;
+  const lines = body.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const opened = classStart.exec(lines[i]);
+    if (!opened) continue;
+
+    let depth = 0;
+    for (let j = i; j < lines.length; j++) {
+      const line = lines[j];
+      const before = depth;
+      depth += (line.match(/{/g) ?? []).length - (line.match(/}/g) ?? []).length;
+      if (j > i && before === 0) break;
+
+      // Members sit at one level of indentation inside the class body.
+      const member =
+        /^ {2}(?!\/\/)((?:(?:private|protected|public|static|readonly|async|get|set|abstract)\s+)*)([A-Za-z_$][\w$]*)\s*\(/.exec(
+          line,
+        );
+      if (!member) continue;
+      const modifiers = member[1] ?? '';
+      const name = member[2];
+      if (/private|protected/.test(modifiers)) continue;
+      if (name === 'constructor' || name === 'if' || name === 'for' || name === 'while') continue;
+      found.push({ owner: opened[1], name });
+    }
+  }
+  return found;
+}
+
 const findings = [];
 for (const file of appFiles.filter((f) => f.startsWith(join(ROOT, 'src')))) {
   const body = read.get(file);
@@ -115,6 +185,20 @@ for (const file of appFiles.filter((f) => f.startsWith(join(ROOT, 'src')))) {
     if (usedByApp) continue;
     const usedByTests = testFiles.some((other) => word.test(read.get(other)));
     findings.push({ file: relative(ROOT, file), name, tested: usedByTests });
+  }
+
+  for (const { owner, name } of publicMethods(body)) {
+    const label = `${owner}.${name}`;
+    if (ALLOWED.has(label)) continue;
+    const word = new RegExp(`\\.${name}\\b`);
+    // A method the class calls on itself is reached; internal use is use. Only
+    // `this.` counts, so a method that merely shares a name with a local
+    // variable does not look reachable.
+    if (new RegExp(`this\\.${name}\\b`).test(body)) continue;
+    const usedByApp = appFiles.some((other) => other !== file && word.test(read.get(other)));
+    if (usedByApp) continue;
+    const usedByTests = testFiles.some((other) => word.test(read.get(other)));
+    findings.push({ file: relative(ROOT, file), name: label, tested: usedByTests });
   }
 }
 

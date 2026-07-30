@@ -187,14 +187,6 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS sessions_by_account ON sessions(account_ref);
 
-CREATE TABLE IF NOT EXISTS prekeys (
-  id          INTEGER NOT NULL,
-  kind        TEXT NOT NULL,
-  secret_blob TEXT NOT NULL,
-  created_at  INTEGER NOT NULL,
-  PRIMARY KEY (id, kind)
-);
-
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -329,13 +321,6 @@ export class Database {
 
   async acknowledgeIdentityChange(accountId: string): Promise<void> {
     await this.db.runAsync('UPDATE conversations SET identity_changed = 0 WHERE id = ?', [
-      this.conversationKey(accountId),
-    ]);
-  }
-
-  async setVerified(accountId: string, verified: boolean): Promise<void> {
-    await this.db.runAsync('UPDATE conversations SET verified = ? WHERE id = ?', [
-      verified ? 1 : 0,
       this.conversationKey(accountId),
     ]);
   }
@@ -491,43 +476,6 @@ export class Database {
     ]);
   }
 
-  // -------------------------------------------------------------------------
-  // Prekey secrets
-  // -------------------------------------------------------------------------
-
-  async savePreKeySecret(id: number, kind: string, secret: Uint8Array): Promise<void> {
-    await this.db.runAsync(
-      `INSERT OR REPLACE INTO prekeys (id, kind, secret_blob, created_at) VALUES (?, ?, ?, ?)`,
-      [id, kind, this.vault.encrypt('prekeys', `${kind}:${id}`, secret), Date.now()],
-    );
-  }
-
-  async loadPreKeySecret(id: number, kind: string): Promise<Uint8Array | null> {
-    const row = await this.db.getFirstAsync<{ secret_blob: string }>(
-      'SELECT secret_blob FROM prekeys WHERE id = ? AND kind = ?',
-      [id, kind],
-    );
-    return row ? this.vault.decrypt('prekeys', `${kind}:${id}`, row.secret_blob) : null;
-  }
-
-  /**
-   * Destroy a consumed one-time prekey.
-   *
-   * Called after a session is established. A one-time prekey that survives its
-   * use is no longer one-time, and the forward secrecy it was there to provide
-   * is gone.
-   */
-  async deletePreKeySecret(id: number, kind: string): Promise<void> {
-    await this.db.runAsync('DELETE FROM prekeys WHERE id = ? AND kind = ?', [id, kind]);
-  }
-
-  async listPreKeyIds(kind: string): Promise<number[]> {
-    const rows = await this.db.getAllAsync<{ id: number }>(
-      'SELECT id FROM prekeys WHERE kind = ? ORDER BY id',
-      [kind],
-    );
-    return rows.map((r) => r.id);
-  }
 
   // -------------------------------------------------------------------------
   // Meta
