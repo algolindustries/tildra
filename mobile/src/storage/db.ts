@@ -70,6 +70,13 @@ export interface Message {
   state: MessageState;
   /** Present when the message carries a file. */
   attachment?: AttachmentRef;
+  /**
+   * Who sent it, for a conversation with more than two people in it.
+   *
+   * Absent in a pairwise chat, where the answer is "the other one" and storing
+   * it would be a second place for the same fact to be wrong.
+   */
+  senderAccountId?: string;
 }
 
 export interface StoredSession {
@@ -344,9 +351,12 @@ export class Database {
           message.id,
           message.conversationId,
           this.vault.encryptJson('message', message.id, {
-          text: message.text,
-          attachment: message.attachment ? serializeAttachmentRef(message.attachment) : undefined,
-        }),
+            text: message.text,
+            attachment: message.attachment
+              ? serializeAttachmentRef(message.attachment)
+              : undefined,
+            senderAccountId: message.senderAccountId,
+          }),
           message.outgoing ? 1 : 0,
           message.createdAt,
           message.state,
@@ -380,6 +390,7 @@ export class Database {
         const body = this.vault.decryptJson<{
           text: string;
           attachment?: SerializedAttachmentRef;
+          senderAccountId?: string;
         }>('message', row.id, row.body_blob);
         return {
           id: row.id,
@@ -389,6 +400,7 @@ export class Database {
           outgoing: row.outgoing === 1,
           createdAt: row.created_at,
           state: row.state,
+          senderAccountId: body.senderAccountId,
         };
       })
       .reverse();

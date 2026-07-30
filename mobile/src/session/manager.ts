@@ -227,6 +227,23 @@ export class IdentityChangedError extends Error {
 
 export class NoDevicesError extends Error {}
 
+/**
+ * A group's conversation key.
+ *
+ * A group is stored as a conversation whose account id is this, which is the
+ * whole reason the chat list, the unread counts and the message list work for
+ * one without a second implementation. The prefix is not a valid account id —
+ * those are Crockford base32 — so a group can never collide with a person.
+ *
+ * Before this, a received group message was filed under the *sender's*
+ * pairwise conversation: a group of five scattered its history across five
+ * one-to-one chats, and an outgoing group message was not stored at all, so
+ * the sender never saw what they had said.
+ */
+export function groupConversationKey(groupId: string): string {
+  return `group:${groupId}`;
+}
+
 /** Profiles hold image bytes, so they cannot go through JSON unchanged. */
 interface SerializedProfile {
   displayName: string;
@@ -1239,6 +1256,22 @@ export class SessionManager {
         this.events.onError?.(err instanceof Error ? err : new Error(String(err)));
       }
     }
+
+    // Stored on this device too. Sending something and not seeing it is not a
+    // subtle bug, and until now it was the behaviour.
+    const conversation = await this.ensureGroupConversation(groupId);
+    const message: Message = {
+      id: this.randomId(),
+      conversationId: conversation.id,
+      text,
+      outgoing: true,
+      createdAt: this.now(),
+      state: delivered > 0 ? 'sent' : 'failed',
+      senderAccountId: this.accountId,
+    };
+    await this.store.insertMessage(message);
+    this.events.onGroupMessage?.(groupId, message);
+
     return delivered;
   }
 
@@ -1286,7 +1319,8 @@ export class SessionManager {
     const decoded = decodeContent(decryptGroupMessage(receiver, groupMessage));
     await this.store.saveReceiverKey(groupMessage.groupId, from, receiver);
 
-    const conversation = await this.ensureConversation(senderAccountId);
+    // Filed under the group, not under whoever sent it.
+    const conversation = await this.ensureGroupConversation(groupMessage.groupId);
     const message: Message = {
       id: envelope.id,
       conversationId: conversation.id,
@@ -1294,6 +1328,7 @@ export class SessionManager {
       outgoing: false,
       createdAt: Date.parse(envelope.serverTs) || this.now(),
       state: 'delivered',
+      senderAccountId,
     };
     await this.store.insertMessage(message);
     this.events.onGroupMessage?.(groupMessage.groupId, message);
@@ -1337,6 +1372,37 @@ export class SessionManager {
     await this.distributeSenderKey(groupId, [member]);
     this.events.onGroupChange?.(groupId);
     return group;
+  }
+
+  /**
+   * The conversation row a group's messages live in, created on demand.
+   *
+   * Named from the group rather than from any member, so every device files
+   * the same history in the same place.
+   */
+  private async ensureGroupConversation(
+    groupId: string,
+  ): Promise<Conversation & { id: string }> {
+    const key = groupConversationKey(groupId);
+    const existing = await this.store.getConversation(key);
+    if (existing) return existing;
+
+    const group = await this.store.loadGroup(groupId);
+    await this.store.upsertConversation({
+      accountId: key,
+      displayName: group?.name,
+      // A group has no identity key: there is no single "other end" to compare
+      // against, and the per-member checks happen on the pairwise sessions the
+      // sender keys travel over.
+      identityKey: new Uint8Array(0),
+      lastActivity: this.now(),
+      unreadCount: 0,
+      verified: false,
+      identityChanged: false,
+    });
+    const created = await this.store.getConversation(key);
+    if (!created) throw new Error('Tildra: failed to create a group conversation');
+    return created;
   }
 
   async listGroups(): Promise<StoredGroup[]> {

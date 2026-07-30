@@ -19,6 +19,7 @@ import {
   IdentityChangedError,
   SIGNED_PREKEY_META_KEY,
   SessionManager,
+  groupConversationKey,
 } from '../manager';
 import { MemorySessionStore } from './memory-store';
 import {
@@ -1785,5 +1786,108 @@ describeIntegration('signed prekey rotation', () => {
     expect(() => acceptSession(bob.persisted(), init.init)).not.toThrow();
 
     alice.socket.close();
+  }, 120_000);
+});
+
+// ---------------------------------------------------------------------------
+// Where group messages live
+// ---------------------------------------------------------------------------
+
+describeIntegration('group conversations', () => {
+  it('files a group message under the group, not under whoever sent it', async () => {
+    // A group of five used to scatter its history across five one-to-one
+    // chats, because a received group message was stored against the sender's
+    // pairwise conversation. There was nothing a group screen could render.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    const carol = await bringUp('Carol');
+
+    // Pairwise sessions first: sender keys travel over them.
+    for (const other of [bob, carol]) {
+      await alice.manager.sendMessage(other.accountId, 'merhaba');
+      await waitFor(() => other.received.length > 0);
+      await other.manager.sendMessage(alice.accountId, 'selam');
+    }
+    await waitFor(() => alice.received.length === 2);
+
+    await alice.manager.createGroup(
+      'grp-where',
+      [alice.member(), bob.member(), carol.member()],
+      'Kitap kulübü',
+    );
+    await alice.manager.sendGroupMessage('grp-where', 'herkese merhaba');
+    await waitFor(() => bob.groupReceived.length > 0 && carol.groupReceived.length > 0);
+
+    const key = groupConversationKey('grp-where');
+    for (const device of [alice, bob, carol]) {
+      const conversation = await device.store.getConversation(key);
+      expect(conversation, `${device.name} has no group conversation`).toBeTruthy();
+
+      const messages = device.store.listMessages(conversation!.id);
+      expect(messages.map((m) => m.text)).toContain('herkese merhaba');
+      expect(messages.find((m) => m.text === 'herkese merhaba')?.senderAccountId).toBe(
+        alice.accountId,
+      );
+    }
+
+    // And not in the one-to-one chat with Alice.
+    const pairwise = await bob.store.getConversation(alice.accountId);
+    const direct = bob.store.listMessages(pairwise!.id);
+    expect(direct.map((m) => m.text)).not.toContain('herkese merhaba');
+
+    [alice, bob, carol].forEach((d) => d.socket.close());
+  }, 120_000);
+
+  it('shows the sender their own group message', async () => {
+    // Sending something and not seeing it is not a subtle bug, and until now
+    // it was the behaviour: the outgoing message was never stored.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.sendMessage(bob.accountId, 'merhaba');
+    await waitFor(() => bob.received.length > 0);
+    await bob.manager.sendMessage(alice.accountId, 'selam');
+    await waitFor(() => alice.received.length > 0);
+
+    await alice.manager.createGroup('grp-echo', [alice.member(), bob.member()], 'İkili');
+    await alice.manager.sendGroupMessage('grp-echo', 'benim mesajım');
+
+    const conversation = await alice.store.getConversation(groupConversationKey('grp-echo'));
+    const messages = alice.store.listMessages(conversation!.id);
+    const own = messages.find((m) => m.text === 'benim mesajım');
+
+    expect(own).toBeTruthy();
+    expect(own!.outgoing).toBe(true);
+    expect(own!.state).toBe('sent');
+    expect(own!.senderAccountId).toBe(alice.accountId);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+
+  it('keeps every member of a group in one thread', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.sendMessage(bob.accountId, 'merhaba');
+    await waitFor(() => bob.received.length > 0);
+    await bob.manager.sendMessage(alice.accountId, 'selam');
+    await waitFor(() => alice.received.length > 0);
+
+    await alice.manager.createGroup('grp-thread', [alice.member(), bob.member()], 'Sohbet');
+    await alice.manager.sendGroupMessage('grp-thread', 'birinci');
+    await waitFor(() => bob.groupReceived.length > 0);
+    await bob.manager.sendGroupMessage('grp-thread', 'ikinci');
+    await waitFor(() => alice.groupReceived.length > 1);
+
+    const conversation = await alice.store.getConversation(groupConversationKey('grp-thread'));
+    const messages = alice.store.listMessages(conversation!.id);
+    expect(messages.map((m) => m.text).sort()).toEqual(['birinci', 'ikinci']);
+    // One of each direction, in one place.
+    expect(messages.filter((m) => m.outgoing)).toHaveLength(1);
+    expect(messages.filter((m) => !m.outgoing)).toHaveLength(1);
+
+    alice.socket.close();
+    bob.socket.close();
   }, 120_000);
 });

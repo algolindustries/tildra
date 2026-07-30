@@ -13,6 +13,11 @@ import { SessionStore, StoredGroup } from '../manager';
 export class MemorySessionStore implements SessionStore {
   readonly conversations = new Map<string, Conversation & { id: string }>();
   readonly messages: Message[] = [];
+
+  /** Mirrors Database.listMessages, so tests can ask the question a screen asks. */
+  listMessages(conversationId: string): Message[] {
+    return this.messages.filter((m) => m.conversationId === conversationId);
+  }
   readonly sessions = new Map<string, StoredSession>();
   readonly meta = new Map<string, string>();
   readonly groups = new Map<string, StoredGroup>();
