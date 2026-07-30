@@ -14,7 +14,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Client crypto: PQXDH (X25519 + ML-KEM-768), Double Ratchet with header encryption | done |
 | Sealed sender, rotating mailboxes, contact inbox for first contact | done |
 | Encrypted local storage: keystore master key + vault-encrypted SQLite | done |
-| Session manager: fanout per device, identity-change blocking, prekey top-up | done |
+| Session manager: fanout per device, identity-change blocking, prekey top-up, self-repair when a peer's session is gone | done |
 | Account recovery: a 24-word phrase derives the identity, the blob is published under a lookup id derived from the same phrase, and both screens exist | done |
 | Signed prekey rotation every 48h, with the replaced pair honoured for one more window, and every change to the secrets written to disk | done |
 | Screens: onboarding, chat list, conversation, safety number, profile, device link (both halves) | done |
@@ -40,7 +40,7 @@ tested by running the real Go server and pushing real traffic through it.
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 465 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 468 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -127,14 +127,6 @@ knowing before trusting a UI change.
   Xcode and Gradle over them to get an `.ipa` and an `.aab`. That needs the
   toolchains and has not been started. See `docs/REPRODUCIBLE_BUILDS.md`.
 
-- **Telling a contact that a session is gone.** After a recovery the device
-  has the account and no ratchets. Sending works — it handshakes afresh — but a
-  contact who still holds a live session addresses a per-session mailbox this
-  device no longer registers, so their send fails with `404 unknown mailbox`
-  until they start a new session. It is loud rather than silent, which is the
-  right failure, but it needs a protocol message that says "my session is
-  gone, start again" and there is none. See `docs/PROTOCOL.md` §1.1.
-
 ## Needs a human, not code
 
 - A domain. `tildra.chat` and `tildra.dev` were both free when the name was
@@ -173,6 +165,11 @@ knowing before trusting a UI change.
   version of the test above kept a reference to the secrets and passed with the
   persistence call deleted, because the top-up mutates the same maps in place.
   It serialises on the way in now. Run the negative control.
+- **An undecryptable message must be acknowledged, not retried.** Throwing
+  from `receiveEnvelope` leaves the envelope unacked so the server redelivers
+  it, which is right for a transient failure and an infinite loop for a
+  message encrypted to a ratchet that no longer exists. The rule: throw when
+  retrying could work, acknowledge and repair when it cannot.
 - **The recovery phrase is the account.** Registration derives the identity
   key from it rather than from the CSPRNG, so losing a device is survivable —
   and anyone holding the phrase is the account. The phrase-shown screen says

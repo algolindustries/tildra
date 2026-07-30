@@ -140,20 +140,23 @@ consequences, all of them visible rather than silent:
 
 - *Sending works.* No session means the next message establishes one from a
   fresh bundle, which is the ordinary first-contact path.
-- *A contact with a live session cannot reach you until they start a new one.*
-  They are addressing a per-session mailbox derived from a secret this device
-  no longer has, so it is not registered and the server answers `404 unknown
-  mailbox`. Their send fails loudly. The stable contact inbox is derived from
-  the identity key and does survive, so a contact who has no session — or
-  whose session is reset — reaches you immediately.
+- *One message from a contact with a live session is lost, and then it
+  repairs itself.* Mailbox registration lives on the server, so their address
+  is still valid and their send succeeds — the message arrives at a device
+  that cannot decrypt it. The recovered device acknowledges it (redelivering
+  an undecryptable message forever helps nobody), reports it, and handshakes
+  back. That init replaces the dead session on their side, and both directions
+  work from their next message. The repair is the ordinary first-contact path
+  and runs only for a sender whose identity key is already the one this device
+  had stored, so it is not a new signal for anybody to forge.
 - *Groups come back as membership, not as keys.* Sender keys belong to an
   epoch that ended with the device. A restored group is one you can send to,
   which distributes a fresh chain, and one you can read from once each member
   next distributes theirs.
 
-Closing the second of these needs a way to tell a peer "my session is gone,
-start again", which is a protocol message that does not exist. It is in
-`docs/STATUS.md`.
+There is deliberately no "my session is gone" message. The situation is
+already unambiguous from a message that decrypts to nothing, and a message
+that means "throw away our session" would be one more thing worth forging.
 
 ## 2. Session establishment — PQXDH-hybrid
 

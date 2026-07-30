@@ -11,7 +11,7 @@
  * worked around.
  */
 
-import { TildraClient } from '../api/client';
+import { ApiError, TildraClient } from '../api/client';
 import { IncomingEnvelope } from '../api/socket';
 import {
   KeyPair,
@@ -226,6 +226,15 @@ export class IdentityChangedError extends Error {
 }
 
 export class NoDevicesError extends Error {}
+
+/**
+ * The server's answer when nobody has registered the address a message is
+ * addressed to. It is not a transport failure: it is the recipient telling us,
+ * through the only channel available, that the session we hold is dead.
+ */
+function isUnknownMailbox(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404;
+}
 
 /**
  * A group's conversation key.
@@ -546,11 +555,16 @@ export class SessionManager {
     return { ...message, state };
   }
 
+  /**
+   * `retrying` guards the one automatic re-handshake below. Without it a
+   * server that always answers 404 would spin.
+   */
   private async sendToDevice(
     accountId: string,
     deviceId: string,
     deviceIdentityKey: Uint8Array,
     content: Content,
+    retrying = false,
   ): Promise<void> {
     let session = await this.store.loadSession(accountId, deviceId);
     let pendingInit: SessionInit | undefined;
@@ -583,10 +597,30 @@ export class SessionManager {
       message,
     });
 
-    await this.client.sendEnvelope(
-      this.mailboxFor(session, accountId, deviceId, deviceIdentityKey),
-      envelope,
-    );
+    try {
+      await this.client.sendEnvelope(
+        this.mailboxFor(session, accountId, deviceId, deviceIdentityKey),
+        envelope,
+      );
+    } catch (err) {
+      // The recipient is not listening on the per-session mailbox this device
+      // derived. That means their session is gone — they recovered from a
+      // phrase, or reinstalled — and the ratchet here is talking to nobody.
+      //
+      // Answered by handshaking again rather than by a "my session is gone"
+      // message from them, which would be a new signal to forge. A hostile
+      // server can force this by answering 404, and what that buys it is a
+      // consumed one-time prekey and a session restarted from a bundle it
+      // still cannot substitute: `establishSession` verifies the bundle and
+      // checks the identity key against what we stored.
+      if (retrying || !isUnknownMailbox(err)) throw err;
+
+      this.events.onError?.(
+        new Error(`Tildra: ${accountId}/${deviceId} lost its session; handshaking again`),
+      );
+      await this.establishSession(accountId, deviceId, deviceIdentityKey);
+      return this.sendToDevice(accountId, deviceId, deviceIdentityKey, content, true);
+    }
     await this.store.saveSession({ ...session, ratchet, pendingInit });
   }
 
@@ -738,7 +772,27 @@ export class SessionManager {
       associatedData = session.associatedData;
       mailboxSecret = session.mailboxSecret;
     } else {
-      throw new Error('Tildra: message for an unknown session and no session init present');
+      // A message we cannot attribute to any session and that carries no
+      // handshake. The sender is talking over a ratchet this device no longer
+      // has — it recovered from a phrase, or was reinstalled — and the
+      // mailbox they addressed is still registered server-side, so nothing
+      // failed on their end and they have no way to know.
+      //
+      // Acknowledged rather than thrown. Throwing leaves the envelope unacked
+      // and the server redelivers it forever, which is what this branch used
+      // to do: an undecryptable message became an infinite loop.
+      //
+      // Then repaired, by handshaking at them. Our init reaches them, their
+      // `receiveEnvelope` accepts it and replaces the dead session, and both
+      // directions work from their next message. No new signal to forge: the
+      // repair is the ordinary first-contact path, and it only runs for a
+      // sender whose identity key is already the one we stored.
+      await this.repairSession(
+        content.senderAccountId,
+        content.senderDeviceId,
+        content.senderIdentityKey,
+      );
+      return null;
     }
 
     const decoded = decodeContent(decrypt(ratchet, content.message, associatedData));
@@ -1117,6 +1171,37 @@ export class SessionManager {
     return raw ? deserializeProfile(JSON.parse(raw)) : null;
   }
 
+  /**
+   * Handshake at a peer who is talking over a session we do not have.
+   *
+   * Best effort and reported: if the repair fails the conversation stays
+   * stuck, and a user seeing "cannot reach X" is better served than one
+   * watching messages vanish.
+   */
+  private async repairSession(
+    accountId: string,
+    deviceId: string,
+    identityKey: Uint8Array,
+  ): Promise<void> {
+    this.events.onError?.(
+      new Error(`Tildra: ${accountId} is using a session this device no longer has; reconnecting`),
+    );
+    try {
+      await this.assertIdentityUnchanged(accountId, identityKey);
+      const profile = await this.getProfile();
+      await this.sendToDevice(
+        accountId,
+        deviceId,
+        identityKey,
+        // A profile rather than an empty control message: it is already the
+        // first-contact payload, and the peer needs one anyway after this.
+        profileContent(profile ?? { displayName: 'Tildra', updatedAt: this.now() }),
+      );
+    } catch (err) {
+      this.events.onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+
   private async sendProfileTo(accountId: string, profile: Profile): Promise<void> {
     const devices = await this.client.listDevices(accountId);
     for (const device of devices) {
@@ -1309,10 +1394,19 @@ export class SessionManager {
       senderIdentityKey: this.identity.publicKey,
       groupMessage,
     });
-    await this.client.sendEnvelope(
-      this.mailboxFor(session, m.accountId, m.deviceId, device.identityKey),
-      envelope,
-    );
+    try {
+      await this.client.sendEnvelope(
+        this.mailboxFor(session, m.accountId, m.deviceId, device.identityKey),
+        envelope,
+      );
+    } catch (err) {
+      if (!isUnknownMailbox(err)) throw err;
+      // A group message is sealed to the recipient's identity key rather than
+      // to a ratchet, so it does not need a handshake to be readable — only
+      // an address that is listened on. The contact inbox is derived from that
+      // same identity key and is the one a device with no sessions registers.
+      await this.client.sendEnvelope(contactInbox(device.identityKey), envelope);
+    }
   }
 
   private async receiveGroupEnvelope(

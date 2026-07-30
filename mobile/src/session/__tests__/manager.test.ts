@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { TildraClient } from '../../api/client';
+import { ApiError, TildraClient } from '../../api/client';
 import { TildraSocket } from '../../api/socket';
 import {
   CHECKPOINT_META_KEY,
@@ -99,6 +99,7 @@ interface Device {
   renegotiations: { call: CallSession; sdp: string }[];
   renegotiationAnswers: { call: CallSession; sdp: string }[];
   splitViews: { source: string; error: SplitViewError }[];
+  profileChanges: string[];
   member: () => { accountId: string; deviceId: string };
 }
 
@@ -120,6 +121,7 @@ async function bringUp(name: string): Promise<Device> {
   const candidates: string[] = [];
   const callChanges: CallSession[] = [];
   const splitViews: { source: string; error: SplitViewError }[] = [];
+  const profileChanges: string[] = [];
   const renegotiations: { call: CallSession; sdp: string }[] = [];
   const renegotiationAnswers: { call: CallSession; sdp: string }[] = [];
 
@@ -149,6 +151,7 @@ async function bringUp(name: string): Promise<Device> {
       onCallRenegotiate: (call, sdp) => renegotiations.push({ call, sdp }),
       onCallRenegotiateAnswer: (call, sdp) => renegotiationAnswers.push({ call, sdp }),
       onSplitView: (source, error) => splitViews.push({ source, error }),
+      onProfileChange: (accountId) => profileChanges.push(accountId),
       onError: (error) => errors.push(error),
     },
   });
@@ -181,6 +184,7 @@ async function bringUp(name: string): Promise<Device> {
     renegotiations,
     renegotiationAnswers,
     splitViews,
+    profileChanges,
     member: () => ({ accountId, deviceId }),
   };
 }
@@ -2111,4 +2115,140 @@ describeIntegration('recovering from a phrase', () => {
 
     attacker.socket.close();
   }, 90_000);
+});
+
+// ---------------------------------------------------------------------------
+// Reaching somebody who lost their sessions
+// ---------------------------------------------------------------------------
+
+describeIntegration('a contact whose session is gone', () => {
+  /**
+   * Rebuild a device the way recovery does: same account, same device, same
+   * identity key, and an empty store. No ratchets, no per-session mailboxes.
+   */
+  async function afterRecovery(device: Device): Promise<Device> {
+    const store = new MemorySessionStore();
+    const received: string[] = [];
+    const errors: Error[] = [];
+    let socket: TildraSocket | undefined;
+
+    const manager = new SessionManager({
+      identity: device.identity,
+      accountId: device.accountId,
+      deviceId: device.deviceId,
+      client: device.client,
+      store,
+      preKeys: generatePreKeys(device.identity, { count: 10 }).secrets,
+      randomId: () => toBase64(randomBytes(16)),
+      onMailboxesChanged: (mailboxes) => socket?.subscribe(mailboxes),
+      events: {
+        onMessage: (message) => received.push(message.text),
+        onError: (error) => errors.push(error),
+      },
+    });
+    await device.client.publishKeys(generatePreKeys(device.identity, { count: 10 }).upload);
+    await manager.publishMailboxes();
+
+    socket = new TildraSocket(BASE_URL, device.client.getCredentials()!.token, {
+      onEnvelope: (envelope) => manager.receiveEnvelope(envelope).then(() => undefined),
+      onError: (error) => errors.push(error),
+    });
+    socket.connect();
+    await new Promise((r) => setTimeout(r, 300));
+
+    return { ...device, store, manager, socket, received, errors };
+  }
+
+  it('repairs itself after one lost message rather than looping forever', async () => {
+    // The recovery case, and it does not go the way it looks like it should.
+    // Mailbox registration lives on the server, so Alice's address is still
+    // valid and her send succeeds — the message arrives at a device that
+    // cannot decrypt it. That used to throw, which left the envelope unacked
+    // and the server redelivering it forever.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.sendMessage(bob.accountId, 'önce');
+    await waitFor(() => bob.received.length > 0);
+    await bob.manager.sendMessage(alice.accountId, 'cevap');
+    await waitFor(() => alice.received.length > 0);
+    bob.socket.close();
+
+    const recovered = await afterRecovery(bob);
+    try {
+      // The first one is lost. It was encrypted to a ratchet that no longer
+      // exists and no amount of retrying changes that.
+      await alice.manager.sendMessage(bob.accountId, 'kayıp');
+      await waitFor(() => recovered.errors.length > 0, 15_000);
+      expect(recovered.errors.map((e) => e.message).join()).toMatch(/no longer has/);
+
+      // The repair handshakes at Alice — a profile, which is not a chat
+      // message, so nothing new appears in her thread. Waiting on the profile
+      // rather than on a timer is the difference between testing the
+      // mechanism and testing that fifteen seconds is usually enough.
+      await waitFor(() => alice.profileChanges.includes(bob.accountId), 15_000);
+      expect(alice.profileChanges).toContain(bob.accountId);
+      await alice.manager.sendMessage(bob.accountId, 'sonra');
+      await waitFor(() => recovered.received.length > 0, 15_000);
+      expect(recovered.received).toEqual(['sonra']);
+
+      await recovered.manager.sendMessage(alice.accountId, 'ben de');
+      await waitFor(() => alice.received.includes('ben de'), 15_000);
+      expect(alice.received).toEqual(['cevap', 'ben de']);
+    } finally {
+      alice.socket.close();
+      recovered.socket.close();
+    }
+  }, 150_000);
+
+  it('does not spin when the server always says no', async () => {
+    // One re-handshake, then the failure is the caller's. A server answering
+    // 404 forever must not become an infinite loop that also drains the
+    // one-time prekey pool.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    await alice.manager.sendMessage(bob.accountId, 'merhaba');
+    await waitFor(() => bob.received.length > 0);
+
+    const realSend = alice.client.sendEnvelope.bind(alice.client);
+    let attempts = 0;
+    alice.client.sendEnvelope = async () => {
+      attempts += 1;
+      throw new ApiError(404, 'unknown mailbox');
+    };
+
+    await alice.manager.sendMessage(bob.accountId, 'bu gitmeyecek');
+    expect(attempts).toBe(2);
+
+    alice.client.sendEnvelope = realSend;
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+
+  it('still delivers a group message to a device with no sessions', async () => {
+    // A group message is sealed to the identity key rather than to a ratchet,
+    // so it only needs an address that is listened on. The contact inbox is
+    // derived from that same key and is what a device with no sessions has.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    await alice.manager.sendMessage(bob.accountId, 'merhaba');
+    await waitFor(() => bob.received.length > 0);
+    await bob.manager.sendMessage(alice.accountId, 'selam');
+    await waitFor(() => alice.received.length > 0);
+
+    await alice.manager.createGroup('grp-recovered', [alice.member(), bob.member()]);
+    bob.socket.close();
+    const recovered = await afterRecovery(bob);
+
+    try {
+      // Sending must not throw: the fallback address is used rather than the
+      // dead per-session one.
+      await expect(
+        alice.manager.sendGroupMessage('grp-recovered', 'gruba'),
+      ).resolves.toBeGreaterThan(0);
+    } finally {
+      alice.socket.close();
+      recovered.socket.close();
+    }
+  }, 120_000);
 });
