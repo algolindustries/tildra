@@ -20,6 +20,7 @@ import { ProfileScreen } from './src/screens/ProfileScreen';
 import { LinkDeviceScreen } from './src/screens/LinkDeviceScreen';
 import { JoinDeviceScreen } from './src/screens/JoinDeviceScreen';
 import { CallScreen } from './src/screens/CallScreen';
+import { NewGroupScreen } from './src/screens/NewGroupScreen';
 import { Banner, Button } from './src/ui/components';
 import { palette, spacing } from './src/ui/theme';
 
@@ -28,7 +29,8 @@ type Route =
   | { name: 'conversation'; accountId: string }
   | { name: 'verify'; accountId: string }
   | { name: 'profile' }
-  | { name: 'link' };
+  | { name: 'link' }
+  | { name: 'new-group' };
 
 export default function App() {
   const phase = useApp((s) => s.phase);
@@ -100,6 +102,14 @@ export default function App() {
             onClose={() => setRoute({ name: 'list' })}
             onLinkDevice={() => setRoute({ name: 'link' })}
           />
+        ) : route.name === 'new-group' ? (
+          <NewGroupScreen
+            onCancel={() => setRoute({ name: 'list' })}
+            onCreated={(conversationKey) => {
+              void openConversation(conversationKey);
+              setRoute({ name: 'conversation', accountId: conversationKey });
+            }}
+          />
         ) : route.name === 'link' ? (
           <LinkDeviceScreen onClose={() => setRoute({ name: 'profile' })} />
         ) : (
@@ -109,6 +119,7 @@ export default function App() {
               setRoute({ name: 'conversation', accountId });
             }}
             onOpenProfile={() => setRoute({ name: 'profile' })}
+            onNewGroup={() => setRoute({ name: 'new-group' })}
           />
         )}
       </View>

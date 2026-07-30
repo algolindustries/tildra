@@ -17,7 +17,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Session manager: fanout per device, identity-change blocking, prekey top-up | done |
 | Signed prekey rotation every 48h, with the replaced pair honoured for one more window, and every change to the secrets written to disk | done |
 | Screens: onboarding, chat list, conversation, safety number, profile, device link (both halves) | done |
-| Encrypted groups: sender keys, signed messages, rotation on removal — protocol only, no screens | done at the protocol layer |
+| Encrypted groups: sender keys, signed messages, rotation on removal, and screens to create and use one | done |
 | Encrypted profiles (name, photo, about), mutual introduction on first contact | done |
 | Encrypted attachments; photo and voice messages with waveforms | done |
 | Push notifications with a content-free payload | done |
@@ -39,7 +39,7 @@ tested by running the real Go server and pushing real traffic through it.
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 431 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 434 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -126,21 +126,11 @@ knowing before trusting a UI change.
   Xcode and Gradle over them to get an `.ipa` and an `.aab`. That needs the
   toolchains and has not been started. See `docs/REPRODUCIBLE_BUILDS.md`.
 
-- **Group screens.** `createGroup`, `sendGroupMessage`, `addGroupMember`,
-  `removeGroupMember` and `listGroups` are implemented, tested end to end
-  against a real server, and called by nothing but the tests. There is no way
-  for a user to create a group, open one, or see that one exists. The README
-  claimed groups as a finished feature in two places and now says what is
-  actually true. This is the fifth time this project has shipped something
-  that works, is tested, and cannot be reached; it is the largest one.
-
-  What was missing underneath is now there: a group has a conversation of its
-  own, so there is something for a screen to render. Before this a received
-  group message was filed under the *sender's* pairwise conversation — a group
-  of five scattered its history across five one-to-one chats — and an outgoing
-  group message was not stored at all, so the sender never saw what they had
-  said. Both are fixed and tested across a real server. What remains is the
-  screens: create, member list, and opening a group from the chat list.
+- **Managing a group after it exists.** Creating one and talking in it work
+  from the app. Adding and removing members do not have screens yet:
+  `addGroupMember` and `removeGroupMember` are still reachable only from
+  tests, and removal is the one that matters — it is what rotates the sender
+  keys and locks somebody out.
 - **Account recovery.** `docs/PROTOCOL.md` §1.1 described a recovery-phrase
   backup in the present tense. The server endpoints exist; the client calls
   them only from tests, and no onboarding screen shows a phrase. Losing a

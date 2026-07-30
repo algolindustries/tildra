@@ -241,7 +241,22 @@ export class NoDevicesError extends Error {}
  * the sender never saw what they had said.
  */
 export function groupConversationKey(groupId: string): string {
-  return `group:${groupId}`;
+  return `${GROUP_PREFIX}${groupId}`;
+}
+
+const GROUP_PREFIX = 'group:';
+
+/**
+ * The group id inside a conversation key, or null if it names a person.
+ *
+ * The parsing half of the format above, and it lives next to it on purpose:
+ * if the two ever disagree, a message meant for a group is sent down a
+ * pairwise session to an account id that does not exist, and nothing says so.
+ */
+export function groupIdFromConversationKey(key: string): string | null {
+  if (!key.startsWith(GROUP_PREFIX)) return null;
+  const groupId = key.slice(GROUP_PREFIX.length);
+  return groupId.length > 0 ? groupId : null;
 }
 
 /** Profiles hold image bytes, so they cannot go through JSON unchanged. */

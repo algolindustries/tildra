@@ -17,6 +17,7 @@ import { VoiceBubble } from '../ui/VoiceBubble';
 import { palette, radius, spacing, typography } from '../ui/theme';
 import { Row, buildRows, formatAccountId, messageTime } from '../ui/format';
 import { useApp } from '../state/app';
+import { groupIdFromConversationKey } from '../session/manager';
 import { Message } from '../storage/db';
 
 export function ConversationScreen({
@@ -31,6 +32,19 @@ export function ConversationScreen({
   onCall: (video: boolean) => void;
 }) {
   const t = useApp((s) => s.t);
+  const activeGroup = useApp((s) => s.activeGroup);
+  const isGroup = groupIdFromConversationKey(accountId) !== null;
+
+  /**
+   * Who sent a group message, by the name this device already has for them.
+   * Falls back to the account id: a group member nobody has a profile for is
+   * better shown as an identifier than as nothing.
+   */
+  function senderName(senderAccountId?: string): string | undefined {
+    if (!senderAccountId) return undefined;
+    const known = conversations.find((c) => c.accountId === senderAccountId);
+    return known?.displayName ?? formatAccountId(senderAccountId);
+  }
   const locale = useApp((s) => s.locale);
   const messages = useApp((s) => s.messages);
   const conversations = useApp((s) => s.conversations);
@@ -73,35 +87,57 @@ export function ConversationScreen({
           <Text style={styles.back}>‹</Text>
         </Pressable>
         <Avatar seed={accountId} label={name ?? accountId} image={conversation?.avatar} size={34} />
-        <Pressable style={styles.headerText} onPress={onVerify}>
-          <Text style={styles.headerName} numberOfLines={1}>
-            {name ?? formatAccountId(accountId)}
-          </Text>
-          <Text style={[styles.headerSub, conversation?.verified && styles.headerVerified]}>
-            {conversation?.verified ? `✓ ${t.verified}` : t.notVerified}
-          </Text>
-        </Pressable>
+        {isGroup ? (
+          <View style={styles.headerText}>
+            <Text style={styles.headerName} numberOfLines={1}>
+              {name ?? t.newGroup}
+            </Text>
+            {/* Member count, not a verification state: a group has no single
+                other end, and every member's key is checked on the pairwise
+                session its sender key travelled over. */}
+            <Text style={styles.headerSub}>
+              {`${activeGroup?.members.length ?? 0} · ${t.groupMembersLabel}`}
+            </Text>
+          </View>
+        ) : (
+          <Pressable style={styles.headerText} onPress={onVerify}>
+            <Text style={styles.headerName} numberOfLines={1}>
+              {name ?? formatAccountId(accountId)}
+            </Text>
+            <Text style={[styles.headerSub, conversation?.verified && styles.headerVerified]}>
+              {conversation?.verified ? `✓ ${t.verified}` : t.notVerified}
+            </Text>
+          </Pressable>
+        )}
         {/* Disabled while the key is in question rather than hidden: a
             missing button is a puzzle, a disabled one next to the banner
             explaining why is an answer. */}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={t.callAudio}
-          disabled={blocked}
-          onPress={() => onCall(false)}
-          hitSlop={10}
-        >
-          <Text style={[styles.headerAction, blocked && styles.headerActionOff]}>☎</Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={t.callVideo}
-          disabled={blocked}
-          onPress={() => onCall(true)}
-          hitSlop={10}
-        >
-          <Text style={[styles.headerAction, blocked && styles.headerActionOff]}>▣</Text>
-        </Pressable>
+        {/* No call buttons in a group: the fingerprint binding pins one
+            certificate to one identity key, which is a two-party statement.
+            Offering a button that cannot keep that promise would be worse
+            than not offering one. */}
+        {isGroup ? null : (
+          <>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t.callAudio}
+              disabled={blocked}
+              onPress={() => onCall(false)}
+              hitSlop={10}
+            >
+              <Text style={[styles.headerAction, blocked && styles.headerActionOff]}>☎</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t.callVideo}
+              disabled={blocked}
+              onPress={() => onCall(true)}
+              hitSlop={10}
+            >
+              <Text style={[styles.headerAction, blocked && styles.headerActionOff]}>▣</Text>
+            </Pressable>
+          </>
+        )}
       </View>
 
       {recording ? (
@@ -148,6 +184,11 @@ export function ConversationScreen({
                 showTail={item.showTail}
                 locale={locale}
                 stateLabel={stateLabel(item.message, t)}
+                senderName={
+                  isGroup && !item.message.outgoing
+                    ? senderName(item.message.senderAccountId)
+                    : undefined
+                }
               />
             )
           }
@@ -229,11 +270,14 @@ function Bubble({
   showTail,
   locale,
   stateLabel: label,
+  senderName,
 }: {
   message: Message;
   showTail: boolean;
   locale: string;
   stateLabel: string | null;
+  /** Only in a group, where "the other one" is not an answer. */
+  senderName?: string;
 }) {
   const outgoing = message.outgoing;
   const failed = message.state === 'failed';
@@ -247,6 +291,7 @@ function Bubble({
           failed && styles.bubbleFailed,
         ]}
       >
+        {senderName ? <Text style={styles.bubbleSender}>{senderName}</Text> : null}
         {message.attachment?.mimeType.startsWith('audio/') ? (
           <VoiceBubble message={message} outgoing={outgoing} />
         ) : message.attachment ? (
@@ -269,6 +314,7 @@ function Bubble({
 }
 
 const styles = StyleSheet.create({
+  bubbleSender: { ...typography.tiny, color: palette.accent, marginBottom: 2 },
   headerAction: { color: palette.accent, fontSize: 22, paddingHorizontal: spacing.xs },
   headerActionOff: { color: palette.textFaint },
   screen: { flex: 1, backgroundColor: palette.bg },

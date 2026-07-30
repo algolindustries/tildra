@@ -36,7 +36,13 @@ import {
   serializeTreeHead,
   verifyHandleProof,
 } from '../crypto/transparency';
-import { CHECKPOINT_META_KEY } from '../session/manager';
+import {
+  CHECKPOINT_META_KEY,
+  GroupMember,
+  StoredGroup,
+  groupConversationKey,
+  groupIdFromConversationKey,
+} from '../session/manager';
 import { PinnedAuditor, parsePinnedAuditors } from '../crypto/auditor';
 import { CallEndReason, CallSession } from '../crypto/calling';
 import { CallDriver, CallDriverDeps } from '../session/call-driver';
@@ -124,6 +130,8 @@ export interface AppState {
   /** How many pinned auditors last answered, and when. Null before the first check. */
   auditorStatus: { checked: number; of: number; at: number } | null;
 
+  /** The group the open conversation belongs to, if it is one. */
+  activeGroup: StoredGroup | null;
   /** The live call, mirrored from the manager so screens can render it. */
   call: CallSession | null;
   /** Set while the media stack is being brought up or torn down. */
@@ -148,6 +156,14 @@ export interface AppState {
   loadAttachment: (messageId: string) => Promise<Uint8Array | null>;
   startConversation: (input: string) => Promise<string>;
   markVerified: (accountId: string) => Promise<void>;
+  /**
+   * Start a group with people already in the contact list.
+   *
+   * Only contacts with a session, because a sender key travels over the
+   * pairwise ratchet: somebody this device has never messaged has no channel
+   * to receive one on.
+   */
+  createGroup: (name: string, accountIds: string[]) => Promise<string>;
   /** Ask every pinned auditor whether it saw the same log. */
   checkAuditors: () => Promise<void>;
   placeCall: (accountId: string, options?: { video?: boolean }) => Promise<void>;
@@ -254,6 +270,7 @@ export const useApp = create<AppState>((set, get) => ({
   pendingLink: null,
   splitView: null,
   auditorStatus: null,
+  activeGroup: null,
   call: null,
   callBusy: false,
 
@@ -367,17 +384,21 @@ export const useApp = create<AppState>((set, get) => ({
     if (!conversation) return;
 
     await runtime.db.markRead(conversation.id);
+    // A group has no single other end, so there is no safety number to show.
+    // Leaving a stale one on screen would be worse than none.
+    const group = groupIdFromConversationKey(accountId);
     set({
       activeAccountId: accountId,
       messages: await runtime.db.listMessages(conversation.id),
-      safetyNumber: await runtime.manager.safetyNumberFor(accountId),
-      safetyQr: await runtime.manager.safetyQrFor(accountId),
+      safetyNumber: group ? null : await runtime.manager.safetyNumberFor(accountId),
+      safetyQr: group ? null : await runtime.manager.safetyQrFor(accountId),
+      activeGroup: group ? ((await runtime.manager.listGroups()).find((g) => g.groupId === group) ?? null) : null,
     });
     await get().refreshConversations();
   },
 
   closeConversation() {
-    set({ activeAccountId: null, messages: [], safetyNumber: null, safetyQr: null });
+    set({ activeAccountId: null, messages: [], safetyNumber: null, safetyQr: null, activeGroup: null });
   },
 
   async send(text) {
@@ -385,7 +406,11 @@ export const useApp = create<AppState>((set, get) => ({
     if (!runtime?.manager || !accountId || !text.trim()) return;
 
     try {
-      await runtime.manager.sendMessage(accountId, text.trim());
+      // A group is a conversation whose account id says so, which is what
+      // lets one composer serve both.
+      const groupId = groupIdFromConversationKey(accountId);
+      if (groupId) await runtime.manager.sendGroupMessage(groupId, text.trim());
+      else await runtime.manager.sendMessage(accountId, text.trim());
     } catch (err) {
       set({ error: describeError(err, get().t) });
     } finally {
@@ -541,6 +566,28 @@ export const useApp = create<AppState>((set, get) => ({
   async matchesSafetyCode(accountId, scanned) {
     if (!runtime?.manager) return false;
     return runtime.manager.matchesSafetyCode(accountId, scanned);
+  },
+
+  async createGroup(name, accountIds) {
+    if (!runtime?.manager || !runtime.db) throw new Error('Tildra: not ready');
+    const me = get().accountId;
+    if (!me) throw new Error('Tildra: not signed in');
+
+    // Every device of every member, because a sender key is distributed per
+    // device and a member's second phone is not covered by the first.
+    const members: GroupMember[] = [];
+    for (const accountId of [me, ...accountIds]) {
+      for (const device of await runtime.client.listDevices(accountId)) {
+        members.push({ accountId, deviceId: device.deviceId });
+      }
+    }
+
+    const groupId = toBase64(crypto.getRandomValues(new Uint8Array(16)))
+      .replace(/[^A-Za-z0-9]/g, '')
+      .slice(0, 22);
+    await runtime.manager.createGroup(groupId, members, name.trim() || undefined);
+    await get().refreshConversations();
+    return groupConversationKey(groupId);
   },
 
   async checkAuditors() {
@@ -801,6 +848,23 @@ async function startSession(
             title: conversation.displayName ?? get().t.appName,
             body: message.text || get().t.attachment,
             data: { accountId: conversation.accountId },
+          }).catch(() => undefined);
+          void dismissWakeNotifications().catch(() => undefined);
+        }
+      },
+      onGroupMessage: (groupId, message) => {
+        // Same shape as a pairwise message. Without this a group thread only
+        // updated when it was reopened, which reads as messages arriving late.
+        void get().refreshConversations();
+        const active = get().activeAccountId;
+        const key = groupConversationKey(groupId);
+        if (active) void get().openConversation(active);
+
+        if (!message.outgoing && active !== key) {
+          void presentLocalNotification({
+            title: get().conversations.find((c) => c.accountId === key)?.displayName ?? get().t.appName,
+            body: message.text || get().t.attachment,
+            data: { accountId: key },
           }).catch(() => undefined);
           void dismissWakeNotifications().catch(() => undefined);
         }

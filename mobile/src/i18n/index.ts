@@ -119,6 +119,14 @@ export interface Strings {
   errorTransparency: string;
   errorSplitView: string;
   dismiss: string;
+  newGroup: string;
+  groupNameLabel: string;
+  groupNamePlaceholder: string;
+  groupMembersLabel: string;
+  groupMembersHelp: string;
+  groupCreate: string;
+  groupNoContacts: string;
+  groupBody: string;
   callAudio: string;
   callVideo: string;
   callRinging: string;
@@ -256,6 +264,16 @@ const en: Strings = {
   errorSplitView:
     'This server showed you and someone else different key transparency logs. That should never happen and may mean your messages are being intercepted. Verify safety numbers before continuing.',
   dismiss: 'Dismiss',
+  newGroup: 'New group',
+  groupNameLabel: 'Group name',
+  groupNamePlaceholder: 'Book club',
+  groupMembersLabel: 'Who is in it',
+  groupMembersHelp:
+    'Only people you have already messaged. A group key travels over the conversation you already have with someone, so there has to be one.',
+  groupCreate: 'Create the group',
+  groupNoContacts: 'Message somebody first, then you can put them in a group.',
+  groupBody:
+    'Everyone in the group gets their own copy of the key, encrypted to them. The server sees a count of envelopes and nothing else — not the name, not who is in it.',
   callAudio: 'Call',
   callVideo: 'Video call',
   callRinging: 'Ringing…',
@@ -396,6 +414,16 @@ const tr: Strings = {
   errorSplitView:
     'Bu sunucu size ve bir başkasına farklı anahtar şeffaflık kayıtları gösterdi. Bu asla olmamalı ve mesajlarınızın araya girilerek okunduğu anlamına gelebilir. Devam etmeden önce güvenlik numaralarını doğrulayın.',
   dismiss: 'Kapat',
+  newGroup: 'Yeni grup',
+  groupNameLabel: 'Grup adı',
+  groupNamePlaceholder: 'Kitap kulübü',
+  groupMembersLabel: 'Kimler var',
+  groupMembersHelp:
+    'Yalnızca daha önce mesajlaştığınız kişiler. Grup anahtarı, zaten var olan konuşma üzerinden gider; yani önce bir konuşma olmalı.',
+  groupCreate: 'Grubu oluştur',
+  groupNoContacts: 'Önce birine mesaj atın, sonra onu bir gruba ekleyebilirsiniz.',
+  groupBody:
+    'Gruptaki herkes anahtarın kendisine şifrelenmiş kopyasını alır. Sunucu yalnızca kaç zarf gittiğini görür — adı değil, kimlerin olduğunu değil.',
   callAudio: 'Ara',
   callVideo: 'Görüntülü ara',
   callRinging: 'Çalıyor…',

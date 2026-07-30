@@ -11,9 +11,11 @@ import { Conversation } from '../storage/db';
 export function ChatListScreen({
   onOpen,
   onOpenProfile,
+  onNewGroup,
 }: {
   onOpen: (accountId: string) => void;
   onOpenProfile: () => void;
+  onNewGroup: () => void;
 }) {
   const t = useApp((s) => s.t);
   const locale = useApp((s) => s.locale);
@@ -78,6 +80,14 @@ export function ChatListScreen({
       <ScreenTitle
         right={
           <View style={styles.titleActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t.newGroup}
+              onPress={onNewGroup}
+              style={styles.newButton}
+            >
+              <Text style={styles.newButtonText}>⁂</Text>
+            </Pressable>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={t.newChat}

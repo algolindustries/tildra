@@ -15,6 +15,7 @@ import {
   textContent,
 } from '../content';
 import { equal, randomBytes, utf8 } from '../primitives';
+import { groupConversationKey, groupIdFromConversationKey } from '../../session/manager';
 
 describe('content typing', () => {
   it('round-trips text', () => {
@@ -148,5 +149,26 @@ describe('profiles', () => {
       encodeProfile({ displayName: 'x', updatedAt: at + 999 }),
     );
     expect(decoded.updatedAt).toBe(at);
+  });
+});
+
+describe('group conversation keys', () => {
+  it('round-trips a group id', () => {
+    expect(groupIdFromConversationKey(groupConversationKey('grp-1'))).toBe('grp-1');
+    expect(groupIdFromConversationKey(groupConversationKey('a:b:c'))).toBe('a:b:c');
+  });
+
+  it('says a person is not a group', () => {
+    // Account ids are Crockford base32, so they can never carry the prefix —
+    // but the check is on the prefix, not on that assumption.
+    expect(groupIdFromConversationKey('01H8XGJWBWBAQ4TT1TT1TT1TT1')).toBeNull();
+    expect(groupIdFromConversationKey('')).toBeNull();
+    expect(groupIdFromConversationKey('groupish:1')).toBeNull();
+  });
+
+  it('refuses a prefix with nothing after it', () => {
+    // Otherwise an empty group id would look like a valid group and every
+    // message for it would go nowhere.
+    expect(groupIdFromConversationKey('group:')).toBeNull();
   });
 });
