@@ -9,6 +9,8 @@ import {
   previewText,
   relativeTime,
   safetyNumberRows,
+  MAX_SERVER_TEXT,
+  serverText,
 } from '../format';
 import { avatarColor, initials } from '../theme';
 import { availableLocales, resolveLocale, strings } from '../../i18n';
@@ -230,5 +232,75 @@ describe('avatars', () => {
     expect(initials('0123456789ABCDEF')).toBe('01');
     expect(initials('')).toBe('?');
     expect(initials('   ')).toBe('?');
+  });
+});
+
+describe('text the server chose', () => {
+  const t = strings('en');
+  const said = 'The server said: ';
+
+  it('attributes it rather than letting it speak as the app', () => {
+    // The banner around this is titled by the app. Without the attribution the
+    // body reads as something Tildra is telling you, and the server picks the
+    // words - at exactly the moment the design needs the user to trust what
+    // the app says about a key change.
+    expect(serverText('mailbox not found', t)).toBe(`${said}mailbox not found`);
+  });
+
+  it('flattens anything that could lay out a second interface', () => {
+    // A newline plus indentation renders as its own line in a Banner, so a
+    // server can append what looks like the app's own reassurance underneath
+    // the app's own error.
+    const hostile = 'rate limited\n\n  Verified by Tildra, safe to continue';
+    expect(serverText(hostile, t)).toBe(
+      `${said}rate limited Verified by Tildra, safe to continue`,
+    );
+  });
+
+  it('strips characters that reorder or hide what is displayed', () => {
+    // U+202E reverses the run after it, so what is stored and what is read are
+    // different sentences. U+200B and U+FEFF are invisible, U+00A0 is a space
+    // that does not collapse, U+0007 is a control character no diagnostic
+    // needs, and U+2028 is a line separator.
+    const cases: [string, string][] = [
+      ['‮elbatpecca si egnahc yek', 'elbatpecca si egnahc yek'],
+      ['a​b', 'a b'],
+      ['a  b', 'a b'],
+      ['bell', 'bel l'],
+      ['a b', 'a b'],
+      ['a﻿b', 'a b'],
+      ['  spaced \t\r\n  out  ', 'spaced out'],
+    ];
+    for (const [input, want] of cases) {
+      expect(serverText(input, t), JSON.stringify(input)).toBe(`${said}${want}`);
+    }
+  });
+
+  it('bounds it so the app keeps the screen', () => {
+    const out = serverText('x'.repeat(500), t);
+    expect(out.startsWith(said)).toBe(true);
+    expect(out.length).toBe(said.length + MAX_SERVER_TEXT);
+    expect(out.endsWith('…')).toBe(true);
+  });
+
+  it('keeps a message that is exactly at the bound intact', () => {
+    const exact = 'y'.repeat(MAX_SERVER_TEXT);
+    expect(serverText(exact, t)).toBe(`${said}${exact}`);
+    expect(serverText(exact, t).endsWith('…')).toBe(false);
+  });
+
+  it('falls back to the generic message when nothing usable is left', () => {
+    // A bare attribution with nothing after it reads as a broken app rather
+    // than as a server that sent noise.
+    for (const empty of ['', '   ', '\n\t', '​​', '‮', ' ']) {
+      expect(serverText(empty, t), JSON.stringify(empty)).toBe(t.errorGeneric);
+    }
+  });
+
+  it('leaves ordinary text alone, in either language', () => {
+    expect(serverText('handle already taken', t)).toBe(`${said}handle already taken`);
+    expect(serverText('kullanıcı adı alınmış', strings('tr'))).toBe(
+      'Sunucu şunu bildirdi: kullanıcı adı alınmış',
+    );
   });
 });

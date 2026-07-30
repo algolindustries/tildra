@@ -50,6 +50,17 @@ re-derives every root from the entries the server serves, and publishes a
 checkpoint. Two auditors comparing checkpoints catch a fork without either of
 them having an account. See `docs/PROTOCOL.md` §7.3.
 
+**The server also chooses words the user reads.** An API error carries a
+`detail` string the server writes, and it used to be rendered as the body of a
+banner the app itself titled — so the server could put a sentence in Tildra's
+voice. That is an attack on the same control the paragraphs above depend on:
+the defence against a swapped key is that the user reads a warning and acts on
+it, and "your contact's new key was verified by Tildra" costs the server
+nothing to send. Server text is now attributed to the server, stripped of
+characters that reorder or hide what is displayed (a right-to-left override
+turns a sentence into a different one), and bounded so it cannot push the
+app's own words off the screen. See `serverText` in `mobile/src/ui/format.ts`.
+
 **What is still missing**: nobody is obliged to run an auditor, and we operate
 none as a public service. A fork *can* now be caught by any third party who
 looks — that is a real change from before — but nothing guarantees someone is

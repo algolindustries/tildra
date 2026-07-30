@@ -123,6 +123,8 @@ export interface Strings {
   errorNetwork: string;
   errorNoDevices: string;
   errorGeneric: string;
+  /** Attribution for text the server chose; see `serverText`. */
+  serverSaid: string;
   errorTransparency: string;
   errorSplitView: string;
   dismiss: string;
@@ -280,6 +282,7 @@ const en: Strings = {
   errorNetwork: 'Can’t reach the server. Check your connection.',
   errorNoDevices: 'That account has no devices registered yet.',
   errorGeneric: 'Something went wrong.',
+  serverSaid: 'The server said:',
   errorTransparency:
     'This server’s key transparency log did not check out, so the lookup was refused.',
   errorSplitView:
@@ -445,6 +448,7 @@ const tr: Strings = {
   errorNetwork: 'Sunucuya ulaşılamıyor. Bağlantınızı kontrol edin.',
   errorNoDevices: 'Bu hesabın kayıtlı cihazı yok.',
   errorGeneric: 'Bir şeyler ters gitti.',
+  serverSaid: 'Sunucu şunu bildirdi:',
   errorTransparency:
     'Bu sunucunun anahtar şeffaflık kaydı doğrulanamadı, arama reddedildi.',
   errorSplitView:

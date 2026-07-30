@@ -136,3 +136,43 @@ export function parseContactInput(input: string): { kind: 'handle' | 'accountId'
   }
   return { kind: 'handle', value: trimmed.toLowerCase() };
 }
+
+/**
+ * Maximum length of text the server chose, before it crowds out the app's own
+ * words. Long enough for a real diagnostic, short enough to stay one thought.
+ */
+export const MAX_SERVER_TEXT = 200;
+
+/**
+ * Present text the server chose so that it cannot speak in the app's voice.
+ *
+ * `ApiError.detail` is whatever the server put in its `error` field, and it
+ * used to become the body of a banner the app itself titled. The threat model
+ * assumes the server is hostile, and the defence against a swapped key is that
+ * the user reads a warning and acts on it — so a server able to write a calm,
+ * plausible sentence into that banner is attacking the one control the whole
+ * design leans on. "Your contact's new key was verified by Tildra" costs the
+ * server nothing to send.
+ *
+ * Three changes, none of which lose diagnostic value:
+ *
+ *   - **Attributed**, so the sentence is visibly the server's and not ours.
+ *   - **Flattened.** Control and format characters go, along with runs of
+ *     whitespace. A newline lets a message lay out what looks like a second
+ *     element of the interface; a right-to-left override (U+202E) reorders
+ *     what is displayed without changing the text underneath.
+ *   - **Bounded**, because a wall of text pushes the app's own words off the
+ *     screen, which is the same attack with more effort.
+ *
+ * A server that sends nothing usable gets the generic message rather than a
+ * bare attribution with nothing after it.
+ */
+export function serverText(detail: string, s: Strings): string {
+  const flattened = detail.replace(/[\p{C}\p{Z}\s]+/gu, ' ').trim();
+  if (!flattened) return s.errorGeneric;
+  const bounded =
+    flattened.length <= MAX_SERVER_TEXT
+      ? flattened
+      : `${flattened.slice(0, MAX_SERVER_TEXT - 1).trimEnd()}\u2026`;
+  return `${s.serverSaid} ${bounded}`;
+}

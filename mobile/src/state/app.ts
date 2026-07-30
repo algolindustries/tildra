@@ -36,6 +36,7 @@ import { PreKeySecrets } from '../crypto/pqxdh';
 import { SerializedPreKeys, decodePreKeys, encodePreKeys } from '../storage/prekeys';
 import { IdentityChangedError, NoDevicesError, SessionManager } from '../session/manager';
 import { Locale, Strings, resolveLocale, strings } from '../i18n';
+import { serverText } from '../ui/format';
 import {
   LogCheckpoint,
   SignedTreeHead,
@@ -1184,7 +1185,8 @@ function describeError(err: unknown, t: Strings): string {
   if (err instanceof IdentityChangedError) return t.identityChangedTitle;
   if (err instanceof NoDevicesError) return t.errorNoDevices;
   if (err instanceof TransparencyError) return `${t.errorTransparency} ${err.message}`;
-  if (err instanceof ApiError) return err.status === 0 ? t.errorNetwork : err.detail;
+  // Never the server's text on its own: see `serverText`.
+  if (err instanceof ApiError) return err.status === 0 ? t.errorNetwork : serverText(err.detail, t);
   if (err instanceof Error) return err.message;
   return t.errorGeneric;
 }

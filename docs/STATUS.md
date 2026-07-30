@@ -40,9 +40,10 @@ tested by running the real Go server and pushing real traffic through it.
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 | Socket lifecycle: close, reconnect, backoff, subscription replay and ack durability, against a fake WebSocket | done |
+| Text the server chooses is attributed, stripped of reordering characters and bounded before it reaches a banner | done |
 | Media adapter logic: ICE restart on widening, candidate filtering, connection-state mapping, teardown order — against a double of `react-native-webrtc`, not a device | done |
 
-Counts at time of writing: 526 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 533 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -195,6 +196,23 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **The server got to choose words the user reads.** `ApiError.detail` is
+  whatever the server puts in its `error` field, and `describeError` returned
+  it directly — so it became the body of a banner the app itself titled. Every
+  screen renders it that way.
+
+  This is not a cosmetic problem. The threat model's answer to a swapped key
+  is that the user sees a warning and acts on it, so a server that can write a
+  calm, plausible sentence into that banner is attacking the control the whole
+  design leans on. "Your contact's new key was verified by Tildra" costs the
+  server nothing.
+
+  `serverText` attributes it, flattens it and bounds it. Flattening matters
+  more than it looks: a newline lets the server lay out what reads as a second
+  element of the interface, and a right-to-left override (U+202E) displays a
+  different sentence from the one stored. Found by reading `describeError`
+  while looking for something else, which is the usual way.
+
 - **Two bugs were hiding behind `socket.ts` having no unit tests.** It was
   covered only by the integration suite, which drives it against a real
   server and can therefore only reach the states that happen when things go
