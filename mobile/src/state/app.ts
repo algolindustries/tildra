@@ -34,9 +34,10 @@ import {
 } from '../crypto/recovery';
 import { PreKeySecrets } from '../crypto/pqxdh';
 import { SerializedPreKeys, decodePreKeys, encodePreKeys } from '../storage/prekeys';
+import { decodeIdentity, encodeIdentity } from '../storage/identity';
 import { IdentityChangedError, NoDevicesError, SessionManager } from '../session/manager';
 import { Locale, Strings, resolveLocale, strings } from '../i18n';
-import { serverText } from '../ui/format';
+import { describeError } from './errors';
 import {
   LogCheckpoint,
   SignedTreeHead,
@@ -1181,31 +1182,7 @@ async function saveCheckpoint(
   );
 }
 
-function describeError(err: unknown, t: Strings): string {
-  if (err instanceof IdentityChangedError) return t.identityChangedTitle;
-  if (err instanceof NoDevicesError) return t.errorNoDevices;
-  if (err instanceof TransparencyError) return `${t.errorTransparency} ${err.message}`;
-  // Never the server's text on its own: see `serverText`.
-  if (err instanceof ApiError) return err.status === 0 ? t.errorNetwork : serverText(err.detail, t);
-  if (err instanceof Error) return err.message;
-  return t.errorGeneric;
-}
 
 // ---------------------------------------------------------------------------
 // Serialization of long-lived key material
 // ---------------------------------------------------------------------------
-
-function encodeIdentity(identity: KeyPair): Uint8Array {
-  const out = new Uint8Array(identity.publicKey.length + identity.secretKey.length);
-  out.set(identity.publicKey, 0);
-  out.set(identity.secretKey, identity.publicKey.length);
-  return out;
-}
-
-function decodeIdentity(bytes: Uint8Array): KeyPair {
-  return { publicKey: bytes.slice(0, 32), secretKey: bytes.slice(32) };
-}
-
-
-
-export { encodeIdentity, decodeIdentity };

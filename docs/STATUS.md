@@ -41,9 +41,10 @@ tested by running the real Go server and pushing real traffic through it.
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 | Socket lifecycle: close, reconnect, backoff, subscription replay and ack durability, against a fake WebSocket | done |
 | Text the server chooses is attributed, stripped of reordering characters and bounded before it reaches a banner | done |
+| The error funnel: every failure's user-facing sentence, over both locales, with the identity codec's length check | done |
 | Media adapter logic: ICE restart on widening, candidate filtering, connection-state mapping, teardown order — against a double of `react-native-webrtc`, not a device | done |
 
-Counts at time of writing: 533 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 552 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -196,6 +197,27 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **The fix for that was incomplete, and the audit caught it rather than a
+  user.** `ApiError.detail` was attributed; the socket's error frame was not.
+  `frame.error` is also the server's text, and it was wrapped in a plain
+  `Error`, which the funnel rendered as-is. So the HTTP path was closed and
+  the WebSocket path stayed open, which is the usual shape of a half-fix.
+
+  It now arrives as `ServerFrameError` — a distinct type because the
+  destination has to be able to tell — and goes through `serverText` like the
+  other one. The test that catches this class of thing is not a case, it is a
+  property: every error type carrying words the server picked must come back
+  attributed, asserted over both locales.
+
+  `describeError` moved to `state/errors.ts` to be testable at all. `app.ts`
+  reaches `react-native` transitively, so nothing in it can be imported by a
+  test, and the single function deciding what every failure says should not
+  be untestable because of what its neighbours import. The identity codec
+  moved to `storage/identity.ts` for the same reason, and gained the length
+  check it never had: a truncated vault entry used to decode into a key pair
+  of the wrong size, whose first symptom was a signature failing somewhere
+  far from the cause.
+
 - **The server got to choose words the user reads.** `ApiError.detail` is
   whatever the server puts in its `error` field, and `describeError` returned
   it directly — so it became the body of a banner the app itself titled. Every

@@ -23,6 +23,16 @@ export interface SocketHandlers {
 
 export type SocketState = 'connecting' | 'open' | 'closed' | 'reconnecting';
 
+/**
+ * An error frame from the server, carrying words the server chose.
+ *
+ * A distinct type because the destination has to know. Everything reported
+ * through `onError` ends up in a banner the app titles, and a plain `Error`
+ * gets its message rendered as-is — which for this one is the server writing
+ * under our heading. `describeError` attributes it instead. See `serverText`.
+ */
+export class ServerFrameError extends Error {}
+
 /** Backoff schedule in ms. Caps at 30s — a phone that has been in a tunnel for
  *  an hour should reconnect promptly when it comes out, not sulk. */
 const BACKOFF_MS = [0, 1_000, 2_000, 5_000, 10_000, 20_000, 30_000];
@@ -144,7 +154,7 @@ export class TildraSocket {
     }
 
     if (frame.type === 'error') {
-      this.handlers.onError?.(new Error(frame.error ?? 'server error'));
+      this.handlers.onError?.(new ServerFrameError(frame.error ?? 'server error'));
       return;
     }
     if (frame.type !== 'message' || !frame.envelope) return;
