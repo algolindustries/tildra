@@ -966,7 +966,19 @@ export const useApp = create<AppState>((set, get) => ({
       // A server we cannot reach must not stop a local wipe.
     }
     runtime?.socket?.close();
-    await runtime?.db.eraseAll();
+
+    // The keystore is erased even if the database wipe fails. Data without
+    // its key is unreadable, which is closer to what the user asked for than
+    // keeping both — and this used to throw before reaching the second line,
+    // leaving the account intact on a device the user believed they had
+    // wiped. The failure is still reported, after the wipe rather than
+    // instead of it.
+    let wipeFailure: unknown = null;
+    try {
+      await runtime?.db.eraseAll();
+    } catch (err) {
+      wipeFailure = err;
+    }
     await eraseKeystore();
     runtime = null;
     set({
@@ -980,6 +992,7 @@ export const useApp = create<AppState>((set, get) => ({
       messages: [],
       activeAccountId: null,
       safetyNumber: null,
+      error: wipeFailure ? describeError(wipeFailure, get().t) : null,
     });
   },
 }));

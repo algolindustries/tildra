@@ -56,6 +56,7 @@ vi.mock('expo-secure-store', () => ({
 
 const meta = new Map<string, string>();
 const dbOpens: number[] = [];
+const erase = { calls: 0, failWith: null as Error | null };
 
 class FakeDatabase {
   static async open(): Promise<FakeDatabase> {
@@ -74,9 +75,24 @@ class FakeDatabase {
   async listGroups(): Promise<unknown[]> {
     return [];
   }
+  async eraseAll(): Promise<void> {
+    erase.calls += 1;
+    if (erase.failWith) throw erase.failWith;
+    meta.clear();
+  }
 }
 
 vi.mock('../../storage/db', () => ({ Database: FakeDatabase }));
+
+vi.mock('../../push/register', () => ({
+  PushError: class extends Error {},
+  async registerForPush() {
+    return false;
+  },
+  async unregisterForPush() {},
+  async presentLocalNotification() {},
+  async dismissWakeNotifications() {},
+}));
 
 /**
  * A fresh module instance per test.
@@ -111,6 +127,8 @@ beforeEach(() => {
   secureStore.available = true;
   meta.clear();
   dbOpens.length = 0;
+  erase.calls = 0;
+  erase.failWith = null;
 });
 
 describe('a device with no account yet', () => {
@@ -261,5 +279,55 @@ describe('language', () => {
     stop();
     expect(phases[0]).toBe('starting');
     expect(phases.at(-1)).toBe('onboarding');
+  });
+});
+
+describe('signing out', () => {
+  /** A device far enough along that signOut has a runtime to work with. */
+  async function signedIn() {
+    const app = await freshApp();
+    await app.useApp.getState().bootstrap({ serverUrl: 'http://server.test' });
+    return app;
+  }
+
+  it('erases the keystore even when the database wipe fails', async () => {
+    // This is the one that used to go wrong. eraseAll threw on a statement
+    // naming a table that does not exist, and eraseKeystore was the next line
+    // — so a user who asked to delete their account kept both the encrypted
+    // data and the key that opens it, on a device they believed was wiped.
+    const { useApp } = await signedIn();
+    erase.failWith = new Error('database is locked');
+    secureStore.items.set('tildra.master.v1', 'a-master-key');
+    secureStore.items.set('tildra.credentials.v1', '{}');
+
+    await useApp.getState().signOut();
+
+    expect(erase.calls).toBe(1);
+    expect(secureStore.items.has('tildra.master.v1')).toBe(false);
+    expect(secureStore.items.has('tildra.credentials.v1')).toBe(false);
+  });
+
+  it('reports the failure rather than swallowing it', async () => {
+    // Erasing anyway is the right call, but the user still needs to know the
+    // local wipe did not finish.
+    const { useApp } = await signedIn();
+    erase.failWith = new Error('database is locked');
+
+    await useApp.getState().signOut();
+    expect(useApp.getState().error).toMatch(/database is locked/);
+  });
+
+  it('ends signed out, with nothing left in the store', async () => {
+    const { useApp, currentRuntime } = await signedIn();
+    secureStore.items.set('tildra.master.v1', 'a-master-key');
+
+    await useApp.getState().signOut();
+
+    expect(useApp.getState().phase).toBe('onboarding');
+    expect(useApp.getState().accountId).toBeNull();
+    expect(useApp.getState().conversations).toEqual([]);
+    expect(useApp.getState().error).toBeNull();
+    expect(currentRuntime()).toBeNull();
+    expect(secureStore.items.size).toBe(0);
   });
 });

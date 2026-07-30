@@ -603,12 +603,22 @@ export class Database {
     ]);
   }
 
-  /** Wipe everything. Pairs with eraseKeystore() for a full account deletion. */
+  /**
+   * Wipe everything. Pairs with eraseKeystore() for a full account deletion.
+   *
+   * The statement list named a `prekeys` table for a while. There is no such
+   * table — prekeys live in `meta` — so SQLite stopped at that line and every
+   * table after it survived, including the contact list and group membership.
+   * Worse, it threw, and the caller reached this before erasing the keystore:
+   * a user who asked to delete their account kept both the data and the key
+   * to it. Adding a table to the schema means adding it here, which is why
+   * the test asserts the database is empty afterwards rather than listing
+   * tables it remembers.
+   */
   async eraseAll(): Promise<void> {
     await this.db.execAsync(`
       DELETE FROM messages;
       DELETE FROM sessions;
-      DELETE FROM prekeys;
       DELETE FROM conversations;
       DELETE FROM group_receiver_keys;
       DELETE FROM group_sender_keys;

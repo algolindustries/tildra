@@ -43,9 +43,10 @@ tested by running the real Go server and pushing real traffic through it.
 | Text the server chooses is attributed, stripped of reordering characters and bounded before it reaches a banner | done |
 | The error funnel: every failure's user-facing sentence, over both locales, with the identity codec's length check | done |
 | Startup: the offline paths of `bootstrap`, including damaged storage and an unavailable keystore | done |
+| The local database against real SQLite: blind indexes, encryption of every row, ordering, paging, cascade, erase | done |
 | Media adapter logic: ICE restart on widening, candidate filtering, connection-state mapping, teardown order — against a double of `react-native-webrtc`, not a device | done |
 
-Counts at time of writing: 563 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 592 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -198,6 +199,52 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **"Delete my account" left the account on the device.** `Database.eraseAll`
+  is the local half of it — the header says "pairs with `eraseKeystore()` for
+  a full account deletion" — and its statement list named a `prekeys` table
+  the schema does not have. Prekeys live in `meta`. SQLite stops at the
+  offending statement, so messages and sessions went and the contact list,
+  group membership, group keys and `meta` stayed.
+
+  Then it threw, and `signOut` called it on the line before `eraseKeystore()`
+  with nothing catching anything. So the master key was never erased either:
+  a user who asked to delete their account kept the data *and* the key that
+  opens it, on a device they had been told was wiped, and the app stayed
+  signed in.
+
+  Both are fixed. The keystore is now erased even when the wipe fails —
+  data without its key is unreadable, which is closer to what was asked for
+  than keeping both — and the failure is reported after the wipe rather than
+  instead of it. The test asserts the whole database is empty rather than
+  listing the tables it remembers, so the next table added to the schema and
+  forgotten here fails it.
+
+  Found by writing the first tests `storage/db.ts` has ever had. 624 lines,
+  every message, session and group on the device, and nothing had run against
+  it — the earlier sweep for untested modules missed it because a test
+  imported one of its *types*.
+
+- **What a forensic image would see is now a test, not a claim.** `db.ts`
+  says every column that would say who this device talks to is encrypted or
+  reduced to a blind index. That is checked by writing a contact, a message,
+  a group and a meta row, dumping every row of every table, and asserting
+  that no account id, handle, display name, message body or group name
+  appears anywhere in them. A column added later without encryption fails it
+  without anyone remembering to update the test.
+
+  The blind index is also checked for the property that makes it one: the
+  same contact keys differently under a different master key, so a stolen
+  database cannot be used to confirm a guess about who a row belongs to.
+
+  Real SQLite, through `node:sqlite` rather than `expo-sqlite` — a different
+  binding to the same engine, so every statement, index and constraint runs
+  for real. What it does not exercise is Expo's binding.
+
+- **`ON DELETE CASCADE` on `messages` has no caller.** Nothing deletes a
+  single conversation; the only deletion paths are `deleteMessagesOlderThan`
+  and `eraseAll`. Not a bug, but the schema implies a feature that does not
+  exist.
+
 - **`state/app.ts` is testable after all, and the reason it looked otherwise
   was two imports.** It reaches `react-native` transitively, which vitest
   cannot parse — but only through `expo-secure-store` and `expo-sqlite`, and
