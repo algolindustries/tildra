@@ -547,6 +547,29 @@ call, and the others are told to stop ringing. A second incoming call while one
 is live is answered with `Busy` and never rings — one call at a time is a
 property of a phone, and it also means a peer cannot flood the call UI.
 
+**The relay.** A direct path is not always available, so a deployment can run
+a TURN server and `GET /v1/turn` hands clients a short-lived credential for it
+(coturn's `use-auth-secret` convention: `username = <expiry>:<name>`,
+`credential = base64(HMAC-SHA1(secret, username))`). Two details are not
+incidental:
+
+- **The name is random, never an account id.** Every deployment guide fills
+  that field with a user identifier, which would put an account in the TURN
+  server's logs for every call — when it happened and for how long — next to a
+  messenger built so the server cannot know that. The relay only checks the
+  MAC; it has no use for the name.
+- **A relay-only phase with no relay gathers nothing, and never falls back.**
+  A missing or expired credential produces an empty ICE server list with the
+  policy still set to `relay`, plus a flag saying the relay is unavailable. The
+  alternative — quietly using direct paths because there is nowhere to relay
+  through — would hand the callee's address to anyone who can make their phone
+  ring. No STUN server is offered during that phase either: a binding request
+  is itself a disclosure, and a reflexive candidate is the address.
+
+A server with no relay configured answers `503` rather than an empty
+credential, because a client that cannot tell "no relay" from "relay with no
+servers" cannot tell a safe call from a broken one.
+
 **Calls are not persisted.** A call that outlives the process is not a call; it
 is a row that would ring a phone about something that stopped happening when
 the app was killed.

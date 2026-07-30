@@ -146,6 +146,13 @@ isn't there:
   needing an account — but only if someone is actually running one. We ship the
   tool and operate no public instance, so this is a "can be detected", not a
   "will be". Verify safety numbers with people who matter to you.
+- **That a call happened, to whoever runs the TURN relay.** A relayed call
+  goes through the operator's server, which sees two endpoints exchanging
+  media and how long for. The credential carries a random name rather than an
+  account id, so the relay's logs cannot say *whose* call it was — but a
+  deployment running both the relay and the message server can correlate by
+  timing, and self-hosting is the only real answer to that. A call that finds
+  a direct path does not touch the relay at all.
 - **Your IP address, once you answer a call.** WebRTC finds the shortest path
   between two endpoints, and the shortest path is a direct one — which means
   each side learns the other's address. An unanswered incoming call leaks

@@ -6,6 +6,7 @@
  * layer works in Uint8Array, code below in JSON.
  */
 
+import { TurnCredential } from '../crypto/calling';
 import {
   KeyPair,
   fromBase64,
@@ -122,6 +123,24 @@ export class TildraClient {
 
   async preKeyCount(): Promise<{ oneTimePreKeys: number; oneTimePqPreKeys: number }> {
     return this.request('GET', '/v1/keys/count');
+  }
+
+  /**
+   * A short-lived TURN relay credential, or null if this deployment has none.
+   *
+   * Null is a real answer, not an error: a server without a relay still
+   * carries calls between devices that can reach each other directly. The
+   * caller has to handle it, because "relay only until this call is answered"
+   * is a promise that needs somewhere to relay through — see
+   * `iceConfigurationFor`.
+   */
+  async turnCredentials(): Promise<TurnCredential | null> {
+    try {
+      return await this.request<TurnCredential>('GET', '/v1/turn');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) return null;
+      throw err;
+    }
   }
 
   /**

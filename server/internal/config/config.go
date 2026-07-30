@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/tildra/tildra/server/internal/turn"
 )
 
 type Config struct {
@@ -47,6 +49,19 @@ type Config struct {
 	// digits, and a long window is a long time for a stale code to be usable.
 	ProvisioningTTL time.Duration
 
+	// TURNSecret is shared with a coturn relay running in `use-auth-secret`
+	// mode. Empty means no relay: calls then work only when the two devices
+	// can reach each other directly.
+	TURNSecret string
+
+	// TURNURLs are the relay addresses handed to clients, comma-separated in
+	// the environment.
+	TURNURLs []string
+
+	// TURNTTL bounds an issued relay credential. It is a bearer token for
+	// bandwidth, so it expires.
+	TURNTTL time.Duration
+
 	SweepInterval time.Duration
 }
 
@@ -61,6 +76,9 @@ func Load() (*Config, error) {
 		PushProvider:       env("TILDRA_PUSH_PROVIDER", "none"),
 		TransparencyKey:    os.Getenv("TILDRA_TRANSPARENCY_KEY"),
 		ProvisioningTTL:    5 * time.Minute,
+		TURNSecret:         os.Getenv("TILDRA_TURN_SECRET"),
+		TURNURLs:           turn.ParseURLs(os.Getenv("TILDRA_TURN_URLS")),
+		TURNTTL:            turn.DefaultTTL,
 		SweepInterval:      10 * time.Minute,
 	}
 	if v := os.Getenv("TILDRA_ENVELOPE_TTL"); v != "" {
@@ -90,6 +108,19 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("TILDRA_ATTACHMENT_TTL: %w", err)
 		}
 		c.AttachmentTTL = d
+	}
+	if v := os.Getenv("TILDRA_TURN_TTL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("TILDRA_TURN_TTL: %w", err)
+		}
+		c.TURNTTL = d
+	}
+	// Half a configuration is worse than none: a secret with no URLs, or URLs
+	// with no secret, would silently behave as "no relay" and the operator
+	// would find out when a call failed to connect for one user in ten.
+	if (c.TURNSecret == "") != (len(c.TURNURLs) == 0) {
+		return nil, fmt.Errorf("TILDRA_TURN_SECRET and TILDRA_TURN_URLS must be set together")
 	}
 	return c, nil
 }

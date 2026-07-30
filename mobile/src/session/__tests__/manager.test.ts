@@ -110,6 +110,7 @@ async function bringUp(name: string): Promise<Device> {
     store,
     preKeys: secrets,
     randomId: () => toBase64(randomBytes(16)),
+    stunUrls: ['stun:stun.test:3478'],
     onMailboxesChanged: (mailboxes) => socket?.subscribe(mailboxes),
     events: {
       onMessage: (message) => received.push(message.text),
@@ -173,7 +174,15 @@ beforeAll(async () => {
     stdio: 'inherit',
   });
   server = spawn(binary, [], {
-    env: { ...process.env, TILDRA_ADDR: `:${PORT}`, TILDRA_DATABASE_URL: '' },
+    env: {
+      ...process.env,
+      TILDRA_ADDR: `:${PORT}`,
+      TILDRA_DATABASE_URL: '',
+      // A relay, so the ICE configuration path is exercised against a real
+      // /v1/turn rather than against a stub that agrees with itself.
+      TILDRA_TURN_SECRET: 'test-shared-secret',
+      TILDRA_TURN_URLS: 'turn:turn.test:3478?transport=udp',
+    },
     stdio: 'ignore',
   });
   await waitForHealth();
@@ -1215,4 +1224,87 @@ describeIntegration('safety number codes', () => {
     );
     alice.socket.close();
   }, 40_000);
+});
+
+// ---------------------------------------------------------------------------
+// Relay credentials
+// ---------------------------------------------------------------------------
+
+describeIntegration('relay credentials', () => {
+  it('fetches a relay the server would accept, and reuses it', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    const call = await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) });
+    const config = await alice.manager.iceConfiguration(call);
+
+    expect(config.relayAvailable).toBe(true);
+    expect(config.iceServers[0].urls).toEqual(['turn:turn.test:3478?transport=udp']);
+    expect(config.iceServers[0].username).toMatch(/^\d+:[0-9a-f]+$/);
+    expect(config.iceServers[0].credential).toBeTruthy();
+
+    // Cached: a fetch per call is a request the server can count and time.
+    const again = await alice.manager.iceConfiguration(call);
+    expect(again.iceServers[0].username).toBe(config.iceServers[0].username);
+    expect([...alice.errors, ...bob.errors]).toEqual([]);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
+  it('withholds STUN from a call that is still ringing', async () => {
+    // The end-to-end version of the rule: a ringing incoming call gets the
+    // relay and nothing that could reveal an address.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) });
+    await waitFor(() => bob.incomingCalls.length > 0);
+
+    const ringing = await bob.manager.iceConfiguration(bob.manager.currentCall()!);
+    expect(ringing.iceTransportPolicy).toBe('relay');
+    expect(ringing.iceServers.flatMap((s) => s.urls).some((u) => u.startsWith('stun'))).toBe(false);
+
+    const answered = await bob.manager.answerCall(bob.manager.currentCall()!.callId, callSdp(2));
+    const active = await bob.manager.iceConfiguration(answered);
+    expect(active.iceTransportPolicy).toBe('all');
+    expect(active.iceServers.flatMap((s) => s.urls)).toContain('stun:stun.test:3478');
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
+  it('reports no relay rather than falling back, when the deployment has none', async () => {
+    // A second server, started without TURN — the default for a fresh
+    // deployment, and the case where a silent downgrade would leak.
+    const port = PORT + 1;
+    const binary = join(mkdtempSync(join(tmpdir(), 'tildra-noturn-')), 'tildrad');
+    execFileSync('go', ['build', '-o', binary, './cmd/tildrad'], { cwd: SERVER_DIR, stdio: 'inherit' });
+    const bare = spawn(binary, [], {
+      env: { ...process.env, TILDRA_ADDR: `:${port}`, TILDRA_DATABASE_URL: '' },
+      stdio: 'ignore',
+    });
+    try {
+      const base = `http://127.0.0.1:${port}`;
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        try {
+          if ((await fetch(`${base}/healthz`)).ok) break;
+        } catch {
+          /* not up yet */
+        }
+        if (Date.now() > deadline) throw new Error('bare server did not start');
+        await new Promise((r) => setTimeout(r, 100));
+      }
+
+      const client = new TildraClient({ baseUrl: base });
+      const identity = generateIdentity();
+      const { accountId, deviceId } = await client.register(identity, 'Solo');
+      await client.login(identity, accountId, deviceId);
+
+      expect(await client.turnCredentials()).toBeNull();
+    } finally {
+      bare.kill('SIGTERM');
+    }
+  }, 90_000);
 });

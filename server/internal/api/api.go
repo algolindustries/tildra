@@ -26,6 +26,7 @@ import (
 	"github.com/tildra/tildra/server/internal/push"
 	"github.com/tildra/tildra/server/internal/store"
 	"github.com/tildra/tildra/server/internal/transparency"
+	"github.com/tildra/tildra/server/internal/turn"
 )
 
 // Server wires the store, authenticator, hub, notifier and transparency log
@@ -95,6 +96,7 @@ func (s *Server) Handler() http.Handler {
 	authed.HandleFunc("GET /v1/attachments/{id}", s.downloadAttachment)
 	authed.HandleFunc("POST /v1/devices", s.addDevice)
 	authed.HandleFunc("PUT /v1/provisioning/{id}/approval", s.approveProvisioning)
+	authed.HandleFunc("GET /v1/turn", s.turnCredentials)
 	authed.HandleFunc("POST /v1/auth/logout", s.logout)
 	mux.Handle("/v1/", s.auth.Middleware(authed))
 
@@ -203,6 +205,36 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---------- calls ----------
+
+// turnCredentials hands out a short-lived relay credential.
+//
+// Authenticated, because the relay is bandwidth this deployment pays for. But
+// the credential itself is deliberately unlinkable to the caller — see
+// internal/turn. The account that asked is checked here and then forgotten;
+// nothing about it reaches the TURN server.
+//
+// A deployment with no relay answers 503 rather than pretending. The client
+// needs to know, because "relay only until this call is answered" is a
+// privacy guarantee it cannot keep without somewhere to relay through.
+func (s *Server) turnCredentials(w http.ResponseWriter, r *http.Request) {
+	cfg := turn.Config{Secret: s.cfg.TURNSecret, URLs: s.cfg.TURNURLs, TTL: s.cfg.TURNTTL}
+
+	cred, err := cfg.Issue(time.Now())
+	if errors.Is(err, turn.ErrNotConfigured) {
+		fail(w, http.StatusServiceUnavailable, "this server has no TURN relay configured")
+		return
+	}
+	if err != nil {
+		s.fail500(w, "issue turn credential", err)
+		return
+	}
+
+	// Not cacheable by anything in the middle: it is a bearer token.
+	w.Header().Set("Cache-Control", "no-store")
+	respond(w, http.StatusOK, cred)
 }
 
 // ---------- keys ----------

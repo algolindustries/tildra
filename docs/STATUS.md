@@ -28,8 +28,9 @@ tested by running the real Go server and pushing real traffic through it.
 | Call signalling: SDP hardening, DTLS fingerprint bound to the identity key, ICE address policy, call state machine | done |
 | Call signalling carried end to end through `SessionManager`: ring all devices, first answer wins, busy, hangup | done |
 | Reproducible builds for the Go server and `tildra-auditor`, checked in CI | done |
+| TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 
-Counts at time of writing: 342 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 354 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -50,9 +51,10 @@ knowing before trusting a UI change.
   when the fingerprint does not verify** — tested against a real Go server with
   a hand-forged offer. See `docs/PROTOCOL.md` §10.
 
-  What does not exist: `react-native-webrtc` (so a dev build, not Expo Go), a
-  TURN deployment, and a call UI — nothing calls `placeCall` yet.
-  **No media has ever flowed.** The signalling is testable headlessly and is
+  What does not exist: `react-native-webrtc` (so a dev build, not Expo Go) and
+  a call UI — nothing calls `placeCall` yet. The relay side is ready on the
+  server (`GET /v1/turn`, see `docs/PROTOCOL.md` §10) but no coturn is
+  deployed. **No media has ever flowed.** The signalling is testable headlessly and is
   tested; the media path is not, and nothing here should be read as "calls
   work".
 - **An independent security audit.** Not something that can be done from inside

@@ -18,6 +18,8 @@ import {
   formatFingerprint,
   iceTransportPolicyFor,
   parseIceCandidate,
+  TurnCredential,
+  iceConfigurationFor,
   sdpFingerprint,
   signCallSdp,
   verifyCallSdp,
@@ -687,5 +689,113 @@ describe('call state machine', () => {
     expect(() =>
       beginIncomingCall({ callId: 'no', peerAccountId: ALICE, peerFingerprint: fingerprint }),
     ).toThrow(/call id/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ICE configuration
+// ---------------------------------------------------------------------------
+
+describe('building the ICE configuration', () => {
+  const RELAY: TurnCredential = {
+    urls: ['turn:turn.example:3478?transport=udp', 'turns:turn.example:5349'],
+    username: '1770003600:9f2c',
+    credential: 'PSBmC0Zp2yhr8xkAvMkE0Xr1QqM=',
+    expiresAt: 1_770_003_600,
+  };
+  const NOW = 1_770_000_000_000;
+  const STUN = ['stun:stun.example:3478'];
+
+  it('hands over the relay and STUN once a call is answered', () => {
+    const config = iceConfigurationFor('all', RELAY, { stunUrls: STUN, now: NOW });
+    expect(config.iceTransportPolicy).toBe('all');
+    expect(config.relayAvailable).toBe(true);
+    expect(config.iceServers[0].urls).toEqual(RELAY.urls);
+    expect(config.iceServers[0].username).toBe(RELAY.username);
+    expect(config.iceServers[1].urls).toEqual(STUN);
+  });
+
+  it('never offers STUN under a relay-only policy', () => {
+    // A STUN binding request is itself a disclosure of the device's address,
+    // and a reflexive candidate is the address. Neither belongs in a phase
+    // whose whole purpose is not revealing where the user is.
+    const config = iceConfigurationFor('relay', RELAY, { stunUrls: STUN, now: NOW });
+    expect(config.iceTransportPolicy).toBe('relay');
+    const urls = config.iceServers.flatMap((s) => s.urls);
+    expect(urls).toEqual(RELAY.urls);
+    expect(urls.some((u) => u.startsWith('stun'))).toBe(false);
+  });
+
+  it('does not quietly downgrade to direct paths when there is no relay', () => {
+    // The failure this exists to prevent: no TURN configured, so the code
+    // "helpfully" falls back and the ringing phase leaks an address.
+    const config = iceConfigurationFor('relay', null, { stunUrls: STUN, now: NOW });
+    expect(config.iceTransportPolicy).toBe('relay');
+    expect(config.iceServers).toEqual([]);
+    expect(config.relayAvailable).toBe(false);
+  });
+
+  it('reports a missing relay rather than hiding it', () => {
+    // Gathering nothing is safe but is not a working call, and the caller has
+    // to be able to tell those apart.
+    expect(iceConfigurationFor('all', null, { now: NOW }).relayAvailable).toBe(false);
+    expect(iceConfigurationFor('all', null, { now: NOW }).iceServers).toEqual([]);
+  });
+
+  it('treats an expired credential as no credential', () => {
+    const expired = { ...RELAY, expiresAt: Math.floor(NOW / 1000) - 1 };
+    expect(iceConfigurationFor('relay', expired, { now: NOW }).relayAvailable).toBe(false);
+    expect(iceConfigurationFor('all', expired, { now: NOW }).iceServers).toEqual([]);
+
+    const barelyValid = { ...RELAY, expiresAt: Math.floor(NOW / 1000) + 1 };
+    expect(iceConfigurationFor('relay', barelyValid, { now: NOW }).relayAvailable).toBe(true);
+  });
+
+  it('ignores a relay entry that is missing its credential', () => {
+    for (const broken of [
+      { ...RELAY, username: '' },
+      { ...RELAY, credential: '' },
+      { ...RELAY, urls: [] },
+      { ...RELAY, expiresAt: Number.NaN },
+    ]) {
+      expect(iceConfigurationFor('all', broken, { now: NOW }).relayAvailable, JSON.stringify(broken)).toBe(
+        false,
+      );
+    }
+  });
+
+  it('drops a relay URL that is not a relay URL', () => {
+    // The server hands these over; a scheme that is not turn: would either be
+    // ignored by the ICE agent or be something it should not be dialling.
+    const mixed = { ...RELAY, urls: ['http://evil.example', 'turn:turn.example:3478'] };
+    const config = iceConfigurationFor('all', mixed, { now: NOW });
+    expect(config.iceServers[0].urls).toEqual(['turn:turn.example:3478']);
+  });
+
+  it('drops a STUN entry that is not a STUN URL', () => {
+    const config = iceConfigurationFor('all', RELAY, {
+      stunUrls: ['stun:ok.example:3478', 'https://not-stun.example'],
+      now: NOW,
+    });
+    expect(config.iceServers[1].urls).toEqual(['stun:ok.example:3478']);
+  });
+
+  it('matches the policy the call state asks for', () => {
+    // The two halves have to agree, or the candidate filter and the ICE agent
+    // enforce different rules.
+    const incoming = beginIncomingCall({
+      callId: CALL_ID,
+      peerAccountId: ALICE,
+      peerFingerprint: sdpFingerprint(sdp()),
+      now: NOW,
+    });
+    expect(iceConfigurationFor(iceTransportPolicyFor(incoming), RELAY, { now: NOW }).iceTransportPolicy).toBe(
+      'relay',
+    );
+
+    const answered = advanceCall(incoming, { type: 'accept' }, NOW + 1000);
+    expect(iceConfigurationFor(iceTransportPolicyFor(answered), RELAY, { now: NOW }).iceTransportPolicy).toBe(
+      'all',
+    );
   });
 });

@@ -24,6 +24,7 @@ import (
 	"github.com/tildra/tildra/server/internal/store"
 	"github.com/tildra/tildra/server/internal/store/memory"
 	"github.com/tildra/tildra/server/internal/transparency"
+	"github.com/tildra/tildra/server/internal/turn"
 )
 
 type harness struct {
@@ -91,9 +92,18 @@ type handleProof struct {
 }
 
 func newHarness(t *testing.T) *harness {
+	return newHarnessWith(t, nil)
+}
+
+// newHarnessWith lets a test change the deployment configuration — TURN, for
+// instance, which is off by default exactly as it is for a fresh server.
+func newHarnessWith(t *testing.T, configure func(*config.Config)) *harness {
 	t.Helper()
 	st := memory.New()
 	cfg := &config.Config{MaxEnvelopeBytes: 256 << 10, EnvelopeTTL: time.Hour}
+	if configure != nil {
+		configure(cfg)
+	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	authn := auth.New(st)
 	hub := gateway.NewHub(st, log)
@@ -869,5 +879,106 @@ func TestStoreReportsMissingKeys(t *testing.T) {
 	}
 	if err != store.ErrNoPreKeys {
 		t.Errorf("got %v, want ErrNoPreKeys", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TURN
+// ---------------------------------------------------------------------------
+
+const turnSecret = "shared-with-coturn"
+
+func turnHarness(t *testing.T) *harness {
+	return newHarnessWith(t, func(c *config.Config) {
+		c.TURNSecret = turnSecret
+		c.TURNURLs = []string{"turn:turn.example:3478?transport=udp"}
+		c.TURNTTL = time.Hour
+	})
+}
+
+func TestTurnIssuesACredentialCoturnWouldAccept(t *testing.T) {
+	h := turnHarness(t)
+	a := h.register("Alice")
+
+	resp, body := h.do(http.MethodGet, "/v1/turn", a.token, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d body %s", resp.StatusCode, body)
+	}
+
+	var cred turn.Credential
+	if err := json.Unmarshal(body, &cred); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(cred.URLs) != 1 || cred.URLs[0] != "turn:turn.example:3478?transport=udp" {
+		t.Fatalf("urls = %v", cred.URLs)
+	}
+
+	// The check that matters: the relay, not this server, decides whether a
+	// credential is good.
+	cfg := turn.Config{Secret: turnSecret}
+	if !cfg.Verify(cred.Username, cred.Password, time.Now()) {
+		t.Fatal("the relay would reject the credential this server issued")
+	}
+	if cred.ExpiresAt <= time.Now().Unix() {
+		t.Fatalf("ExpiresAt %d is not in the future", cred.ExpiresAt)
+	}
+}
+
+func TestTurnCredentialCannotBeTracedToAnAccount(t *testing.T) {
+	// The relay sees the username and nothing else. If it carried an account
+	// id, the TURN log would say who relayed media and when — which is the one
+	// thing this server is built not to know.
+	h := turnHarness(t)
+	alice := h.register("Alice")
+	bob := h.register("Bob")
+
+	names := map[string]bool{}
+	for _, a := range []*account{alice, bob, alice, bob} {
+		_, body := h.do(http.MethodGet, "/v1/turn", a.token, nil)
+		var cred turn.Credential
+		if err := json.Unmarshal(body, &cred); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if strings.Contains(cred.Username, a.accountID) || strings.Contains(cred.Username, a.deviceID) {
+			t.Fatalf("username %q carries the account or device id", cred.Username)
+		}
+		name := strings.SplitN(cred.Username, ":", 2)[1]
+		if names[name] {
+			t.Fatalf("two issuances shared the name %q, which links them", name)
+		}
+		names[name] = true
+	}
+}
+
+func TestTurnRefusesWithoutAToken(t *testing.T) {
+	h := turnHarness(t)
+	resp, _ := h.do(http.MethodGet, "/v1/turn", "", nil)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestTurnSaysSoWhenNoRelayIsConfigured(t *testing.T) {
+	// Silence here would be worse than an error: the client holds an incoming
+	// call to relay-only candidates until it is answered, and it cannot keep
+	// that promise with nowhere to relay through. It has to be told.
+	h := newHarness(t)
+	a := h.register("Alice")
+
+	resp, body := h.do(http.MethodGet, "/v1/turn", a.token, nil)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d body %s, want 503", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "TURN") {
+		t.Fatalf("body %s does not say what is missing", body)
+	}
+}
+
+func TestTurnCredentialIsNotCached(t *testing.T) {
+	h := turnHarness(t)
+	a := h.register("Alice")
+	resp, _ := h.do(http.MethodGet, "/v1/turn", a.token, nil)
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store on a bearer token", got)
 	}
 }

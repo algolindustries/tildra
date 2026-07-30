@@ -53,12 +53,15 @@ import {
   CallSession,
   CallSignal,
   CallSignalKind,
+  IceConfiguration,
+  TurnCredential,
   advanceCall,
   beginIncomingCall,
   beginOutgoingCall,
   decodeCallSignal,
   encodeCallSignal,
   filterIceCandidates,
+  iceConfigurationFor,
   iceTransportPolicyFor,
   signCallSdp,
   toCallId,
@@ -298,6 +301,12 @@ export interface ManagerOptions {
    * addresses created after it connected.
    */
   onMailboxesChanged?: (mailboxes: string[]) => void;
+  /**
+   * STUN servers offered once a call is answered. Never used while an
+   * incoming call is still ringing — a STUN binding request discloses the
+   * device's address, which is the thing the ringing phase withholds.
+   */
+  stunUrls?: string[];
   /** Injectable for tests. */
   now?: () => number;
   randomId?: () => string;
@@ -313,6 +322,7 @@ export class SessionManager {
   private readonly now: () => number;
   private readonly randomId: () => string;
   private readonly onMailboxesChanged?: (mailboxes: string[]) => void;
+  private readonly stunUrls: string[];
   private preKeys: PreKeySecrets;
 
   constructor(options: ManagerOptions) {
@@ -324,6 +334,7 @@ export class SessionManager {
     this.preKeys = options.preKeys;
     this.events = options.events ?? {};
     this.onMailboxesChanged = options.onMailboxesChanged;
+    this.stunUrls = options.stunUrls ?? [];
     this.now = options.now ?? (() => Date.now());
     this.randomId = options.randomId ?? (() => toBase64(crypto.getRandomValues(new Uint8Array(16))));
   }
@@ -1246,6 +1257,9 @@ export class SessionManager {
    */
   private ringing: { deviceId: string; identityKey: Uint8Array }[] = [];
 
+  /** The relay credential, cached until shortly before it expires. */
+  private turn: TurnCredential | null = null;
+
   /** The live call, if any. */
   currentCall(): CallSession | null {
     return this.call && this.call.phase !== 'ended' ? this.call : null;
@@ -1400,6 +1414,43 @@ export class SessionManager {
       );
     }
     this.finishCall(reason);
+  }
+
+  /**
+   * The peer-connection configuration for a call at its current phase.
+   *
+   * Ties the address policy to the relay: a ringing incoming call is
+   * relay-only, and relay-only with no TURN server gathers nothing rather
+   * than falling back to direct paths. `relayAvailable` on the result is how
+   * the caller tells "safely gathering nothing" from "working".
+   *
+   * The credential is cached until shortly before it expires. Fetching one per
+   * call would be a request the server can count and time — a weak signal, but
+   * a free one to not give away.
+   */
+  async iceConfiguration(call: CallSession): Promise<IceConfiguration> {
+    return iceConfigurationFor(iceTransportPolicyFor(call), await this.relayCredential(), {
+      stunUrls: this.stunUrls,
+      now: this.now(),
+    });
+  }
+
+  private async relayCredential(): Promise<TurnCredential | null> {
+    const now = this.now();
+    // Renewed a minute early: a credential that expires between building the
+    // configuration and allocating the relay fails as a call that never
+    // connects, which is the least diagnosable outcome available.
+    if (this.turn && this.turn.expiresAt * 1000 > now + 60_000) return this.turn;
+
+    try {
+      this.turn = await this.client.turnCredentials();
+    } catch (err) {
+      // A relay we could not fetch is a relay we do not have. Reported, not
+      // thrown: the call may still connect directly.
+      this.events.onError?.(err instanceof Error ? err : new Error(String(err)));
+      this.turn = null;
+    }
+    return this.turn;
   }
 
   private requireCall(callId: string): CallSession {

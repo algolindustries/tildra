@@ -466,6 +466,95 @@ export interface IceCandidateFields {
   type: string;
 }
 
+/** What `GET /v1/turn` returns. Null from the client means no relay exists. */
+export interface TurnCredential {
+  urls: string[];
+  username: string;
+  credential: string;
+  /** Unix seconds. */
+  expiresAt: number;
+}
+
+export interface IceServer {
+  urls: string[];
+  username?: string;
+  credential?: string;
+}
+
+export interface IceConfiguration {
+  iceServers: IceServer[];
+  iceTransportPolicy: IceTransportPolicy;
+  /**
+   * False when the policy is relay-only and there is no usable relay.
+   *
+   * That combination gathers no candidates at all, which is the correct and
+   * safe outcome — an unanswered call reveals nothing — but it is not the same
+   * as a working call, and the caller has to be able to tell the difference
+   * rather than watching a connection that will never come up.
+   */
+  relayAvailable: boolean;
+}
+
+const RELAY_SCHEMES = ['turn:', 'turns:'];
+const STUN_SCHEMES = ['stun:', 'stuns:'];
+
+/**
+ * Turn a policy and whatever the server offered into a peer-connection config.
+ *
+ * The invariant, and the reason this is a function rather than an object
+ * literal at the call site: **under `relay` the result can never gather a host
+ * or server-reflexive candidate.** No STUN server is included — a STUN binding
+ * request is itself a disclosure of the device's address, and a reflexive
+ * candidate is the address itself — and the transport policy is passed through
+ * so the ICE agent enforces it too. A missing relay produces an empty server
+ * list, not a quiet downgrade to `all`; the caller finds out through
+ * `relayAvailable` and decides, because deciding to reveal an address is not
+ * something a helper function gets to do.
+ */
+export function iceConfigurationFor(
+  policy: IceTransportPolicy,
+  turn: TurnCredential | null,
+  options: { stunUrls?: string[]; now?: number } = {},
+): IceConfiguration {
+  const now = options.now ?? Date.now();
+  const relay = usableRelay(turn, now);
+
+  if (policy === 'relay') {
+    return {
+      iceServers: relay ? [relay] : [],
+      iceTransportPolicy: 'relay',
+      relayAvailable: relay !== null,
+    };
+  }
+
+  const stun = (options.stunUrls ?? []).filter((url) =>
+    STUN_SCHEMES.some((scheme) => url.startsWith(scheme)),
+  );
+
+  const servers: IceServer[] = [];
+  if (relay) servers.push(relay);
+  if (stun.length > 0) servers.push({ urls: stun });
+
+  return { iceServers: servers, iceTransportPolicy: 'all', relayAvailable: relay !== null };
+}
+
+/**
+ * An expired credential is the same as no credential.
+ *
+ * Handing one to the ICE agent produces a relay allocation that is refused,
+ * which surfaces as a call that rings and never connects — indistinguishable,
+ * from the user's side, from being blocked.
+ */
+function usableRelay(turn: TurnCredential | null, now: number): IceServer | null {
+  if (!turn || !turn.username || !turn.credential) return null;
+  if (!Number.isFinite(turn.expiresAt) || turn.expiresAt * 1000 <= now) return null;
+
+  const urls = turn.urls.filter((url) => RELAY_SCHEMES.some((scheme) => url.startsWith(scheme)));
+  if (urls.length === 0) return null;
+
+  return { urls, username: turn.username, credential: turn.credential };
+}
+
 /**
  * Keep the candidates a policy permits, and drop anything that does not parse.
  *
