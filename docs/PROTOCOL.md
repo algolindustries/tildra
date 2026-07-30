@@ -114,10 +114,23 @@ The unauthenticated read is a scraping surface and this deployment has no rate
 limiting. The blob is bounded at 256 KiB so it stays cheap to serve; the
 missing limiter is in `docs/THREAT_MODEL.md`.
 
-**Not yet reachable.** The crypto, the blob format and both endpoints are
-implemented and tested; no screen shows a phrase, and account creation still
-takes its identity from the CSPRNG rather than from one. Losing a device today
-still means losing the account. Tracked in `docs/STATUS.md`.
+**The blob is not bound to the account id.** Binding it as associated data is
+the obvious thing to do and makes recovery impossible: the account id is
+exactly what the recovering device does not have, so it cannot supply it in
+order to decrypt the thing that would tell it. The account and device ids are
+*inside* the ciphertext instead — not beside it, so guessing a lookup id
+teaches nobody an account id. What stands in for the binding is the key: a blob
+that opens under this phrase's backup key was written by somebody holding this
+phrase.
+
+**Contacts come back without their keys.** A restored conversation is trust on
+first use again, and the safety number closes that. Restoring an identity key
+out of the blob would mean a stolen phrase could pin a contact to a key of the
+thief's choosing, which is worse than asking the user to verify again.
+
+The blob is republished when what it holds changes — a new contact, a new
+group — rather than on a timer. A stale blob recovers somebody into an empty
+app.
 
 ## 2. Session establishment — PQXDH-hybrid
 

@@ -15,7 +15,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Sealed sender, rotating mailboxes, contact inbox for first contact | done |
 | Encrypted local storage: keystore master key + vault-encrypted SQLite | done |
 | Session manager: fanout per device, identity-change blocking, prekey top-up | done |
-| Recovery phrase: 24 words, Argon2id, identity/backup/lookup derived from it, encrypted blob, and the endpoints to publish and fetch it without an account id — no screens | done below the UI |
+| Account recovery: a 24-word phrase derives the identity, the blob is published under a lookup id derived from the same phrase, and both screens exist | done |
 | Signed prekey rotation every 48h, with the replaced pair honoured for one more window, and every change to the secrets written to disk | done |
 | Screens: onboarding, chat list, conversation, safety number, profile, device link (both halves) | done |
 | Encrypted groups: sender keys, signed messages, rotation on removal, and screens to create one, talk in it and change who is in it | done |
@@ -127,25 +127,6 @@ knowing before trusting a UI change.
   Xcode and Gradle over them to get an `.ipa` and an `.aab`. That needs the
   toolchains and has not been started. See `docs/REPRODUCIBLE_BUILDS.md`.
 
-- **Recovery screens.** The design question underneath is now settled and
-  written down: the phrase derives the identity key, because an account is a
-  key and restoring everything except the key hands the user their contacts
-  back under a new identity — which makes every contact see the alarm this
-  app exists to raise. See `docs/PROTOCOL.md` §1.1.
-
-  The circular dependency underneath is also solved: logging in needs an
-  account id, and the account id was on the device that is gone, so the blob
-  is addressed by a third derivation of the phrase and served without
-  authentication. A person holding nothing but the words can now find their
-  blob, open it, and sign in — tested end to end against a real server.
-
-  What exists: the phrase, Argon2id, three derivations, the encrypted blob,
-  `PUT`/`GET /v1/recovery/{lookupId}` with the store conformance suite
-  extended, and the client calls. What does not: a screen that shows the
-  phrase at registration, a screen that takes one back, and the change to
-  account creation that derives the identity from a phrase instead of from
-  the CSPRNG. Losing a device still means losing the account.
-
 ## Needs a human, not code
 
 - A domain. `tildra.chat` and `tildra.dev` were both free when the name was
@@ -184,6 +165,11 @@ knowing before trusting a UI change.
   version of the test above kept a reference to the secrets and passed with the
   persistence call deleted, because the top-up mutates the same maps in place.
   It serialises on the way in now. Run the negative control.
+- **The recovery phrase is the account.** Registration derives the identity
+  key from it rather than from the CSPRNG, so losing a device is survivable —
+  and anyone holding the phrase is the account. The phrase-shown screen says
+  that in those words instead of calling it a backup code, and the phrase is
+  never persisted, which is why there is no "show it again" button.
 - **The store conformance suite earns its place regularly.** Adding
   `PutRecoveryBlob` to it immediately caught the memory store accepting an
   unknown account where Postgres refuses it on a foreign key — a drift that

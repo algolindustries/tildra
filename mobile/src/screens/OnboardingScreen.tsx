@@ -13,7 +13,13 @@ import { useApp } from '../state/app';
  * device list. There is no phone number field to leave out, because there was
  * never a phone number.
  */
-export function OnboardingScreen({ onJoinExisting }: { onJoinExisting: () => void }) {
+export function OnboardingScreen({
+  onJoinExisting,
+  onRecover,
+}: {
+  onJoinExisting: () => void;
+  onRecover: () => void;
+}) {
   const t = useApp((s) => s.t);
   const createAccount = useApp((s) => s.createAccount);
   const error = useApp((s) => s.error);
@@ -85,6 +91,10 @@ export function OnboardingScreen({ onJoinExisting }: { onJoinExisting: () => voi
           onPress={onJoinExisting}
           disabled={busy}
         />
+
+        {/* For somebody whose device is gone, so there is no other device to
+            approve a link from. */}
+        <Button label={t.recoverEntry} variant="secondary" onPress={onRecover} disabled={busy} />
 
         {/* Stated at the point of account creation, not buried in an about
             page. Someone deciding whether to trust this deserves to read it

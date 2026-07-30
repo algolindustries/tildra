@@ -25,6 +25,13 @@ import {
   toBase64,
 } from '../crypto/primitives';
 import { generateIdentity, generatePreKeys } from '../crypto/identity';
+import {
+  RecoveryError,
+  generateRecoveryPhrase,
+  openBackup,
+  recoveryKeys,
+  sealBackup,
+} from '../crypto/recovery';
 import { PreKeySecrets } from '../crypto/pqxdh';
 import { SerializedPreKeys, decodePreKeys, encodePreKeys } from '../storage/prekeys';
 import { IdentityChangedError, NoDevicesError, SessionManager } from '../session/manager';
@@ -130,6 +137,12 @@ export interface AppState {
   /** How many pinned auditors last answered, and when. Null before the first check. */
   auditorStatus: { checked: number; of: number; at: number } | null;
 
+  /**
+   * The recovery phrase, held only until the user says they have written it
+   * down. Never persisted: a phrase on disk is a phrase in a backup of the
+   * disk, and this one is the account.
+   */
+  pendingPhrase: string | null;
   /** The group the open conversation belongs to, if it is one. */
   activeGroup: StoredGroup | null;
   /** The live call, mirrored from the manager so screens can render it. */
@@ -164,6 +177,10 @@ export interface AppState {
    * to receive one on.
    */
   createGroup: (name: string, accountIds: string[]) => Promise<string>;
+  /** The user says the phrase is written down. Forgets it. */
+  confirmPhraseWritten: () => void;
+  /** Sign in on a new device with nothing but the words. */
+  recoverAccount: (phrase: string) => Promise<void>;
   /** Add or remove a person — every device they have — from the open group. */
   addToGroup: (accountId: string) => Promise<void>;
   removeFromGroup: (accountId: string) => Promise<void>;
@@ -216,6 +233,46 @@ let activeLink: ActiveLink | null = null;
  * The live call, and the media stack under it. Handles, not state: a peer
  * connection is not something a screen should be holding a reference to.
  */
+/**
+ * Where this device's recovery blob is published, and the key it is sealed
+ * with. Not store state: the backup key is a secret derived from the phrase.
+ */
+let recoveryTarget: {
+  accountId: string;
+  deviceId: string;
+  backupKey: Uint8Array;
+  lookupId: string;
+} | null = null;
+
+/**
+ * Republish the blob.
+ *
+ * Called when what it holds changes — a new contact, a new group — rather than
+ * on a timer, because the blob is only worth what it last knew and a stale one
+ * recovers somebody into an empty app.
+ */
+async function publishRecoveryBackup(parts: { client: TildraClient; db: Database }): Promise<void> {
+  if (!recoveryTarget) return;
+  const conversations = await parts.db.listConversations();
+
+  await parts.client.putRecoveryBlob(
+    recoveryTarget.lookupId,
+    sealBackup(recoveryTarget.backupKey, {
+      accountId: recoveryTarget.accountId,
+      deviceId: recoveryTarget.deviceId,
+      contacts: conversations
+        .filter((c) => groupIdFromConversationKey(c.accountId) === null)
+        .map((c) => ({ accountId: c.accountId, handle: c.handle, displayName: c.displayName })),
+      groups: (await runtime!.manager.listGroups()).map((g) => ({
+        groupId: g.groupId,
+        name: g.name,
+        members: g.members,
+      })),
+      updatedAt: Date.now(),
+    }),
+  );
+}
+
 let activeCall: CallDriver | null = null;
 let activePeer: WebRtcPeer | null = null;
 
@@ -273,6 +330,7 @@ export const useApp = create<AppState>((set, get) => ({
   pendingLink: null,
   splitView: null,
   auditorStatus: null,
+  pendingPhrase: null,
   activeGroup: null,
   call: null,
   callBusy: false,
@@ -340,7 +398,11 @@ export const useApp = create<AppState>((set, get) => ({
 
     try {
       set({ error: null });
-      const identity = generateIdentity();
+      // The identity comes out of a recovery phrase rather than the CSPRNG,
+      // so that losing the device is survivable. See docs/PROTOCOL.md §1.1 —
+      // the trade is that whoever holds the phrase is this account.
+      const phrase = generateRecoveryPhrase();
+      const { identity, backupKey, lookupId } = recoveryKeys(phrase);
       const { accountId, deviceId } = await base.client.register(identity, deviceName);
       const credentials = await base.client.login(identity, accountId, deviceId);
 
@@ -369,7 +431,19 @@ export const useApp = create<AppState>((set, get) => ({
       if (displayName?.trim()) {
         await runtime?.manager.setProfile({ displayName: displayName.trim() });
       }
-      set({ phase: 'ready', accountId, displayName: displayName?.trim() || null });
+      // Published before the phrase is shown: a phrase the user writes down
+      // that has nothing to recover is worse than no phrase.
+      recoveryTarget = { accountId, deviceId, backupKey, lookupId };
+      await publishRecoveryBackup(base).catch((err) =>
+        set({ error: describeError(err, get().t) }),
+      );
+
+      set({
+        phase: 'ready',
+        accountId,
+        displayName: displayName?.trim() || null,
+        pendingPhrase: phrase,
+      });
     } catch (err) {
       set({ error: describeError(err, get().t) });
       throw err;
@@ -563,12 +637,75 @@ export const useApp = create<AppState>((set, get) => ({
       identityChanged: false,
     });
     await get().refreshConversations();
+    await publishRecoveryBackup(runtime).catch(() => undefined);
     return accountId;
   },
 
   async matchesSafetyCode(accountId, scanned) {
     if (!runtime?.manager) return false;
     return runtime.manager.matchesSafetyCode(accountId, scanned);
+  },
+
+  confirmPhraseWritten() {
+    set({ pendingPhrase: null });
+  },
+
+  async recoverAccount(phrase) {
+    const base = runtime;
+    if (!base) throw new Error('Tildra: bootstrap has not run');
+
+    try {
+      set({ error: null });
+      const { identity, backupKey, lookupId } = recoveryKeys(phrase);
+
+      const sealed = await base.client.getRecoveryBlob(lookupId);
+      if (!sealed) {
+        throw new RecoveryError('no account was found for that phrase on this server');
+      }
+
+      // The blob names the account this phrase belongs to, which is the thing
+      // the lost device knew and this one does not.
+      const backup = openBackup(backupKey, sealed);
+      const credentials = await base.client.login(identity, backup.accountId, backup.deviceId);
+
+      const { secrets, upload } = generatePreKeys(identity);
+      await base.client.publishKeys(upload);
+
+      await base.db.setMeta(
+        IDENTITY_META_KEY,
+        base.vault.encrypt('identity', IDENTITY_META_KEY, encodeIdentity(identity)),
+      );
+      await base.db.setMeta(
+        PREKEYS_META_KEY,
+        base.vault.encryptJson('prekeys', PREKEYS_META_KEY, encodePreKeys(secrets)),
+      );
+      await saveCredentials(credentials);
+
+      // Contacts come back as rows with no identity key: trust on first use
+      // again, and the safety number is what closes that. Restoring a key from
+      // a blob would mean a stolen phrase could pin a contact to a key of the
+      // thief's choosing.
+      for (const contact of backup.contacts) {
+        await base.db.upsertConversation({
+          accountId: contact.accountId,
+          handle: contact.handle,
+          displayName: contact.displayName,
+          identityKey: new Uint8Array(0),
+          lastActivity: Date.now(),
+          unreadCount: 0,
+          verified: false,
+          identityChanged: false,
+        });
+      }
+
+      recoveryTarget = { accountId: backup.accountId, deviceId: backup.deviceId, backupKey, lookupId };
+      await startSession({ ...base, identity, preKeys: secrets, credentials }, set, get);
+      set({ phase: 'ready', accountId: backup.accountId });
+      await get().refreshConversations();
+    } catch (err) {
+      set({ error: describeError(err, get().t) });
+      throw err;
+    }
   },
 
   async createGroup(name, accountIds) {
@@ -590,6 +727,9 @@ export const useApp = create<AppState>((set, get) => ({
       .slice(0, 22);
     await runtime.manager.createGroup(groupId, members, name.trim() || undefined);
     await get().refreshConversations();
+    // The blob is only worth what it last knew; a stale one recovers somebody
+    // into an app with none of their groups.
+    await publishRecoveryBackup(runtime).catch(() => undefined);
     return groupConversationKey(groupId);
   },
 

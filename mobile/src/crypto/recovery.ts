@@ -59,6 +59,16 @@ const LOOKUP_INFO = 'Tildra_RecoveryLookup_v1';
 
 /** What the backup blob carries. Deliberately not messages. */
 export interface RecoveryBackup {
+  /**
+   * The account and device this phrase belongs to.
+   *
+   * Inside the ciphertext, not beside it. A reader who guesses a lookup id
+   * must not learn an account id from the attempt, and the account id is the
+   * one thing the fetcher does not already know — it was on the device they
+   * lost, which is the whole reason this blob exists.
+   */
+  accountId: string;
+  deviceId: string;
   /** Accounts this device talks to, so a restored device is not empty. */
   contacts: { accountId: string; handle?: string; displayName?: string }[];
   groups: { groupId: string; name?: string; members: { accountId: string; deviceId: string }[] }[];
@@ -135,24 +145,19 @@ export function backupKeyFromSeed(seed: Uint8Array): Uint8Array {
 /**
  * Encrypt a backup for upload.
  *
- * The account id is bound in as associated data: a blob is only meaningful for
- * the account it was made for, and a server that served the wrong one should
- * fail to authenticate rather than restore somebody else's contact list.
+ * No associated data. An earlier version bound the account id in, which is the
+ * obvious thing to do and made the feature impossible: the account id is
+ * exactly what the recovering device does not have, so it cannot supply it in
+ * order to decrypt the thing that would tell it. What stands in for that check
+ * is the key — a blob that opens under this phrase's backup key was written by
+ * somebody holding this phrase, and a substituted one does not open at all.
  */
-export function sealBackup(
-  backupKey: Uint8Array,
-  accountId: string,
-  backup: RecoveryBackup,
-): Uint8Array {
-  return seal(backupKey, utf8(JSON.stringify(backup)), utf8(accountId));
+export function sealBackup(backupKey: Uint8Array, backup: RecoveryBackup): Uint8Array {
+  return seal(backupKey, utf8(JSON.stringify(backup)));
 }
 
-export function openBackup(
-  backupKey: Uint8Array,
-  accountId: string,
-  sealed: Uint8Array,
-): RecoveryBackup {
-  const plaintext = open(backupKey, sealed, utf8(accountId));
+export function openBackup(backupKey: Uint8Array, sealed: Uint8Array): RecoveryBackup {
+  const plaintext = open(backupKey, sealed);
   if (!plaintext) {
     throw new RecoveryError('the backup could not be decrypted with that phrase');
   }
@@ -163,7 +168,12 @@ export function openBackup(
   } catch {
     throw new RecoveryError('the backup decrypted to something that is not a backup');
   }
-  if (!Array.isArray(parsed.contacts) || !Array.isArray(parsed.groups)) {
+  if (
+    typeof parsed.accountId !== 'string' ||
+    typeof parsed.deviceId !== 'string' ||
+    !Array.isArray(parsed.contacts) ||
+    !Array.isArray(parsed.groups)
+  ) {
     throw new RecoveryError('the backup is missing fields');
   }
   return parsed;

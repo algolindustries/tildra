@@ -2025,7 +2025,9 @@ describeIntegration('recovering from a phrase', () => {
 
     await client.putRecoveryBlob(
       lookupId,
-      sealBackup(backupKey, accountId, {
+      sealBackup(backupKey, {
+        accountId,
+        deviceId,
         contacts: [{ accountId: 'acct-bob', displayName: 'Bob' }],
         groups: [],
         updatedAt: Date.now(),
@@ -2038,7 +2040,7 @@ describeIntegration('recovering from a phrase', () => {
     const sealed = await fresh.getRecoveryBlob(recovered.lookupId);
     expect(sealed).toBeTruthy();
 
-    const backup = openBackup(recovered.backupKey, accountId, sealed!);
+    const backup = openBackup(recovered.backupKey, sealed!);
     expect(backup.contacts[0].displayName).toBe('Bob');
 
     // And the derived identity is the account's, so it can sign in again.
@@ -2055,17 +2057,18 @@ describeIntegration('recovering from a phrase', () => {
     await client.login(identity, accountId, deviceId);
     await client.putRecoveryBlob(
       lookupId,
-      sealBackup(backupKey, accountId, { contacts: [], groups: [], updatedAt: Date.now() }),
+      sealBackup(backupKey, {
+        accountId,
+        deviceId, contacts: [], groups: [], updatedAt: Date.now() }),
     );
 
     const other = recoveryKeys(generateRecoveryPhrase());
     expect(await client.getRecoveryBlob(other.lookupId)).toBeNull();
   }, 90_000);
 
-  it('refuses to open a blob fetched for the wrong account', async () => {
-    // The account id is associated data, so a server that serves the wrong
-    // blob fails to authenticate rather than restoring somebody else's
-    // contacts.
+  it('names the account it belongs to, which is what the caller is missing', async () => {
+    // The recovering device knows the phrase and nothing else. The account id
+    // and device id it needs to sign in come out of the blob.
     const phrase = generateRecoveryPhrase();
     const { identity, backupKey, lookupId } = recoveryKeys(phrase);
 
@@ -2074,11 +2077,15 @@ describeIntegration('recovering from a phrase', () => {
     await client.login(identity, accountId, deviceId);
     await client.putRecoveryBlob(
       lookupId,
-      sealBackup(backupKey, accountId, { contacts: [], groups: [], updatedAt: Date.now() }),
+      sealBackup(backupKey, {
+        accountId,
+        deviceId, contacts: [], groups: [], updatedAt: Date.now() }),
     );
 
     const sealed = await client.getRecoveryBlob(lookupId);
-    expect(() => openBackup(backupKey, 'acct-somebody-else', sealed!)).toThrow();
+    const backup = openBackup(backupKey, sealed!);
+    expect(backup.accountId).toBe(accountId);
+    expect(backup.deviceId).toBe(deviceId);
   }, 90_000);
 
   it('will not let another account take the id over', async () => {
@@ -2090,7 +2097,9 @@ describeIntegration('recovering from a phrase', () => {
     await client.login(identity, accountId, deviceId);
     await client.putRecoveryBlob(
       lookupId,
-      sealBackup(backupKey, accountId, { contacts: [], groups: [], updatedAt: Date.now() }),
+      sealBackup(backupKey, {
+        accountId,
+        deviceId, contacts: [], groups: [], updatedAt: Date.now() }),
     );
 
     const attacker = await bringUp('Mallory');
@@ -2098,7 +2107,7 @@ describeIntegration('recovering from a phrase', () => {
 
     // And the original is untouched.
     const sealed = await client.getRecoveryBlob(lookupId);
-    expect(openBackup(backupKey, accountId, sealed!).contacts).toEqual([]);
+    expect(openBackup(backupKey, sealed!).contacts).toEqual([]);
 
     attacker.socket.close();
   }, 90_000);

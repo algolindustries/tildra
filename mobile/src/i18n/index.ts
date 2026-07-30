@@ -61,6 +61,13 @@ export interface Strings {
   play: string;
   pause: string;
   recoveryTitle: string;
+  recoveryWarning: string;
+  recoveryWritten: string;
+  recoverTitle: string;
+  recoverBody: string;
+  recoverPlaceholder: string;
+  recoverAction: string;
+  recoverEntry: string;
   recoveryBody: string;
   recoveryConfirm: string;
   noPhoneNeeded: string;
@@ -214,6 +221,15 @@ const en: Strings = {
   recoveryBody:
     'These 24 words are the only way back into your account. We cannot reset them for you — the server has nothing to reset. Store them somewhere physical.',
   recoveryConfirm: 'I’ve written it down',
+  recoveryWarning:
+    'Anyone holding these words is you. They are exactly as powerful as this unlocked phone — not a backup code, the account itself.',
+  recoveryWritten: 'I have them somewhere safe',
+  recoverTitle: 'Recover an account',
+  recoverBody:
+    'Type the 24 words. They are checked as you go, so a wrong word shows up before anything else happens.',
+  recoverPlaceholder: 'word one, word two, …',
+  recoverAction: 'Recover',
+  recoverEntry: 'I have a recovery phrase',
   noPhoneNeeded: 'No phone number required',
 
   chats: 'Chats',
@@ -370,6 +386,15 @@ const tr: Strings = {
   recoveryBody:
     'Bu 24 kelime hesabınıza dönmenin tek yolu. Sizin için sıfırlayamayız — sunucuda sıfırlanacak bir şey yok. Fiziksel bir yerde saklayın.',
   recoveryConfirm: 'Yazdım',
+  recoveryWarning:
+    'Bu kelimeleri elinde tutan herkes sizsiniz. Tam olarak kilidi açık bu telefon kadar güçlüler — bir yedek kodu değil, hesabın kendisi.',
+  recoveryWritten: 'Güvenli bir yerde duruyor',
+  recoverTitle: 'Hesabı kurtar',
+  recoverBody:
+    '24 kelimeyi yazın. Yazarken kontrol edilir, yani yanlış bir kelime başka bir şey olmadan önce belli olur.',
+  recoverPlaceholder: 'birinci kelime, ikinci kelime, …',
+  recoverAction: 'Kurtar',
+  recoverEntry: 'Kurtarma kelimelerim var',
   noPhoneNeeded: 'Telefon numarası gerekmiyor',
 
   chats: 'Sohbetler',

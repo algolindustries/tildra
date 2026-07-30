@@ -28,6 +28,8 @@ const PHRASE = generateRecoveryPhrase();
 const SEED = recoverySeed(PHRASE);
 
 const BACKUP: RecoveryBackup = {
+  accountId: 'acct-me',
+  deviceId: 'dev-1',
   contacts: [{ accountId: 'acct-bob', displayName: 'Bob', handle: 'bob' }],
   groups: [{ groupId: 'grp-1', name: 'Kitap', members: [{ accountId: 'acct-bob', deviceId: 'd1' }] }],
   updatedAt: 1_770_000_000_000,
@@ -121,48 +123,56 @@ describe('the backup blob', () => {
   const backupKey = backupKeyFromSeed(SEED);
 
   it('round-trips', () => {
-    const restored = openBackup(backupKey, 'acct-me', sealBackup(backupKey, 'acct-me', BACKUP));
+    const restored = openBackup(backupKey, sealBackup(backupKey, BACKUP));
     expect(restored).toEqual(BACKUP);
   });
 
   it('refuses the wrong phrase', () => {
     const other = backupKeyFromSeed(recoverySeed(generateRecoveryPhrase()));
-    expect(() => openBackup(other, 'acct-me', sealBackup(backupKey, 'acct-me', BACKUP))).toThrow(
+    expect(() => openBackup(other, sealBackup(backupKey, BACKUP))).toThrow(
       /could not be decrypted/,
     );
   });
 
-  it('refuses a blob served for a different account', () => {
-    // Bound as associated data, so a server handing over somebody else's blob
-    // fails to authenticate rather than restoring their contact list.
-    const sealed = sealBackup(backupKey, 'acct-me', BACKUP);
-    expect(() => openBackup(backupKey, 'acct-someone-else', sealed)).toThrow(
-      /could not be decrypted/,
-    );
+  it('names the account inside the ciphertext, not beside it', () => {
+    // The account id is the one thing the recovering device does not have —
+    // it was on the phone they lost — so it has to come out of the blob. An
+    // earlier version bound it in as associated data instead, which is the
+    // obvious thing to do and made recovery impossible: you would have to
+    // know the account id in order to decrypt the thing that tells you it.
+    const restored = openBackup(backupKey, sealBackup(backupKey, BACKUP));
+    expect(restored.accountId).toBe('acct-me');
+    expect(restored.deviceId).toBe('dev-1');
   });
 
   it('refuses a blob that was edited', () => {
-    const sealed = sealBackup(backupKey, 'acct-me', BACKUP);
+    const sealed = sealBackup(backupKey, BACKUP);
     sealed[sealed.length - 1] ^= 0x01;
-    expect(() => openBackup(backupKey, 'acct-me', sealed)).toThrow(RecoveryError);
+    expect(() => openBackup(backupKey, sealed)).toThrow(RecoveryError);
   });
 
   it('refuses random bytes', () => {
-    expect(() => openBackup(backupKey, 'acct-me', randomBytes(120))).toThrow(RecoveryError);
+    expect(() => openBackup(backupKey, randomBytes(120))).toThrow(RecoveryError);
   });
 
   it('refuses something that decrypts but is not a backup', () => {
-    const notABackup = sealBackup(backupKey, 'acct-me', { updatedAt: 1 } as RecoveryBackup);
-    expect(() => openBackup(backupKey, 'acct-me', notABackup)).toThrow(/missing fields/);
+    const notABackup = sealBackup(backupKey, { updatedAt: 1 } as unknown as RecoveryBackup);
+    expect(() => openBackup(backupKey, notABackup)).toThrow(/missing fields/);
   });
 
   it('carries no messages', () => {
     // Chat history is not in the backup and this asserts it stays that way:
     // a blob on a server that holds what was said is the thing the whole
     // design is arranged to avoid.
-    const sealed = sealBackup(backupKey, 'acct-me', BACKUP);
-    const restored = openBackup(backupKey, 'acct-me', sealed);
-    expect(Object.keys(restored).sort()).toEqual(['contacts', 'groups', 'updatedAt']);
+    const sealed = sealBackup(backupKey, BACKUP);
+    const restored = openBackup(backupKey, sealed);
+    expect(Object.keys(restored).sort()).toEqual([
+      'accountId',
+      'contacts',
+      'deviceId',
+      'groups',
+      'updatedAt',
+    ]);
   });
 });
 

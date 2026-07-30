@@ -90,6 +90,7 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 | | |
 |---|---|
 | Account creation without a phone number | ✅ |
+| Account recovery from a 24-word phrase | ✅ |
 | 1:1 messaging | ✅ |
 | Multi-device: link a second device by QR, pairing code compared on both screens | ✅ |
 | Encrypted group chats with membership rotation | ✅ |

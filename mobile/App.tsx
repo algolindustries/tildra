@@ -22,6 +22,8 @@ import { JoinDeviceScreen } from './src/screens/JoinDeviceScreen';
 import { CallScreen } from './src/screens/CallScreen';
 import { NewGroupScreen } from './src/screens/NewGroupScreen';
 import { GroupMembersScreen } from './src/screens/GroupMembersScreen';
+import { RecoveryPhraseScreen } from './src/screens/RecoveryPhraseScreen';
+import { RecoverAccountScreen } from './src/screens/RecoverAccountScreen';
 import { Banner, Button } from './src/ui/components';
 import { palette, spacing } from './src/ui/theme';
 
@@ -46,11 +48,16 @@ export default function App() {
   const call = useApp((s) => s.call);
   const placeCall = useApp((s) => s.placeCall);
   const [joining, setJoining] = useState(false);
+  const [recovering, setRecovering] = useState(false);
+  const pendingPhrase = useApp((s) => s.pendingPhrase);
 
   // Leaving this set would drop the user back on the linking screen the next
   // time they signed out.
   useEffect(() => {
-    if (phase !== 'onboarding') setJoining(false);
+    if (phase !== 'onboarding') {
+      setJoining(false);
+      setRecovering(false);
+    }
   }, [phase]);
 
   useEffect(() => {
@@ -73,6 +80,10 @@ export default function App() {
             <Banner tone="warning" title={t.errorGeneric} body={error ?? ''} />
             <Button label={t.retry} onPress={() => void bootstrap()} style={styles.retry} />
           </View>
+        ) : pendingPhrase ? (
+          // Above everything, including a ringing phone: this is shown once
+          // and never again, because the phrase is not persisted.
+          <RecoveryPhraseScreen />
         ) : call ? (
           // Above the route entirely. A ringing phone is not a place in a
           // navigation stack, and a call the user cannot see is a microphone
@@ -81,8 +92,13 @@ export default function App() {
         ) : phase === 'onboarding' ? (
           joining ? (
             <JoinDeviceScreen onCancel={() => setJoining(false)} />
+          ) : recovering ? (
+            <RecoverAccountScreen onCancel={() => setRecovering(false)} />
           ) : (
-            <OnboardingScreen onJoinExisting={() => setJoining(true)} />
+            <OnboardingScreen
+              onJoinExisting={() => setJoining(true)}
+              onRecover={() => setRecovering(true)}
+            />
           )
         ) : route.name === 'conversation' ? (
           <ConversationScreen
