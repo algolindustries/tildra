@@ -1390,6 +1390,67 @@ export class SessionManager {
   }
 
   /**
+   * Remove everybody belonging to an account, then rotate once.
+   *
+   * A person is not a device. Removing them device by device with
+   * `removeGroupMember` rotates after each one and redistributes to whoever
+   * is left — which still includes that person's other phones, so they are
+   * handed the new sender key on the way out and keep reading. The whole
+   * point of rotation is undone by doing it in the wrong units.
+   */
+  async removeGroupAccount(groupId: string, accountId: string): Promise<StoredGroup> {
+    const group = await this.store.loadGroup(groupId);
+    if (!group) throw new Error(`Tildra: unknown group ${groupId}`);
+
+    const remaining = group.members.filter((m) => m.accountId !== accountId);
+    if (remaining.length === group.members.length) return group;
+    group.members = remaining;
+    await this.store.saveGroup(group);
+
+    // Everything tied to the old epoch goes before the new chain exists, so
+    // there is no window in which the old key is still live.
+    await this.store.deleteGroupKeys(groupId);
+    await this.store.saveSenderKey(groupId, createSenderKey(groupId));
+    await this.distributeSenderKey(groupId, group.members);
+
+    this.events.onGroupChange?.(groupId);
+    return group;
+  }
+
+  /**
+   * Add every device an account has.
+   *
+   * Same reasoning in the other direction: adding one device of somebody's two
+   * means half their messages arrive and half do not, which reads as the app
+   * losing messages.
+   */
+  async addGroupAccount(groupId: string, accountId: string): Promise<StoredGroup> {
+    const group = await this.store.loadGroup(groupId);
+    if (!group) throw new Error(`Tildra: unknown group ${groupId}`);
+
+    const devices = await this.client.listDevices(accountId);
+    if (devices.length === 0) {
+      throw new NoDevicesError(`Tildra: ${accountId} has no registered devices`);
+    }
+
+    const added: GroupMember[] = [];
+    for (const device of devices) {
+      const member = { accountId, deviceId: device.deviceId };
+      if (group.members.some((m) => memberKey(m) === memberKey(member))) continue;
+      group.members.push(member);
+      added.push(member);
+    }
+    if (added.length === 0) return group;
+
+    await this.store.saveGroup(group);
+    // From the chain's current position, so nothing said before they joined is
+    // readable to them.
+    await this.distributeSenderKey(groupId, added);
+    this.events.onGroupChange?.(groupId);
+    return group;
+  }
+
+  /**
    * The conversation row a group's messages live in, created on demand.
    *
    * Named from the group rather than from any member, so every device files

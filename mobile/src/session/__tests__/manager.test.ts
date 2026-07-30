@@ -1891,3 +1891,111 @@ describeIntegration('group conversations', () => {
     bob.socket.close();
   }, 120_000);
 });
+
+// ---------------------------------------------------------------------------
+// Group membership, in units of people
+// ---------------------------------------------------------------------------
+
+describeIntegration('changing who is in a group', () => {
+  /** Alice and Bob, with sessions in both directions. */
+  async function pair() {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    await alice.manager.sendMessage(bob.accountId, 'merhaba');
+    await waitFor(() => bob.received.length > 0);
+    await bob.manager.sendMessage(alice.accountId, 'selam');
+    await waitFor(() => alice.received.length > 0);
+    return { alice, bob };
+  }
+
+  it('removes every device a person has, in one rotation', async () => {
+    // Removing device by device rotates after each one and redistributes to
+    // whoever is left — which still includes that person's other phones. They
+    // are handed the new key on the way out and keep reading.
+    const { alice, bob } = await pair();
+
+    // Bob with two devices. The second is registered the way a linked device
+    // is; what matters here is that the group holds two members for one
+    // account.
+    const secondDeviceId = `${bob.deviceId}-second`;
+    await alice.manager.createGroup('grp-people', [
+      alice.member(),
+      bob.member(),
+      { accountId: bob.accountId, deviceId: secondDeviceId },
+    ]);
+
+    const before = await alice.manager.listGroups();
+    expect(before.find((g) => g.groupId === 'grp-people')?.members).toHaveLength(3);
+
+    const after = await alice.manager.removeGroupAccount('grp-people', bob.accountId);
+    expect(after.members.map((m) => m.accountId)).toEqual([alice.accountId]);
+    expect(after.members.some((m) => m.deviceId === secondDeviceId)).toBe(false);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+
+  it('leaves the group alone when the person is not in it', async () => {
+    // Otherwise a mistaken tap rotates the sender keys for everyone, which is
+    // a redistribution to every device for no reason.
+    const { alice, bob } = await pair();
+    await alice.manager.createGroup('grp-absent', [alice.member(), bob.member()]);
+
+    const unchanged = await alice.manager.removeGroupAccount('grp-absent', 'acct-nobody');
+    expect(unchanged.members).toHaveLength(2);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+
+  it('adds every device the new member has', async () => {
+    // Adding one device of somebody's two means half their messages arrive
+    // and half do not, which reads as the app losing messages.
+    const { alice, bob } = await pair();
+    const carol = await bringUp('Carol');
+    await alice.manager.sendMessage(carol.accountId, 'merhaba');
+    await waitFor(() => carol.received.length > 0);
+    await carol.manager.sendMessage(alice.accountId, 'selam');
+    await waitFor(() => alice.received.length > 1);
+
+    await alice.manager.createGroup('grp-add', [alice.member(), bob.member()]);
+    const grown = await alice.manager.addGroupAccount('grp-add', carol.accountId);
+
+    const carolDevices = await alice.client.listDevices(carol.accountId);
+    expect(carolDevices.length).toBeGreaterThan(0);
+    expect(grown.members.filter((m) => m.accountId === carol.accountId)).toHaveLength(
+      carolDevices.length,
+    );
+
+    // And the newcomer can read what is sent after they joined.
+    await alice.manager.sendGroupMessage('grp-add', 'hoş geldin');
+    await waitFor(() => carol.groupReceived.length > 0);
+    expect(carol.groupReceived.map((m) => m.text)).toContain('hoş geldin');
+
+    [alice, bob, carol].forEach((d) => d.socket.close());
+  }, 120_000);
+
+  it('locks a removed person out of what is said afterwards', async () => {
+    // The property removal exists for. Carol holds a sender key for the old
+    // epoch; after the rotation it derives nothing that is sent.
+    const { alice, bob } = await pair();
+    const carol = await bringUp('Carol');
+    await alice.manager.sendMessage(carol.accountId, 'merhaba');
+    await waitFor(() => carol.received.length > 0);
+    await carol.manager.sendMessage(alice.accountId, 'selam');
+    await waitFor(() => alice.received.length > 1);
+
+    await alice.manager.createGroup('grp-lock', [alice.member(), bob.member(), carol.member()]);
+    await alice.manager.sendGroupMessage('grp-lock', 'carol buradayken');
+    await waitFor(() => carol.groupReceived.length > 0 && bob.groupReceived.length > 0);
+
+    await alice.manager.removeGroupAccount('grp-lock', carol.accountId);
+    await alice.manager.sendGroupMessage('grp-lock', 'carol gittikten sonra');
+    await waitFor(() => bob.groupReceived.length > 1);
+
+    expect(bob.groupReceived.map((m) => m.text)).toContain('carol gittikten sonra');
+    expect(carol.groupReceived.map((m) => m.text)).not.toContain('carol gittikten sonra');
+
+    [alice, bob, carol].forEach((d) => d.socket.close());
+  }, 120_000);
+});

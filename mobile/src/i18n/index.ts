@@ -127,6 +127,11 @@ export interface Strings {
   groupCreate: string;
   groupNoContacts: string;
   groupBody: string;
+  groupMembers: string;
+  groupAdd: string;
+  groupRemove: string;
+  groupRemoveBody: string;
+  groupYou: string;
   callAudio: string;
   callVideo: string;
   callRinging: string;
@@ -274,6 +279,12 @@ const en: Strings = {
   groupNoContacts: 'Message somebody first, then you can put them in a group.',
   groupBody:
     'Everyone in the group gets their own copy of the key, encrypted to them. The server sees a count of envelopes and nothing else — not the name, not who is in it.',
+  groupMembers: 'Members',
+  groupAdd: 'Add someone',
+  groupRemove: 'Remove',
+  groupRemoveBody:
+    'Removing someone gives everyone still here a new key. They keep what was said while they were in the group and can read nothing sent after.',
+  groupYou: 'You',
   callAudio: 'Call',
   callVideo: 'Video call',
   callRinging: 'Ringing…',
@@ -424,6 +435,12 @@ const tr: Strings = {
   groupNoContacts: 'Önce birine mesaj atın, sonra onu bir gruba ekleyebilirsiniz.',
   groupBody:
     'Gruptaki herkes anahtarın kendisine şifrelenmiş kopyasını alır. Sunucu yalnızca kaç zarf gittiğini görür — adı değil, kimlerin olduğunu değil.',
+  groupMembers: 'Üyeler',
+  groupAdd: 'Birini ekle',
+  groupRemove: 'Çıkar',
+  groupRemoveBody:
+    'Birini çıkarmak, kalan herkese yeni bir anahtar verir. Çıkarılan kişi gruptayken söylenenleri saklar, sonrasında gönderilen hiçbir şeyi okuyamaz.',
+  groupYou: 'Siz',
   callAudio: 'Ara',
   callVideo: 'Görüntülü ara',
   callRinging: 'Çalıyor…',

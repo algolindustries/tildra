@@ -21,6 +21,7 @@ import { LinkDeviceScreen } from './src/screens/LinkDeviceScreen';
 import { JoinDeviceScreen } from './src/screens/JoinDeviceScreen';
 import { CallScreen } from './src/screens/CallScreen';
 import { NewGroupScreen } from './src/screens/NewGroupScreen';
+import { GroupMembersScreen } from './src/screens/GroupMembersScreen';
 import { Banner, Button } from './src/ui/components';
 import { palette, spacing } from './src/ui/theme';
 
@@ -30,7 +31,8 @@ type Route =
   | { name: 'verify'; accountId: string }
   | { name: 'profile' }
   | { name: 'link' }
-  | { name: 'new-group' };
+  | { name: 'new-group' }
+  | { name: 'group-members'; accountId: string };
 
 export default function App() {
   const phase = useApp((s) => s.phase);
@@ -91,6 +93,9 @@ export default function App() {
             }}
             onVerify={() => setRoute({ name: 'verify', accountId: route.accountId })}
             onCall={(video) => void placeCall(route.accountId, { video })}
+            onOpenMembers={() =>
+              setRoute({ name: 'group-members', accountId: route.accountId })
+            }
           />
         ) : route.name === 'verify' ? (
           <SafetyNumberScreen
@@ -101,6 +106,10 @@ export default function App() {
           <ProfileScreen
             onClose={() => setRoute({ name: 'list' })}
             onLinkDevice={() => setRoute({ name: 'link' })}
+          />
+        ) : route.name === 'group-members' ? (
+          <GroupMembersScreen
+            onBack={() => setRoute({ name: 'conversation', accountId: route.accountId })}
           />
         ) : route.name === 'new-group' ? (
           <NewGroupScreen

@@ -17,7 +17,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Session manager: fanout per device, identity-change blocking, prekey top-up | done |
 | Signed prekey rotation every 48h, with the replaced pair honoured for one more window, and every change to the secrets written to disk | done |
 | Screens: onboarding, chat list, conversation, safety number, profile, device link (both halves) | done |
-| Encrypted groups: sender keys, signed messages, rotation on removal, and screens to create and use one | done |
+| Encrypted groups: sender keys, signed messages, rotation on removal, and screens to create one, talk in it and change who is in it | done |
 | Encrypted profiles (name, photo, about), mutual introduction on first contact | done |
 | Encrypted attachments; photo and voice messages with waveforms | done |
 | Push notifications with a content-free payload | done |
@@ -39,7 +39,7 @@ tested by running the real Go server and pushing real traffic through it.
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 434 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 438 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -126,11 +126,6 @@ knowing before trusting a UI change.
   Xcode and Gradle over them to get an `.ipa` and an `.aab`. That needs the
   toolchains and has not been started. See `docs/REPRODUCIBLE_BUILDS.md`.
 
-- **Managing a group after it exists.** Creating one and talking in it work
-  from the app. Adding and removing members do not have screens yet:
-  `addGroupMember` and `removeGroupMember` are still reachable only from
-  tests, and removal is the one that matters — it is what rotates the sender
-  keys and locks somebody out.
 - **Account recovery.** `docs/PROTOCOL.md` §1.1 described a recovery-phrase
   backup in the present tense. The server endpoints exist; the client calls
   them only from tests, and no onboarding screen shows a phrase. Losing a
@@ -175,6 +170,13 @@ knowing before trusting a UI change.
   version of the test above kept a reference to the secrets and passed with the
   persistence call deleted, because the top-up mutates the same maps in place.
   It serialises on the way in now. Run the negative control.
+- **Group membership changes are in units of people, not devices.** The
+  manager distributes a sender key per device, so `removeGroupMember` takes
+  one. Removing a person with two phones by calling it twice rotates after the
+  first and redistributes to whoever is left — which still includes their
+  second phone, so they are handed the new key on the way out and keep
+  reading. `removeGroupAccount` and `addGroupAccount` are the primitives the
+  UI uses.
 - **A group is a conversation whose account id is `group:<id>`.** That prefix
   is not a valid account id — those are Crockford base32 — so a group can never
   collide with a person, and the chat list, unread counts and message list work

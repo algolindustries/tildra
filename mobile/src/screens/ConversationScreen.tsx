@@ -25,11 +25,13 @@ export function ConversationScreen({
   onBack,
   onVerify,
   onCall,
+  onOpenMembers,
 }: {
   accountId: string;
   onBack: () => void;
   onVerify: () => void;
   onCall: (video: boolean) => void;
+  onOpenMembers: () => void;
 }) {
   const t = useApp((s) => s.t);
   const activeGroup = useApp((s) => s.activeGroup);
@@ -88,7 +90,7 @@ export function ConversationScreen({
         </Pressable>
         <Avatar seed={accountId} label={name ?? accountId} image={conversation?.avatar} size={34} />
         {isGroup ? (
-          <View style={styles.headerText}>
+          <Pressable style={styles.headerText} onPress={onOpenMembers}>
             <Text style={styles.headerName} numberOfLines={1}>
               {name ?? t.newGroup}
             </Text>
@@ -96,9 +98,9 @@ export function ConversationScreen({
                 other end, and every member's key is checked on the pairwise
                 session its sender key travelled over. */}
             <Text style={styles.headerSub}>
-              {`${activeGroup?.members.length ?? 0} · ${t.groupMembersLabel}`}
+              {`${activeGroup?.members.length ?? 0} · ${t.groupMembers}`}
             </Text>
-          </View>
+          </Pressable>
         ) : (
           <Pressable style={styles.headerText} onPress={onVerify}>
             <Text style={styles.headerName} numberOfLines={1}>

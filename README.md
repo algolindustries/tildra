@@ -40,7 +40,7 @@ that doesn't feel like homework) and rebuilds the parts that aren't.
 | | Telegram | Signal | Tildra |
 |---|---|---|---|
 | E2EE by default | ❌ opt-in, 1:1 only | ✅ | ✅ |
-| E2EE group chats | ❌ | ✅ | ✅ create and talk; managing members has no screen yet |
+| E2EE group chats | ❌ | ✅ | ✅ |
 | E2EE on every device/platform | ❌ no desktop secret chats | ✅ | ✅ |
 | Linking a device without trusting the server | ❌ | ✅ | ✅ QR commitment + pairing code on both screens |
 | Post-quantum key agreement | ❌ | ✅ (PQXDH) | ✅ (X25519 + ML-KEM-768) |
@@ -92,7 +92,7 @@ Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.
 | Account creation without a phone number | ✅ |
 | 1:1 messaging | ✅ |
 | Multi-device: link a second device by QR, pairing code compared on both screens | ✅ |
-| Encrypted group chats with membership rotation | ⚠️ create and talk in the app; adding or removing a member is protocol-only |
+| Encrypted group chats with membership rotation | ✅ |
 | Encrypted profiles (name, photo, about) | ✅ |
 | Safety numbers and identity-change blocking | ✅ |
 | Sealed sender with rotating mailboxes | ✅ |

@@ -164,6 +164,9 @@ export interface AppState {
    * to receive one on.
    */
   createGroup: (name: string, accountIds: string[]) => Promise<string>;
+  /** Add or remove a person — every device they have — from the open group. */
+  addToGroup: (accountId: string) => Promise<void>;
+  removeFromGroup: (accountId: string) => Promise<void>;
   /** Ask every pinned auditor whether it saw the same log. */
   checkAuditors: () => Promise<void>;
   placeCall: (accountId: string, options?: { video?: boolean }) => Promise<void>;
@@ -588,6 +591,26 @@ export const useApp = create<AppState>((set, get) => ({
     await runtime.manager.createGroup(groupId, members, name.trim() || undefined);
     await get().refreshConversations();
     return groupConversationKey(groupId);
+  },
+
+  async addToGroup(accountId) {
+    const group = get().activeGroup;
+    if (!runtime?.manager || !group) return;
+    try {
+      set({ activeGroup: await runtime.manager.addGroupAccount(group.groupId, accountId) });
+    } catch (err) {
+      set({ error: describeError(err, get().t) });
+    }
+  },
+
+  async removeFromGroup(accountId) {
+    const group = get().activeGroup;
+    if (!runtime?.manager || !group) return;
+    try {
+      set({ activeGroup: await runtime.manager.removeGroupAccount(group.groupId, accountId) });
+    } catch (err) {
+      set({ error: describeError(err, get().t) });
+    }
   },
 
   async checkAuditors() {
