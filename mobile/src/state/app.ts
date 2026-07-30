@@ -26,6 +26,7 @@ import {
 } from '../crypto/primitives';
 import { generateIdentity, generatePreKeys } from '../crypto/identity';
 import { PreKeySecrets } from '../crypto/pqxdh';
+import { SerializedPreKeys, decodePreKeys, encodePreKeys } from '../storage/prekeys';
 import { IdentityChangedError, NoDevicesError, SessionManager } from '../session/manager';
 import { Locale, Strings, resolveLocale, strings } from '../i18n';
 import {
@@ -78,13 +79,6 @@ function pinnedAuditors(): PinnedAuditor[] {
 }
 
 export type Phase = 'starting' | 'onboarding' | 'ready' | 'error';
-
-interface SerializedPreKeys {
-  signedPreKey: { id: number; publicKey: string; secretKey: string; signature: string };
-  signedPqPreKey: { id: number; publicKey: string; secretKey: string; signature: string };
-  oneTimePreKeys: [number, string][];
-  oneTimePqPreKeys: [number, string][];
-}
 
 export interface AppState {
   phase: Phase;
@@ -783,6 +777,15 @@ async function startSession(
     client: parts.client,
     store: parts.db,
     preKeys: parts.preKeys,
+    // The manager changes these — a one-time top-up, a signed-prekey
+    // rotation — and secrets that were published but never written down are
+    // keys the server hands out and this device cannot use.
+    onPreKeysChanged: async (secrets) => {
+      await parts.db.setMeta(
+        PREKEYS_META_KEY,
+        parts.vault.encryptJson('prekeys', PREKEYS_META_KEY, encodePreKeys(secrets)),
+      );
+    },
     onMailboxesChanged: (mailboxes) => socket?.subscribe(mailboxes),
     events: {
       onMessage: (message, conversation) => {
@@ -961,43 +964,6 @@ function decodeIdentity(bytes: Uint8Array): KeyPair {
   return { publicKey: bytes.slice(0, 32), secretKey: bytes.slice(32) };
 }
 
-function encodePreKeys(secrets: PreKeySecrets): SerializedPreKeys {
-  return {
-    signedPreKey: {
-      id: secrets.signedPreKey.id,
-      publicKey: toBase64(secrets.signedPreKey.publicKey),
-      secretKey: toBase64(secrets.signedPreKey.secretKey),
-      signature: toBase64(secrets.signedPreKey.signature),
-    },
-    signedPqPreKey: {
-      id: secrets.signedPqPreKey.id,
-      publicKey: toBase64(secrets.signedPqPreKey.publicKey),
-      secretKey: toBase64(secrets.signedPqPreKey.secretKey),
-      signature: toBase64(secrets.signedPqPreKey.signature),
-    },
-    oneTimePreKeys: [...secrets.oneTimePreKeys].map(([id, key]) => [id, toBase64(key)]),
-    oneTimePqPreKeys: [...secrets.oneTimePqPreKeys].map(([id, key]) => [id, toBase64(key)]),
-  };
-}
 
-function decodePreKeys(identity: KeyPair, data: SerializedPreKeys): PreKeySecrets {
-  return {
-    identity,
-    signedPreKey: {
-      id: data.signedPreKey.id,
-      publicKey: fromBase64(data.signedPreKey.publicKey),
-      secretKey: fromBase64(data.signedPreKey.secretKey),
-      signature: fromBase64(data.signedPreKey.signature),
-    },
-    signedPqPreKey: {
-      id: data.signedPqPreKey.id,
-      publicKey: fromBase64(data.signedPqPreKey.publicKey),
-      secretKey: fromBase64(data.signedPqPreKey.secretKey),
-      signature: fromBase64(data.signedPqPreKey.signature),
-    },
-    oneTimePreKeys: new Map(data.oneTimePreKeys.map(([id, key]) => [id, fromBase64(key)])),
-    oneTimePqPreKeys: new Map(data.oneTimePqPreKeys.map(([id, key]) => [id, fromBase64(key)])),
-  };
-}
 
-export { encodePreKeys, decodePreKeys, encodeIdentity, decodeIdentity };
+export { encodeIdentity, decodeIdentity };

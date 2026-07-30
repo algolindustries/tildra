@@ -66,11 +66,10 @@ const ALLOWED = new Map([
 
   ['isSupportedLocale', 'called by resolveLocale'],
 
-  // Not reachable, and that is the bug rather than the exception. Rotating the
-  // signed prekey needs the previous one retained so a peer that fetched the
-  // old bundle can still complete a handshake, which is more than a call site.
-  // Recorded under "Not done" in docs/STATUS.md.
-  ['signedPreKeyIsStale', 'the rotation it exists for is not implemented; see docs/STATUS.md'],
+  ['signedPreKeyIsStale', 'called by rotateSignedPreKeysIfStale'],
+  ['rotateSignedPreKeys', 'called by rotateSignedPreKeysIfStale'],
+  ['encodeSigned', 'called by encodePreKeys'],
+  ['decodeSigned', 'called by decodePreKeys'],
 ]);
 
 function walk(dir, out = []) {

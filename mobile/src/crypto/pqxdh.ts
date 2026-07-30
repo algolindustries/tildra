@@ -58,6 +58,21 @@ export interface PreKeySecrets {
   identity: KeyPair;
   signedPreKey: KeyPair & { id: number; signature: Uint8Array };
   signedPqPreKey: KeyPair & { id: number; signature: Uint8Array };
+  /**
+   * The signed prekeys this device published before the last rotation.
+   *
+   * Kept because rotation is not instantaneous from the outside: somebody may
+   * have fetched the old bundle a minute before it was replaced and be about
+   * to send with it. Dropping the old secret the moment a new one is published
+   * turns every such handshake into an undecryptable first message, which
+   * looks to the sender like the recipient does not exist.
+   *
+   * Exactly one generation is retained. Two would double the window in which
+   * a stolen prekey is still useful, which is the thing rotation exists to
+   * shrink.
+   */
+  previousSignedPreKey?: KeyPair & { id: number; signature: Uint8Array };
+  previousSignedPqPreKey?: KeyPair & { id: number; signature: Uint8Array };
   oneTimePreKeys: Map<number, Uint8Array>;
   oneTimePqPreKeys: Map<number, Uint8Array>;
 }
@@ -167,7 +182,15 @@ export function acceptSession(
   secrets: PreKeySecrets,
   init: SessionInit,
 ): { ratchet: RatchetState; associatedData: Uint8Array; sessionSecret: Uint8Array } {
-  if (init.signedPreKeyId !== secrets.signedPreKey.id) {
+  // Either the current signed prekey or the one it replaced. See
+  // `previousSignedPreKey` for why the old one is still here.
+  const signedPreKey =
+    init.signedPreKeyId === secrets.signedPreKey.id
+      ? secrets.signedPreKey
+      : init.signedPreKeyId === secrets.previousSignedPreKey?.id
+        ? secrets.previousSignedPreKey
+        : undefined;
+  if (!signedPreKey) {
     throw new BundleVerificationError(
       'initial message references a signed prekey this device does not hold',
     );
@@ -176,9 +199,9 @@ export function acceptSession(
   const identityDhSecret = identityToDhSecret(secrets.identity.secretKey);
   const initiatorIdentityDh = identityToDhPublic(init.identityKey);
 
-  const dh1 = dh(secrets.signedPreKey.secretKey, initiatorIdentityDh);
+  const dh1 = dh(signedPreKey.secretKey, initiatorIdentityDh);
   const dh2 = dh(identityDhSecret, init.ephemeralKey);
-  const dh3 = dh(secrets.signedPreKey.secretKey, init.ephemeralKey);
+  const dh3 = dh(signedPreKey.secretKey, init.ephemeralKey);
 
   let dh4: Uint8Array = new Uint8Array(0);
   if (init.oneTimePreKeyId !== undefined) {
@@ -201,12 +224,18 @@ export function acceptSession(
     wipe(pqSecret);
     secrets.oneTimePqPreKeys.delete(init.pqPreKeyId);
   } else {
-    if (init.pqPreKeyId !== secrets.signedPqPreKey.id) {
+    const signedPqPreKey =
+      init.pqPreKeyId === secrets.signedPqPreKey.id
+        ? secrets.signedPqPreKey
+        : init.pqPreKeyId === secrets.previousSignedPqPreKey?.id
+          ? secrets.previousSignedPqPreKey
+          : undefined;
+    if (!signedPqPreKey) {
       throw new BundleVerificationError(
         'initial message references a PQ prekey this device does not hold',
       );
     }
-    kemSecret = kemDecapsulate(secrets.signedPqPreKey.secretKey, init.kemCiphertext);
+    kemSecret = kemDecapsulate(signedPqPreKey.secretKey, init.kemCiphertext);
   }
 
   const sharedSecret = deriveSharedSecret([dh1, dh2, dh3, dh4, kemSecret]);
@@ -218,8 +247,8 @@ export function acceptSession(
   // original destroys the prekey the moment this session's first DH ratchet
   // step runs, silently breaking every other session using the same bundle.
   const ratchet = initResponder(sharedSecret, {
-    publicKey: secrets.signedPreKey.publicKey.slice(),
-    secretKey: secrets.signedPreKey.secretKey.slice(),
+    publicKey: signedPreKey.publicKey.slice(),
+    secretKey: signedPreKey.secretKey.slice(),
   });
 
   return {

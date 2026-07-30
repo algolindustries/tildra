@@ -67,7 +67,17 @@ export function signAuthChallenge(identity: KeyPair, challenge: Uint8Array): str
  */
 export function generatePreKeys(
   identity: KeyPair,
-  options: { count?: number; startId?: number; signedPreKeyId?: number } = {},
+  options: {
+    count?: number;
+    startId?: number;
+    signedPreKeyId?: number;
+    /**
+     * The signed prekeys being replaced, carried forward so a peer that
+     * fetched the previous bundle can still finish a handshake. See
+     * `PreKeySecrets.previousSignedPreKey`.
+     */
+    previous?: Pick<PreKeySecrets, 'signedPreKey' | 'signedPqPreKey'>;
+  } = {},
 ): { secrets: PreKeySecrets; upload: KeyUploadPayload } {
   const count = options.count ?? ONE_TIME_PREKEY_TARGET;
   const startId = options.startId ?? 1;
@@ -99,6 +109,17 @@ export function generatePreKeys(
     identity,
     signedPreKey: { ...signedPreKey, id: signedId, signature: signedPreKeySignature },
     signedPqPreKey: { ...signedPqPreKey, id: signedId, signature: signedPqPreKeySignature },
+    // Only when the id actually moved. A top-up that republishes the same
+    // signed prekey would otherwise record the key as its own predecessor and
+    // hold it for a second window.
+    previousSignedPreKey:
+      options.previous && options.previous.signedPreKey.id !== signedId
+        ? options.previous.signedPreKey
+        : undefined,
+    previousSignedPqPreKey:
+      options.previous && options.previous.signedPqPreKey.id !== signedId
+        ? options.previous.signedPqPreKey
+        : undefined,
     oneTimePreKeys,
     oneTimePqPreKeys,
   };
@@ -129,4 +150,36 @@ export function needsPreKeyTopUp(remaining: number): boolean {
 
 export function signedPreKeyIsStale(generatedAt: number, now: number = Date.now()): boolean {
   return now - generatedAt > SIGNED_PREKEY_ROTATION_MS;
+}
+
+/**
+ * Rotate the signed prekeys, keeping the outgoing pair usable for one more
+ * window.
+ *
+ * The one-time prekeys are not touched: they are consumed individually and
+ * topped up on their own schedule, and throwing away a hundred unused ones
+ * every two days would mean every handshake in between falls back to the
+ * signed prekey and loses its replay resistance.
+ */
+export function rotateSignedPreKeys(
+  identity: KeyPair,
+  current: PreKeySecrets,
+): { secrets: PreKeySecrets; upload: KeyUploadPayload } {
+  const nextId = current.signedPreKey.id + 1;
+  const rotated = generatePreKeys(identity, {
+    count: 0,
+    signedPreKeyId: nextId,
+    previous: current,
+  });
+
+  return {
+    secrets: {
+      ...rotated.secrets,
+      // The one-time pools survive the rotation, so the upload below must not
+      // claim to replace them.
+      oneTimePreKeys: current.oneTimePreKeys,
+      oneTimePqPreKeys: current.oneTimePqPreKeys,
+    },
+    upload: rotated.upload,
+  };
 }

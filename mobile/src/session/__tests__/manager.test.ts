@@ -14,9 +14,20 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { TildraClient } from '../../api/client';
 import { TildraSocket } from '../../api/socket';
-import { CHECKPOINT_META_KEY, IdentityChangedError, SessionManager } from '../manager';
+import {
+  CHECKPOINT_META_KEY,
+  IdentityChangedError,
+  SIGNED_PREKEY_META_KEY,
+  SessionManager,
+} from '../manager';
 import { MemorySessionStore } from './memory-store';
-import { generateIdentity, generatePreKeys } from '../../crypto/identity';
+import {
+  SIGNED_PREKEY_ROTATION_MS,
+  generateIdentity,
+  generatePreKeys,
+} from '../../crypto/identity';
+import { acceptSession, initiateSession } from '../../crypto/pqxdh';
+import { SerializedPreKeys, decodePreKeys, encodePreKeys } from '../../storage/prekeys';
 import { equal, fromBase64, fromUtf8, randomBytes, toBase64, utf8 } from '../../crypto/primitives';
 import { SplitViewError, verifyHandleProof } from '../../crypto/transparency';
 import {
@@ -1625,4 +1636,154 @@ describeIntegration('a call nobody answers', () => {
     alice.socket.close();
     bob.socket.close();
   }, 90_000);
+});
+
+// ---------------------------------------------------------------------------
+// Prekey rotation and persistence
+// ---------------------------------------------------------------------------
+
+describeIntegration('signed prekey rotation', () => {
+  /** A device whose prekey secrets are captured the way the app persists them. */
+  async function deviceWithPersistence(name: string) {
+    const identity = generateIdentity();
+    const client = new TildraClient({ baseUrl: BASE_URL });
+    const { accountId, deviceId } = await client.register(identity, name);
+    await client.login(identity, accountId, deviceId);
+
+    const { secrets, upload } = generatePreKeys(identity, { count: 3 });
+    await client.publishKeys(upload);
+
+    const store = new MemorySessionStore();
+    const errors: Error[] = [];
+    const received: string[] = [];
+    // Serialised on the way in, exactly as the vault stores it. Holding the
+    // live object instead would make this test pass with the persistence call
+    // deleted, because the top-up mutates the same maps in place — which is
+    // what the first version of this test did.
+    let persistedBlob: SerializedPreKeys = encodePreKeys(secrets);
+
+    const manager = new SessionManager({
+      identity,
+      accountId,
+      deviceId,
+      client,
+      store,
+      preKeys: secrets,
+      randomId: () => toBase64(randomBytes(16)),
+      onPreKeysChanged: async (next) => {
+        persistedBlob = encodePreKeys(next);
+      },
+      events: {
+        onMessage: (message) => received.push(message.text),
+        onError: (error) => errors.push(error),
+      },
+    });
+
+    return {
+      identity,
+      accountId,
+      deviceId,
+      client,
+      store,
+      manager,
+      errors,
+      received,
+      secrets,
+      /** What a restart would load: only ever what was handed to the callback. */
+      persisted: () => decodePreKeys(identity, persistedBlob),
+    };
+  }
+
+  it('rotates once the signed prekey is old, and not before', async () => {
+    const bob = await deviceWithPersistence('Bob');
+    const before = bob.secrets.signedPreKey.id;
+
+    // Fresh: nothing to rotate, and the clock starts.
+    expect(await bob.manager.rotateSignedPreKeysIfStale()).toBe(false);
+    expect(await bob.manager.rotateSignedPreKeysIfStale()).toBe(false);
+
+    // Old enough.
+    await bob.store.setMeta(
+      SIGNED_PREKEY_META_KEY,
+      String(Date.now() - SIGNED_PREKEY_ROTATION_MS - 1000),
+    );
+    expect(await bob.manager.rotateSignedPreKeysIfStale()).toBe(true);
+    expect(bob.persisted().signedPreKey.id).toBe(before + 1);
+    expect(bob.persisted().previousSignedPreKey?.id).toBe(before);
+    expect(bob.errors).toEqual([]);
+  }, 60_000);
+
+  it('still accepts a handshake from somebody holding the old bundle', async () => {
+    // Rotation is not instantaneous from outside: a sender may have fetched
+    // the bundle a minute before it was replaced. Dropping the old secret
+    // would turn their first message into one nobody can read.
+    const alice = await bringUp('Alice');
+    const bob = await deviceWithPersistence('Bob');
+
+    // Alice fetches the bundle and builds a session against it...
+    const bundle = await alice.client.fetchBundle(bob.accountId, bob.deviceId);
+    const oldSignedId = bundle.signedPreKey.id;
+
+    // ...and Bob rotates before her first message lands.
+    await bob.store.setMeta(
+      SIGNED_PREKEY_META_KEY,
+      String(Date.now() - SIGNED_PREKEY_ROTATION_MS - 1000),
+    );
+    expect(await bob.manager.rotateSignedPreKeysIfStale()).toBe(true);
+    expect(bob.persisted().signedPreKey.id).not.toBe(oldSignedId);
+
+    const init = initiateSession(alice.identity, bundle);
+    expect(() => acceptSession(bob.persisted(), init.init)).not.toThrow();
+  }, 60_000);
+
+  it('refuses a signed prekey two rotations old', async () => {
+    // One generation of grace, not two: a retained secret is a secret still
+    // worth stealing, and the window is the thing rotation exists to shrink.
+    const alice = await bringUp('Alice');
+    const bob = await deviceWithPersistence('Bob');
+
+    const bundle = await alice.client.fetchBundle(bob.accountId, bob.deviceId);
+    for (let i = 0; i < 2; i++) {
+      await bob.store.setMeta(
+        SIGNED_PREKEY_META_KEY,
+        String(Date.now() - SIGNED_PREKEY_ROTATION_MS - 1000),
+      );
+      expect(await bob.manager.rotateSignedPreKeysIfStale()).toBe(true);
+    }
+
+    const init = initiateSession(alice.identity, bundle);
+    expect(() => acceptSession(bob.persisted(), init.init)).toThrow(
+      /signed prekey this device does not hold/,
+    );
+  }, 60_000);
+
+  it('writes down the one-time secrets it publishes', async () => {
+    // The bug this callback exists for: the top-up generated a hundred new
+    // one-time secrets, published their public halves, and nothing stored
+    // them. After a restart the server was handing out keys this device no
+    // longer held.
+    const bob = await deviceWithPersistence('Bob');
+    expect(bob.persisted().oneTimePreKeys.size).toBe(3);
+
+    // Draw the pool down below the low-water mark.
+    for (let i = 0; i < 3; i++) {
+      const caller = await bringUp('Caller');
+      await caller.manager.sendMessage(bob.accountId, `merhaba ${i}`);
+      caller.socket.close();
+    }
+
+    expect(await bob.manager.topUpPreKeysIfLow()).toBe(true);
+    expect(bob.persisted().oneTimePreKeys.size).toBeGreaterThan(3);
+
+    // A device rebuilt from what was persisted — a restart — can still take a
+    // handshake against a freshly published one-time key.
+    const alice = await bringUp('Alice');
+    const bundle = await alice.client.fetchBundle(bob.accountId, bob.deviceId);
+    expect(bundle.oneTimePreKey).toBeDefined();
+
+    const init = initiateSession(alice.identity, bundle);
+    expect(() => acceptSession(bob.persisted(), init.init)).not.toThrow();
+
+    alice.socket.close();
+  }, 120_000);
 });

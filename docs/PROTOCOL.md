@@ -8,9 +8,9 @@ disagrees with the code, the document is right and the code is a bug.
 | Symbol | Meaning |
 |---|---|
 | `IK` | Long-term identity key pair (Ed25519 for signing, X25519 for DH via birational map) |
-| `SPK` | Signed prekey (X25519). Rotation is specified below and **not yet implemented** |
+| `SPK` | Signed prekey (X25519), rotated every 48h |
 | `OPK` | One-time prekey (X25519), consumed on use |
-| `PQSPK` | Signed post-quantum prekey (ML-KEM-768). Same: specified, not implemented |
+| `PQSPK` | Signed post-quantum prekey (ML-KEM-768), rotated every 48h |
 | `PQOPK` | One-time post-quantum prekey (ML-KEM-768), consumed on use |
 | `EK` | Ephemeral key pair, generated per handshake |
 | `DH(a, B)` | X25519 scalar multiplication |
@@ -20,15 +20,26 @@ disagrees with the code, the document is right and the code is a bug.
 All hashing is SHA-256. All KDFs are HKDF-SHA256. All AEAD is
 XChaCha20-Poly1305 (24-byte nonces, so random nonces are safe).
 
-> **Signed prekey rotation.** The intended interval is 48 hours: a signed
-> prekey is a long-lived secret whose whole purpose is a bounded lifetime, and
-> a compromise of one lets an attacker complete handshakes that used it. The
-> client does not rotate today. `signedPreKeyIsStale` exists and nothing calls
-> it, and `topUpPreKeysIfLow` republishes the same signed prekey rather than a
-> fresh one. Doing it properly needs the previous signed prekey retained for a
-> grace period, because `acceptSession` matches the prekey id and a peer that
-> fetched the old bundle would otherwise fail to complete a handshake. Tracked
-> in `docs/STATUS.md`.
+**Signed prekey rotation.** A signed prekey serves every sender who fetches a
+bundle, so its security argument is a bounded lifetime: replaced every 48
+hours, checked at startup and once a day.
+
+Rotation is not instantaneous from outside. Somebody may have fetched the old
+bundle a minute before it was replaced and be about to send with it, so the
+outgoing pair is retained for one more window and `acceptSession` will complete
+a handshake against either. Exactly one generation — two would double the
+window in which a stolen prekey is still useful, which is what rotation exists
+to shrink.
+
+One-time prekeys are not touched by a rotation. They are consumed individually
+and topped up on their own schedule, and discarding a hundred unused ones every
+two days would push every handshake in between onto the signed prekey and cost
+them their replay resistance.
+
+Whatever changes the secrets — a rotation or a top-up — has to reach disk
+before the public halves are useful. Publishing a key whose private half is
+lost on the next restart looks, to every sender who draws it, exactly like the
+recipient no longer exists.
 
 ## 1. Identity
 

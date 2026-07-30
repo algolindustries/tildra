@@ -112,6 +112,8 @@ import {
   ONE_TIME_PREKEY_TARGET,
   generatePreKeys,
   needsPreKeyTopUp,
+  rotateSignedPreKeys,
+  signedPreKeyIsStale,
 } from '../crypto/identity';
 import { frame, unframe } from '../crypto/wire';
 import { Conversation, Message, MessageState, StoredSession } from '../storage/db';
@@ -306,6 +308,8 @@ export interface ManagerEvents {
 const OWN_PROFILE_META_KEY = 'profile.v1';
 /** Shared with the app state, which writes it after verifying a lookup. */
 export const CHECKPOINT_META_KEY = 'transparency.checkpoint.v1';
+/** When the current signed prekey was generated, for the rotation clock. */
+export const SIGNED_PREKEY_META_KEY = 'prekeys.signedAt.v1';
 
 export interface ManagerOptions {
   identity: KeyPair;
@@ -327,6 +331,17 @@ export interface ManagerOptions {
    * device's address, which is the thing the ringing phase withholds.
    */
   stunUrls?: string[];
+  /**
+   * Called whenever this device's prekey secrets change — a one-time top-up or
+   * a signed-prekey rotation. The app persists them.
+   *
+   * Not optional in practice, and the reason is a bug that shipped: the top-up
+   * generated a hundred new one-time secrets, published their public halves,
+   * and nothing wrote the secrets to disk. On the next restart the server was
+   * still handing out keys this device no longer held, and every handshake
+   * that drew one failed with no way to tell why.
+   */
+  onPreKeysChanged?: (secrets: PreKeySecrets) => Promise<void>;
   /** How long a call rings before this device gives up. Injectable for tests. */
   ringingTimeoutMs?: number;
   /** Injectable for tests. */
@@ -346,6 +361,7 @@ export class SessionManager {
   private readonly onMailboxesChanged?: (mailboxes: string[]) => void;
   private readonly stunUrls: string[];
   private readonly ringingTimeoutMs: number;
+  private readonly onPreKeysChanged?: (secrets: PreKeySecrets) => Promise<void>;
   private preKeys: PreKeySecrets;
 
   constructor(options: ManagerOptions) {
@@ -359,6 +375,7 @@ export class SessionManager {
     this.onMailboxesChanged = options.onMailboxesChanged;
     this.stunUrls = options.stunUrls ?? [];
     this.ringingTimeoutMs = options.ringingTimeoutMs ?? CALL_RINGING_TIMEOUT_MS;
+    this.onPreKeysChanged = options.onPreKeysChanged;
     this.now = options.now ?? (() => Date.now());
     this.randomId = options.randomId ?? (() => toBase64(crypto.getRandomValues(new Uint8Array(16))));
   }
@@ -376,6 +393,11 @@ export class SessionManager {
    * nobody is listening.
    */
   async publishMailboxes(): Promise<string[]> {
+    // Startup and once a day, which is the cadence a 48-hour rotation needs.
+    await this.rotateSignedPreKeysIfStale().catch((err) =>
+      this.events.onError?.(err instanceof Error ? err : new Error(String(err))),
+    );
+
     const mailboxes = new Set<string>([contactInbox(this.identity.publicKey)]);
 
     const conversations = await this.activeAccountIds();
@@ -1940,7 +1962,57 @@ export class SessionManager {
         signature: toBase64(this.preKeys.signedPqPreKey.signature),
       },
     });
+
+    await this.persistPreKeys();
     return true;
+  }
+
+  /**
+   * Replace the signed prekeys once they are old enough.
+   *
+   * A signed prekey serves every sender who fetches this bundle and lives
+   * until it is replaced, so its whole security argument is a bounded
+   * lifetime. `docs/PROTOCOL.md` has specified 48 hours since the beginning;
+   * nothing rotated until now, which meant the bound was whatever the lifetime
+   * of the install happened to be.
+   *
+   * The outgoing pair is kept for one more window — see
+   * `PreKeySecrets.previousSignedPreKey`.
+   */
+  async rotateSignedPreKeysIfStale(): Promise<boolean> {
+    const raw = await this.store.getMeta(SIGNED_PREKEY_META_KEY);
+    const generatedAt = raw ? Number(raw) : undefined;
+
+    if (generatedAt === undefined || Number.isNaN(generatedAt)) {
+      // First run against a store that predates this: record now rather than
+      // rotating immediately. An install of unknown age is not evidence the
+      // key is old, and rotating every existing device at once on upgrade
+      // would strand every handshake in flight at that moment.
+      await this.store.setMeta(SIGNED_PREKEY_META_KEY, String(this.now()));
+      return false;
+    }
+    if (!signedPreKeyIsStale(generatedAt, this.now())) return false;
+
+    const { secrets, upload } = rotateSignedPreKeys(this.identity, this.preKeys);
+    // Published before it is adopted locally: if the upload fails, this device
+    // keeps serving the key the server is still handing out.
+    await this.client.publishKeys(upload);
+
+    this.preKeys = secrets;
+    await this.store.setMeta(SIGNED_PREKEY_META_KEY, String(this.now()));
+    await this.persistPreKeys();
+    return true;
+  }
+
+  private async persistPreKeys(): Promise<void> {
+    if (!this.onPreKeysChanged) return;
+    try {
+      await this.onPreKeysChanged(this.preKeys);
+    } catch (err) {
+      // Reported loudly rather than swallowed: secrets that were published but
+      // not stored are the shape of the bug this callback exists for.
+      this.events.onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
   }
 
   // -------------------------------------------------------------------------

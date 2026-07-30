@@ -15,6 +15,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Sealed sender, rotating mailboxes, contact inbox for first contact | done |
 | Encrypted local storage: keystore master key + vault-encrypted SQLite | done |
 | Session manager: fanout per device, identity-change blocking, prekey top-up | done |
+| Signed prekey rotation every 48h, with the replaced pair honoured for one more window, and every change to the secrets written to disk | done |
 | Screens: onboarding, chat list, conversation, safety number, profile, device link (both halves) | done |
 | Encrypted groups: sender keys, signed messages, rotation on removal | done |
 | Encrypted profiles (name, photo, about), mutual introduction on first contact | done |
@@ -38,7 +39,7 @@ tested by running the real Go server and pushing real traffic through it.
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 424 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 428 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -125,15 +126,6 @@ knowing before trusting a UI change.
   Xcode and Gradle over them to get an `.ipa` and an `.aab`. That needs the
   toolchains and has not been started. See `docs/REPRODUCIBLE_BUILDS.md`.
 
-- **Signed prekey rotation.** `docs/PROTOCOL.md` claimed a 48-hour rotation
-  that has never happened: `signedPreKeyIsStale` is called by nothing, and
-  `topUpPreKeysIfLow` republishes the same signed prekey rather than a fresh
-  one. The claim in the protocol document is now corrected rather than left
-  standing. Doing it needs the previous signed prekey retained for a grace
-  period — `acceptSession` matches the prekey id, so rotating without that
-  breaks every peer that fetched the old bundle. Found by
-  `mobile/scripts/unreferenced-exports.mjs`.
-
 ## Needs a human, not code
 
 - A domain. `tildra.chat` and `tildra.dev` were both free when the name was
@@ -162,6 +154,16 @@ knowing before trusting a UI change.
 - **`docs/THREAT_MODEL.md` lists what Tildra does not defend against.** If a
   change would move something off that list, or onto it, the doc changes in the
   same commit.
+- **Published key material must reach disk before it is published.** The
+  top-up generated a hundred one-time secrets, published their public halves,
+  and stored nothing; after a restart the server handed out keys the device no
+  longer held. Anything that changes `PreKeySecrets` goes through
+  `onPreKeysChanged`. The serialisation lives in `storage/prekeys.ts` rather
+  than in `state/app.ts` so it can be tested at all.
+- **A test that holds a live object is not testing persistence.** The first
+  version of the test above kept a reference to the secrets and passed with the
+  persistence call deleted, because the top-up mutates the same maps in place.
+  It serialises on the way in now. Run the negative control.
 - **`npm run check:reachable` looks for the recurring bug in this project.**
   Something that works, is tested, and cannot be reached from the app has
   shipped four times: device linking with only its approving half,
