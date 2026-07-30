@@ -610,6 +610,7 @@ the log it signs can be used to rewrite the whole thing.
 | Handle→key bindings | **yes, on purpose** | public append-only log; that is the point |
 | Who uploaded an attachment | **no** | no owner column, by design |
 | IP addresses | in memory only | never written to disk or logs |
+| Request URLs | not logged | the log records a route label — `/v1/keys/{}/{}` — never the identifiers in the path |
 
 ## 9. Cryptographic primitives
 

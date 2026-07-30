@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,8 +28,27 @@ import (
 	"github.com/tildra/tildra/server/internal/turn"
 )
 
+// safeBuffer collects log output from handler goroutines.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 type harness struct {
 	t        *testing.T
+	logs     *safeBuffer
 	srv      *httptest.Server
 	store    *memory.Store
 	client   *http.Client
@@ -104,7 +124,8 @@ func newHarnessWith(t *testing.T, configure func(*config.Config)) *harness {
 	if configure != nil {
 		configure(cfg)
 	}
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logs := &safeBuffer{}
+	log := slog.New(slog.NewTextHandler(logs, nil))
 	authn := auth.New(st)
 	hub := gateway.NewHub(st, log)
 	notifier := &push.Recording{}
@@ -117,7 +138,10 @@ func newHarnessWith(t *testing.T, configure func(*config.Config)) *harness {
 
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
-	return &harness{t: t, srv: srv, store: st, client: srv.Client(), notifier: notifier, tlog: tlog}
+	return &harness{
+		t: t, srv: srv, store: st, client: srv.Client(),
+		notifier: notifier, tlog: tlog, logs: logs,
+	}
 }
 
 func (h *harness) do(method, path, token string, body any) (*http.Response, []byte) {
@@ -1085,5 +1109,68 @@ func TestRecoveryBlobIsSizeBounded(t *testing.T) {
 		map[string]any{"blob": make([]byte, (256<<10)+1)})
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413", resp.StatusCode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// What ends up in the log
+// ---------------------------------------------------------------------------
+
+func TestLogNamesNobody(t *testing.T) {
+	// docs/THREAT_MODEL.md says IP addresses are never written to disk or
+	// logs, and the middleware was careful about that. It was not careful
+	// about the URL, and the URLs here carry account ids, device ids, handles,
+	// mailbox ids and the lookup id that addresses a recovery blob. A log file
+	// is a thing operators copy around and ship to a hosted collector.
+	h := newHarness(t)
+	alice := h.register("Alice")
+	bob := h.register("Bob")
+
+	// Every route whose path carries an identifier.
+	h.do(http.MethodGet, "/v1/keys/"+bob.accountID+"/"+bob.deviceID, alice.token, nil)
+	h.do(http.MethodGet, "/v1/devices/"+bob.accountID, alice.token, nil)
+	h.do(http.MethodGet, "/v1/handles/someonehandle", "", nil)
+	h.do(http.MethodGet, "/v1/recovery/"+strings.Repeat("a", 32), "", nil)
+	h.do(http.MethodGet, "/v1/attachments/some-attachment-id", alice.token, nil)
+
+	logs := h.logs.String()
+	for _, secret := range []string{
+		alice.accountID, alice.deviceID,
+		bob.accountID, bob.deviceID,
+		"someonehandle", strings.Repeat("a", 32), "some-attachment-id",
+	} {
+		if strings.Contains(logs, secret) {
+			t.Fatalf("the log names %q:\n%s", secret, logs)
+		}
+	}
+
+	// And it still says something worth logging.
+	if !strings.Contains(logs, "/v1/keys/{}/{}") {
+		t.Fatalf("the log does not say which route was hit:\n%s", logs)
+	}
+	if !strings.Contains(logs, "status=") || !strings.Contains(logs, "dur=") {
+		t.Fatalf("the log lost the status or the duration:\n%s", logs)
+	}
+}
+
+func TestLogDoesNotCarryTheClientAddress(t *testing.T) {
+	// The property the middleware always intended. httptest dials loopback,
+	// so an address that leaked would show up as 127.0.0.1.
+	h := newHarness(t)
+	h.register("Alice")
+
+	if strings.Contains(h.logs.String(), "127.0.0.1") {
+		t.Fatalf("the log carries the client address:\n%s", h.logs.String())
+	}
+}
+
+func TestAnUnroutedPathIsNotEchoed(t *testing.T) {
+	// An unmatched path is attacker-chosen text. Logging it turns the log into
+	// something a stranger can write to.
+	h := newHarness(t)
+	h.do(http.MethodGet, "/v1/../../etc/passwd-marker-unlikely", "", nil)
+
+	if strings.Contains(h.logs.String(), "marker-unlikely") {
+		t.Fatalf("the log echoed an unrouted path:\n%s", h.logs.String())
 	}
 }

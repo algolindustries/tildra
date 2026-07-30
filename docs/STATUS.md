@@ -165,6 +165,11 @@ knowing before trusting a UI change.
   version of the test above kept a reference to the secrets and passed with the
   persistence call deleted, because the top-up mutates the same maps in place.
   It serialises on the way in now. Run the negative control.
+- **The log is a place things leak into.** The middleware was careful never
+  to record the client IP and recorded `r.URL.Path` instead — and the paths
+  here carry account ids, device ids, handles, mailbox ids and the lookup id
+  that addresses a recovery blob. It logs a route label from an allowlist now,
+  and three tests hold it there.
 - **A privacy claim with no test is a comment.** The push payload has always
   been content-free and the `Notifier` interface takes only a token, so the
   server cannot pass content even by mistake — but nothing checked the bytes

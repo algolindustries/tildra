@@ -20,6 +20,7 @@ the one every centralised messenger asks you to ignore.
 | Message timing | **Yes.** See "What we don't defend against". |
 | Message size | Bucketed. Padding hides exact length, not order of magnitude. |
 | Your phone number | It was never collected. |
+| Who they can identify from a log file | A route label and a status. Account ids, device ids, handles, mailbox ids and recovery lookup ids all appear in request paths and none of them are logged — see `docs/PROTOCOL.md` §8. |
 
 **Active attack:** a hostile server can hand Alice a key bundle it controls
 instead of Bob's. This is the classic MITM, and the only real defence is out-of-band

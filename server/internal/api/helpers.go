@@ -81,21 +81,91 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// logging records method, path, status and duration — deliberately not the
-// client IP, per docs/PROTOCOL.md §8. If you add IPs here you have changed the
-// product's privacy claims, so change the docs too.
+// logging records the route, status and duration — deliberately not the
+// client IP, per docs/PROTOCOL.md §8, and deliberately not the URL.
+//
+// The URL is the part that is easy to get wrong, and this did: it logged
+// r.URL.Path, and the paths here carry account ids, device ids, handles,
+// mailbox ids and — since recovery landed — the lookup id that addresses
+// somebody's recovery blob. A log file is a place operators copy around,
+// grep, and ship to a hosted collector; putting those in it undoes the
+// property they were designed to have.
+//
+// What is logged is the matched route pattern, "GET /v1/keys/{accountId}/
+// {deviceId}", which says what happened and names nobody. A request that
+// matched nothing has no pattern and gets none: an unrouted path is
+// attacker-chosen text and does not belong in a log either.
+//
+// If you add the IP or the URL here you have changed the product's privacy
+// claims, so change the docs too — and the tests below will stop you first.
 func logging(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
+
 		log.Info("http",
 			"method", r.Method,
-			"path", r.URL.Path,
+			"route", routeLabel(r.URL.Path),
 			"status", rec.status,
 			"dur", time.Since(start).Round(time.Millisecond),
 		)
 	})
+}
+
+// knownRoutes is every path prefix this server serves, to two segments.
+//
+// An allowlist rather than a redaction rule, because a redaction rule has to
+// be right about every input and this only has to be right about a list that
+// sits next to the route table. Anything not on it is somebody else's text.
+var knownRoutes = map[string]bool{
+	"/healthz":                     true,
+	"/v1/accounts":                 true,
+	"/v1/auth/challenge":           true,
+	"/v1/auth/token":               true,
+	"/v1/auth/logout":              true,
+	"/v1/keys":                     true,
+	"/v1/devices":                  true,
+	"/v1/handle":                   true,
+	"/v1/handles":                  true,
+	"/v1/mailboxes":                true,
+	"/v1/messages":                 true,
+	"/v1/backup":                   true,
+	"/v1/recovery":                 true,
+	"/v1/push":                     true,
+	"/v1/attachments":              true,
+	"/v1/provisioning":             true,
+	"/v1/transparency/head":        true,
+	"/v1/transparency/consistency": true,
+	"/v1/transparency/entries":     true,
+	"/v1/turn":                     true,
+	"/v1/ws":                       true,
+}
+
+// routeLabel turns a request path into something safe to write down.
+//
+// The longest known prefix wins, so "/v1/auth/challenge" keeps all three
+// segments while "/v1/keys/ACCOUNT/DEVICE" keeps two. Everything past the
+// prefix is an identifier — an account, a device, a handle, a mailbox, an
+// attachment, a recovery lookup id — and none of them belong in a log. What
+// is left says which endpoint was hit and names nobody.
+func routeLabel(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 1 && parts[0] == "" {
+		return "(unrecognised)"
+	}
+
+	for depth := min(len(parts), 3); depth >= 1; depth-- {
+		prefix := "/" + strings.Join(parts[:depth], "/")
+		if !knownRoutes[prefix] {
+			continue
+		}
+		for range parts[depth:] {
+			prefix += "/{}"
+		}
+		return prefix
+	}
+	return "(unrecognised)"
 }
 
 type statusRecorder struct {
