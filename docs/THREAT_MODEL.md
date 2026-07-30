@@ -165,11 +165,11 @@ isn't there:
   person you are talking to can see where you are.
 - **Malicious client builds.** The Go server, `tildra-auditor` and the app's
   **JavaScript bundle** all build reproducibly, and CI proves it on every push.
-  That covers every line of cryptography Tildra runs. What it does not cover is
-  the **native shell** — the `.ipa` and `.aab` that Xcode and Gradle produce —
-  so an *installed* app is still something you trust the publisher for, even
-  though you can now check the JavaScript inside it against this source. A
-  narrowing, not a fix. See
+  So does the native project `expo prebuild` generates. That covers every line
+  of cryptography Tildra runs and the project it is compiled into. What it does
+  not cover is the **compilation itself** — the `.ipa` and `.aab` that Xcode
+  and Gradle produce — so an *installed* app is still something you trust the
+  publisher for. A narrowing, not a fix. See
   [`docs/REPRODUCIBLE_BUILDS.md`](REPRODUCIBLE_BUILDS.md).
 - **Legal compulsion of the operator.** We defend by not having the data — but a
   compelled operator can still be forced to log connection timing going forward,

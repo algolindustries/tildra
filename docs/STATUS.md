@@ -31,6 +31,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Call signalling carried end to end through `SessionManager`: ring all devices, first answer wins, busy, hangup | done |
 | Reproducible builds for the Go server and `tildra-auditor`, checked in CI | done |
 | Reproducible app JavaScript bundle including Hermes bytecode, iOS and Android, checked in CI | done |
+| Native iOS and Android projects generate identically from the same source, checked in CI | done |
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
@@ -92,11 +93,11 @@ knowing before trusting a UI change.
   hours, and a disagreement is a persistent alarm on the chat list. What is
   missing is somebody actually operating one, so the default configuration is
   empty and the machinery runs against nobody.
-- **Reproducible builds for the app's native shell.** The server, the auditor
-  and the app's JavaScript bundle — Hermes bytecode included — all reproduce,
-  checked in CI. The `.ipa` and `.aab` do not: that is Xcode and Gradle with
-  the Android SDK/NDK involved, and it is unstarted. See
-  `docs/REPRODUCIBLE_BUILDS.md`.
+- **Reproducible compilation of the app.** What now reproduces: the server,
+  the auditor, the app's JavaScript bundle with its Hermes bytecode, and the
+  Xcode and Gradle projects `expo prebuild` generates. What does not: running
+  Xcode and Gradle over them to get an `.ipa` and an `.aab`. That needs the
+  toolchains and has not been started. See `docs/REPRODUCIBLE_BUILDS.md`.
 
 ## Needs a human, not code
 

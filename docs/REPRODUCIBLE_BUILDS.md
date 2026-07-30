@@ -22,13 +22,26 @@ there. Two builds on different machines from different directories produce
 byte-identical `index.js` and `index.hbc`. `mobile/scripts/reproduce.sh`
 checks it and CI runs it for both iOS and Android on every push.
 
+**The generated native projects.** `expo prebuild` turns `app.json`, the
+installed packages and the config plugins into an Xcode project and a Gradle
+project. Two runs from different directories produce identical trees, checked
+by `mobile/scripts/reproduce-native.sh` in CI for both platforms.
+
+This is upstream of the part that is missing rather than a substitute for it,
+and it is worth having for that reason: if project generation were
+non-deterministic, no amount of work on the compilers afterwards could produce
+a reproducible app. The bundle identifier is pinned in `app.json` for the same
+reason — left out, `prebuild` invents `com.anonymous.<slug>`, and an identifier
+is part of what a build produces.
+
 ## What is not reproducible
 
-**The native app** — the `.ipa` and the `.aab`. Those come out of Xcode and
+**The compiled app** — the `.ipa` and the `.aab`. Those come out of Xcode and
 Gradle with the Android SDK and NDK involved, and making that byte-identical is
 a substantial piece of work that has not been started. So an *installed* Tildra
 app is still something you trust the publisher for, even though you can now
-check the JavaScript inside it against this source.
+check the JavaScript inside it, and the native project it was compiled from,
+against this source.
 
 That is a real narrowing rather than a solved problem, and
 `docs/THREAT_MODEL.md` says so in the same terms.
@@ -59,9 +72,14 @@ is then a constant rather than wherever the build happened to run.
 cd mobile
 npm ci
 npm run reproduce          # build twice from different paths, compare
+npm run reproduce:native   # generate the native projects twice, compare
 npm run bundle:release     # produce dist/bundle/index.js and index.hbc
 sha256sum dist/bundle/index.js dist/bundle/index.hbc
 ```
+
+`reproduce:native` works only in throwaway copies, never in the project
+directory: `expo prebuild` writes back to `app.json` and `package.json`, and
+the script would otherwise leave the checkout modified.
 
 ## Verifying a server binary
 

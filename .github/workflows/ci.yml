@@ -108,6 +108,12 @@ jobs:
       - name: Same, for Android
         run: ./scripts/reproduce.sh android
         working-directory: mobile
+      # Generating the native projects is upstream of compiling them. If this
+      # were non-deterministic, no work on Xcode or Gradle afterwards could
+      # produce a reproducible app.
+      - name: Native projects generate identically
+        run: ./scripts/reproduce-native.sh all
+        working-directory: mobile
 
   staticcheck:
     name: staticcheck
