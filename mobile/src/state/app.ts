@@ -700,6 +700,19 @@ export const useApp = create<AppState>((set, get) => ({
 
       recoveryTarget = { accountId: backup.accountId, deviceId: backup.deviceId, backupKey, lookupId };
       await startSession({ ...base, identity, preKeys: secrets, credentials }, set, get);
+
+      // Groups come back as membership, not as keys. Sender keys are per
+      // epoch and were on the device that is gone; a restored group is one
+      // this device can send to — which distributes a fresh chain — and can
+      // read from once each member next distributes theirs.
+      for (const group of backup.groups) {
+        await runtime!.db.saveGroup({
+          groupId: group.groupId,
+          name: group.name,
+          members: group.members,
+          createdAt: Date.now(),
+        });
+      }
       set({ phase: 'ready', accountId: backup.accountId });
       await get().refreshConversations();
     } catch (err) {

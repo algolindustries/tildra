@@ -40,7 +40,7 @@ tested by running the real Go server and pushing real traffic through it.
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 463 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 465 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -126,6 +126,14 @@ knowing before trusting a UI change.
   Xcode and Gradle projects `expo prebuild` generates. What does not: running
   Xcode and Gradle over them to get an `.ipa` and an `.aab`. That needs the
   toolchains and has not been started. See `docs/REPRODUCIBLE_BUILDS.md`.
+
+- **Telling a contact that a session is gone.** After a recovery the device
+  has the account and no ratchets. Sending works — it handshakes afresh — but a
+  contact who still holds a live session addresses a per-session mailbox this
+  device no longer registers, so their send fails with `404 unknown mailbox`
+  until they start a new session. It is loud rather than silent, which is the
+  right failure, but it needs a protocol message that says "my session is
+  gone, start again" and there is none. See `docs/PROTOCOL.md` §1.1.
 
 ## Needs a human, not code
 

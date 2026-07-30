@@ -197,3 +197,23 @@ describe('where the blob is published', () => {
     expect(lookupId).not.toBe(toHex(SEED).slice(0, 32));
   });
 });
+
+describe('what recovery can and cannot bring back', () => {
+  const backupKey = backupKeyFromSeed(SEED);
+
+  it('carries group membership, so a restored device knows its groups', () => {
+    const restored = openBackup(backupKey, sealBackup(backupKey, BACKUP));
+    expect(restored.groups[0].groupId).toBe('grp-1');
+    expect(restored.groups[0].members).toEqual([{ accountId: 'acct-bob', deviceId: 'd1' }]);
+  });
+
+  it('carries no keys of any kind', () => {
+    // Not contact identity keys — a stolen phrase could otherwise pin somebody
+    // to a key of the thief's choosing — and not sender keys, which belong to
+    // an epoch that ended with the device.
+    const serialised = JSON.stringify(openBackup(backupKey, sealBackup(backupKey, BACKUP)));
+    for (const field of ['identityKey', 'senderKey', 'ratchet', 'secretKey', 'chainKey']) {
+      expect(serialised, `backup mentions ${field}`).not.toContain(field);
+    }
+  });
+});

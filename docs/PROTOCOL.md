@@ -132,6 +132,29 @@ The blob is republished when what it holds changes — a new contact, a new
 group — rather than on a timer. A stale blob recovers somebody into an empty
 app.
 
+**What recovery does not bring back, and what that costs.**
+
+A recovered device has the account and the contact list. It has no session
+state: no ratchets, no per-session mailboxes, no sender keys. Three
+consequences, all of them visible rather than silent:
+
+- *Sending works.* No session means the next message establishes one from a
+  fresh bundle, which is the ordinary first-contact path.
+- *A contact with a live session cannot reach you until they start a new one.*
+  They are addressing a per-session mailbox derived from a secret this device
+  no longer has, so it is not registered and the server answers `404 unknown
+  mailbox`. Their send fails loudly. The stable contact inbox is derived from
+  the identity key and does survive, so a contact who has no session — or
+  whose session is reset — reaches you immediately.
+- *Groups come back as membership, not as keys.* Sender keys belong to an
+  epoch that ended with the device. A restored group is one you can send to,
+  which distributes a fresh chain, and one you can read from once each member
+  next distributes theirs.
+
+Closing the second of these needs a way to tell a peer "my session is gone,
+start again", which is a protocol message that does not exist. It is in
+`docs/STATUS.md`.
+
 ## 2. Session establishment — PQXDH-hybrid
 
 Alice wants to message Bob. She fetches a prekey bundle for each of Bob's devices:
