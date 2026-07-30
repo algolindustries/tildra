@@ -545,3 +545,79 @@ describe('registration proof', () => {
     expect(verify(generateIdentity().publicKey, message, fromBase64(proof))).toBe(false);
   });
 });
+
+describe('what an envelope size tells an observer', () => {
+  // The claim in the README's comparison table and docs/THREAT_MODEL.md: the
+  // server sees a bucket, not a length. The bucket function is tested above;
+  // this is about the thing that actually crosses the wire, which is where a
+  // change to the content encoding — or somebody dropping the padding for
+  // efficiency — would show up.
+  //
+  // An envelope is a padded payload plus a fixed header: the ephemeral key,
+  // the nonce and the tag. That constant is the same for every envelope and
+  // reveals nothing, so the observable value is `bucket + overhead` rather
+  // than `bucket`.
+  const recipient = generateIdentity();
+
+  function envelopeFor(text: string): Uint8Array {
+    return sealEnvelope(recipient.publicKey, {
+      senderAccountId: '0123456789ABCDEFGHJKMNPQRS',
+      senderDeviceId: 'DEVICE0123456789ABCDEFGHJK',
+      senderIdentityKey: randomBytes(32),
+      // A ratchet body is the ciphertext of the message, so it grows with it.
+      message: { header: randomBytes(80), body: randomBytes(text.length + 16) },
+    });
+  }
+
+  it('gives the same size to messages of very different lengths', () => {
+    // Two messages a person would consider completely different, inside one
+    // bucket: "ok" and a sentence.
+    expect(envelopeFor('ok').length).toBe(
+      envelopeFor('hayır, ve nedenini biraz sonra anlatacağım').length,
+    );
+  });
+
+  it('collapses four hundred lengths into a handful of sizes', () => {
+    const sizes = new Set<number>();
+    for (let length = 1; length <= 400; length += 1) {
+      sizes.add(envelopeFor('x'.repeat(length)).length);
+    }
+    // The exact count is not the point; that it is tiny is. A regression that
+    // removed the padding would make this 400.
+    expect(sizes.size).toBeLessThanOrEqual(3);
+  });
+
+  it('moves in bucket-sized steps and nothing finer', () => {
+    // Every observable size differs from every other by a bucket boundary,
+    // so the gap between two sizes is never one byte of message.
+    const sizes = [...new Set([1, 100, 300, 900, 2000, 5000].map((n) => envelopeFor('x'.repeat(n)).length))].sort(
+      (a, b) => a - b,
+    );
+    for (let i = 1; i < sizes.length; i++) {
+      expect(sizes[i] - sizes[i - 1]).toBeGreaterThanOrEqual(256);
+    }
+  });
+
+  it('still hides the length within a larger bucket', () => {
+    // Crossing into the next bucket is visible — the threat model says
+    // padding hides exact length, not order of magnitude — but inside one,
+    // nothing is.
+    expect(envelopeFor('x'.repeat(1500)).length).toBe(envelopeFor('y'.repeat(2500)).length);
+  });
+
+  it('does not vary with who the sender says they are', () => {
+    // Account ids are fixed-width today. A future change to a
+    // variable-length identifier would leak its length through the envelope,
+    // and this is where that would show up.
+    const fixed = { senderIdentityKey: randomBytes(32), message: { header: randomBytes(80), body: randomBytes(40) } };
+    expect(
+      sealEnvelope(recipient.publicKey, { senderAccountId: 'A', senderDeviceId: 'B', ...fixed }).length,
+    ).toBe(
+      sealEnvelope(recipient.publicKey, {
+        senderAccountId: '0123456789ABCDEFGHJKMNPQRS',
+        senderDeviceId: 'DEVICE0123456789ABCDEFGHJK',
+        ...fixed,
+      }).length,
+    );
+  });
+});

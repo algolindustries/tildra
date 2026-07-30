@@ -40,7 +40,7 @@ tested by running the real Go server and pushing real traffic through it.
 | TURN relay credentials: `GET /v1/turn`, unlinkable to an account, and an ICE configuration that will not downgrade a relay-only phase | done |
 | Call driver: peer-connection sequencing and the ICE ordering hazards, tested against a fake peer connection | done |
 
-Counts at time of writing: 468 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 473 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -165,6 +165,11 @@ knowing before trusting a UI change.
   version of the test above kept a reference to the secrets and passed with the
   persistence call deleted, because the top-up mutates the same maps in place.
   It serialises on the way in now. Run the negative control.
+- **Test the thing that crosses the wire, not the helper.** `bucketSize` and
+  `pad` were well tested and nothing checked an actual envelope. Writing that
+  test found the claim was true and my expectation of it was wrong — the
+  observable size is the bucket plus a constant header, not the bucket — which
+  is the kind of thing worth knowing before reading a packet capture.
 - **The log is a place things leak into.** The middleware was careful never
   to record the client IP and recorded `r.URL.Path` instead — and the paths
   here carry account ids, device ids, handles, mailbox ids and the lookup id

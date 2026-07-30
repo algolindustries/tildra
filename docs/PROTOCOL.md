@@ -418,6 +418,13 @@ key that would let it re-key anyone into their own history.
 - **Padding:** all envelopes are padded to bucketed sizes (256 B, 1 KiB, 4 KiB,
   16 KiB, 64 KiB, then 64 KiB increments) so ciphertext length leaks little.
 
+  What an observer measures is `bucket + a fixed header` — the ephemeral key,
+  the nonce and the tag — the same constant for every envelope, revealing
+  nothing. Four hundred distinct message lengths collapse into three
+  observable sizes, and the gap between any two of them is a bucket boundary
+  rather than a byte of message. Worth knowing before reading a packet
+  capture and concluding the padding is missing.
+
 ## 7. Key verification
 
 Two users verify each other by comparing a **safety number**: a 60-digit code
