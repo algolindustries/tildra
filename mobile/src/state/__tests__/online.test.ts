@@ -126,6 +126,27 @@ vi.mock('expo-sqlite', () => ({
   },
 }));
 
+/**
+ * The picker, at the module boundary `photo.test.ts` already owns.
+ *
+ * `sendPhoto` calls `pickPhoto` and hands the bytes to the manager. The
+ * shrink-and-compress pipeline behind it, and the encodes it must not leave in
+ * the cache directory, are that file's subject; what is untested is everything
+ * after — encryption, upload, the reference that travels in the message, and
+ * the other device getting the same bytes back.
+ */
+const photo = {
+  next: null as { bytes: Uint8Array; mimeType: string; width: number; height: number } | null,
+};
+
+vi.mock('../../media/photo', () => ({
+  PHOTO_DIMENSION: 1600,
+  MAX_PHOTO_BYTES: 4 * 1024 * 1024,
+  async pickPhoto() {
+    return photo.next;
+  },
+}));
+
 vi.mock('../../push/register', () => ({
   PushError: class extends Error {},
   async registerForPush() {
@@ -923,4 +944,71 @@ describeOnline('a group, and someone taken out of it', () => {
     // than a wipe of her side.
     expect(await hasInGroup(carol.app, 'herkese merhaba')).toBe(true);
   }, 180_000);
+});
+
+describeOnline('a photo across two devices', () => {
+  /** Distinctive enough that an equality check means something. */
+  function anImage(size = 5000): Uint8Array {
+    const bytes = new Uint8Array(size);
+    for (let i = 0; i < size; i++) bytes[i] = (i * 31 + 7) % 256;
+    return bytes;
+  }
+
+  it('arrives as the same bytes on the other side', async () => {
+    const alice = await signedUp(newDevice('pa'), 'Alice iPhone', 'Ayşe');
+    const bob = await signedUp(newDevice('pb'), 'Bob Pixel', 'Bora');
+
+    await alice.app.useApp.getState().startConversation(bob.accountId);
+    await alice.app.useApp.getState().openConversation(bob.accountId);
+    await alice.app.useApp.getState().send('bak');
+
+    const original = anImage();
+    photo.next = { bytes: original, mimeType: 'image/jpeg', width: 800, height: 600 };
+    await alice.app.useApp.getState().sendPhoto();
+
+    // The sender's own row carries the reference, and the dimensions the
+    // bubble lays out from before anything is downloaded.
+    const mine = alice.app.useApp.getState().messages.find((m) => m.attachment);
+    expect(mine).toBeDefined();
+    expect(mine!.attachment?.mimeType).toBe('image/jpeg');
+    expect(mine!.attachment?.width).toBe(800);
+    expect(mine!.attachment?.height).toBe(600);
+
+    // Bob gets a message with an attachment he has not fetched yet.
+    await waitFor(async () => {
+      await bob.app.useApp.getState().openConversation(alice.accountId);
+      return bob.app.useApp.getState().messages.some((m) => m.attachment && !m.outgoing);
+    });
+    const his = bob.app.useApp.getState().messages.find((m) => m.attachment && !m.outgoing)!;
+    expect(his.attachment?.width).toBe(800);
+
+    // Pressing play or tapping the bubble is what fetches it.
+    const fetched = await bob.app.useApp.getState().loadAttachment(his.id);
+
+    expect(fetched).not.toBeNull();
+    expect(Array.from(fetched!)).toEqual(Array.from(original));
+  }, 180_000);
+
+  it('does nothing at all when the picker is cancelled', async () => {
+    // Cancelling is not an error and must not surface as one, and it must not
+    // leave a message behind either.
+    const alice = await signedUp(newDevice('pc'), 'Alice iPhone', 'Ayşe');
+    const bobId = await registerContact('Bob Pixel');
+
+    await alice.app.useApp.getState().startConversation(bobId);
+    await alice.app.useApp.getState().openConversation(bobId);
+    const before = alice.app.useApp.getState().messages.length;
+    // Captured rather than asserted against null: `error` collects anything
+    // the store is doing, so what matters is that *this* action did not add to
+    // it. Without the comparison the test passes even with the early return
+    // deleted, because the throw that follows is caught and leaves the message
+    // list alone either way.
+    const errorBefore = alice.app.useApp.getState().error;
+
+    photo.next = null;
+    await alice.app.useApp.getState().sendPhoto();
+
+    expect(alice.app.useApp.getState().messages).toHaveLength(before);
+    expect(alice.app.useApp.getState().error).toBe(errorBefore);
+  }, 120_000);
 });

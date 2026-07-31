@@ -214,6 +214,29 @@ holds an invariant, that is the signal.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **Attachments now cross two devices in a test, and nothing was wrong.**
+  `sendPhoto` and `loadAttachment` were the last two network paths in `app.ts`
+  with no coverage. A photo goes from one store to the other through the real
+  server — encrypted, uploaded, referenced in the message, downloaded and
+  decrypted — and the bytes come back identical. The dimensions travel in the
+  message rather than the blob, so the bubble can lay out before anything is
+  fetched; that is asserted on both ends.
+
+  No defect. Worth recording as such: the value of the turn was the coverage,
+  and reaching for a finding where there is none is how a test suite fills up
+  with assertions nobody believes.
+
+  The picker is mocked at the module boundary `photo.test.ts` already owns, so
+  this does not re-test the shrink-and-compress pipeline — only everything
+  after it.
+
+  The cancellation case needed a second assertion to be worth anything.
+  "Cancelling adds no message" passes with the early return deleted, because
+  the throw that follows is caught and leaves the message list alone. It now
+  also captures `error` before the action and requires it unchanged — a
+  comparison rather than `toBeNull()`, since that field collects whatever else
+  the store is doing.
+
 - **A group you had just made could not be opened, used or seen.**
   `SessionManager.createGroup` saved the group, made a sender key and
   distributed it — and did not create the conversation row the messages live
