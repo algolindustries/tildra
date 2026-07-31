@@ -260,10 +260,17 @@ A message envelope the server sees:
 ```
 
 The sender's identity is encrypted to the recipient's identity key, not attached
-to the envelope. To stop this from becoming an open spam relay, the sender proves
-they're a real account with a **blind-signed delivery token**: the server issues
-tokens via a blind RSA signature, so it can verify a token is valid without
-linking it to who it was issued to.
+to the envelope. What stops this from being an open relay is ordinary
+authentication: `POST /v1/messages` sits behind the bearer token, so the server
+knows the request came from a real account.
+
+That is weaker than sealed sender is usually taken to mean, and saying so is
+the point of this paragraph. The envelope does not name the sender; **the
+request does**. A server that wanted to could link every delivery to the
+account that made it. Unlinkable delivery — a blind-signed token that proves an
+account without naming one — would close that, and is **not implemented**. It
+was described here as though it were, which is the kind of claim this document
+exists to avoid; see §11.
 
 ### 5.1 Mailbox addressing
 
@@ -635,7 +642,6 @@ the log it signs can be used to rewrite the whole thing.
 | Hash | SHA-256 |
 | KDF | HKDF-SHA256 |
 | Password/phrase stretching | Argon2id (64 MiB, t=3, p=4) |
-| Blind signatures (delivery tokens) | RSA-PSS blind signatures (RFC 9474) |
 
 No primitive here is novel. That is the point.
 
@@ -809,12 +815,18 @@ Stated up front, because a protocol document that only lists strengths is
 marketing:
 
 - Sender keys give weaker post-compromise security in large groups than MLS.
-- Sealed sender does not hide traffic *timing*. A global passive adversary
-  correlating timing across the network can still infer who talks to whom.
+- Sealed sender hides the sender from the *envelope*, not from the *request*.
+  Delivery is authenticated with the sender's own bearer token, so the server
+  can link a sender to the mailbox they deliver to. §5 described a blind-signed
+  delivery token that would remove that link; it is designed and not built.
+- Sealed sender does not hide traffic *timing* either. A global passive
+  adversary correlating timing across the network can still infer who talks to
+  whom.
 - Push notifications route through APNs/FCM, which leaks delivery timing to
   Apple/Google. Payloads carry no content, only a wake signal.
-- The call *media path* above is specified and its signalling logic is
-  implemented and tested, but no media has ever flowed: there is no
-  `react-native-webrtc` integration and no TURN deployment yet. Nothing in §10
-  should be read as "calls work".
+- The call *media path* above is specified, its signalling logic is implemented
+  and tested, and `session/webrtc-peer.ts` now adapts it to
+  `react-native-webrtc` — but no media has ever flowed. There is no TURN
+  deployment and nothing has run on a device; the adapter is tested against a
+  double. Nothing in §10 should be read as "calls work".
 - Not yet audited.

@@ -13,7 +13,7 @@ the one every centralised messenger asks you to ignore.
 | The operator wants | They get |
 |---|---|
 | Message content | Nothing. No key material capable of decryption exists server-side. |
-| Who sent a message | Nothing. Sealed sender puts the sender identity inside the ciphertext. |
+| Who sent a message | The account that delivered it. The envelope carries no sender — that is inside the ciphertext — but `POST /v1/messages` is authenticated, so the *request* identifies the sender even though the payload does not. This row used to say "Nothing", which was true only of a blind-signed delivery token that was never built. See `docs/PROTOCOL.md` §5 and §11. |
 | Who received a message | A mailbox ID, which rotates daily and is not linkable to an account without the recipient's cooperation. |
 | The social graph | Nothing durable. Contact lists live on the client; the backup blob is opaque. |
 | Group membership | Group size (fanout count) and nothing else. |

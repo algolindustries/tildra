@@ -59,6 +59,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Identifier generation: the Crockford alphabet, hand-computed encoder vectors, every input bit reaching the output, and confusable glyphs mapped where a human types them | done |
 | Configuration: defaults, every variable read, malformed values named, and a bound of zero or less refused rather than silently inverting the limit | done |
 | The conformance suite covers every `store.Store` method, enforced by a test rather than by a rule in this file, with the provisioning channel included | done |
+| `PROTOCOL.md` §9 checked against the code: no primitive named without an implementation, none implemented without a row, and the Argon2id costs pinned to the constants | done |
 
 Counts at time of writing: 700 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
@@ -230,6 +231,41 @@ holds an invariant, that is the signal.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **The threat model promised something the code does not do.** Its table of
+  what the server learns had a row reading "Who sent a message — **Nothing.**
+  Sealed sender puts the sender identity inside the ciphertext." The first half
+  is true and the conclusion is not: `POST /v1/messages` sits behind the bearer
+  token, so the server learns exactly which account delivered each envelope. It
+  does not learn the sender *from the payload*; it learns them *from the
+  request*.
+
+  The claim traced back to one unbuilt mechanism. `PROTOCOL.md` §5 described the
+  sender proving they are a real account with a **blind-signed delivery token**,
+  and §9's primitives table listed "RSA-PSS blind signatures (RFC 9474)".
+  Neither exists — no blind signature, no delivery token, nothing in the client
+  or the server. A primitive named in a table had propagated into the guarantee
+  a user is told to read, which is the most consequential direction a
+  documentation error can travel.
+
+  All three are corrected: §5 says what actually stops an open relay and that
+  unlinkable delivery is designed and not built, §9 loses the row, and §11 gains
+  the limitation. The threat-model row now says what the server learns and why
+  it used to say otherwise. §11's line about there being "no
+  `react-native-webrtc` integration" was stale too and is fixed in the same
+  pass — the adapter exists and is tested against a double; what is missing is
+  a TURN deployment and a device.
+
+  `crypto/__tests__/protocol-doc.test.ts` is the guard. It parses §9 and fails
+  on a primitive with no implementing symbol under `src/crypto`, on a primitive
+  that is implemented but no longer documented, and on Argon2id parameters that
+  disagree with the constants in `recovery.ts` — the row most likely to drift
+  quietly, since its numbers are what a reviewer would use to judge whether a
+  stolen phrase is worth grinding. Restoring the blind-signature row turns it
+  red, which is to say the guard would have caught this.
+
+  What it proves is narrow and worth stating: that every primitive named is used
+  somewhere, not that it is used correctly. The rest of `crypto/` is for that.
+
 - **The CI workflow was audited against what this file claims, and holds.**
   Every "checked in CI" row maps to a step: `reproduce.sh` covers both
   `tildrad` and `tildra-auditor`, the app bundle is built twice for iOS and
