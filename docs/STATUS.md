@@ -48,8 +48,9 @@ tested by running the real Go server and pushing real traffic through it.
 | Media adapter logic: ICE restart on widening, candidate filtering, connection-state mapping, teardown order — against a double of `react-native-webrtc`, not a device | done |
 | Push registration and, more to the point, what a sign-out leaves on the device | done |
 | The platform keystore: key persistence across runs, the accessibility option on every call, and erasing under a keychain that refuses | done |
+| Voice recording: the duration cap against the audio it actually produces, and the plaintext capture removed on every path out | done |
 
-Counts at time of writing: 641 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 656 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -202,6 +203,46 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **Every voice message ever recorded was still on the disk, unencrypted.**
+  The platform writes the microphone capture to app storage as a plain .m4a.
+  `stop()` read it, encrypted the bytes, sent them — and left the file. So did
+  `cancel()`, which is worse: the user slid to cancel and the audio stayed
+  anyway. Nothing anywhere deleted it.
+
+  `db.ts` goes to real lengths to make sure a forensic image of this device
+  finds nothing legible, and there is a test that dumps every row to prove it.
+  This walked around all of it. `VoiceBubble` already deletes the file it
+  writes to play a *received* note, with the comment "the plaintext audio does
+  not linger on disk after playback" — recording was the other half of that
+  sentence and nobody wrote it.
+
+  Deleted now on every path out: sent, cancelled, mis-tapped, and in a
+  `finally` so a read that throws does not leave it behind either. A file that
+  will not delete does not turn a sent message into a failed one.
+
+- **The five-minute cap only shortened the number, not the recording.** At the
+  cap the metering interval cleared itself and the recorder kept running. The
+  duration was clamped with `Math.min`, so a twenty-minute hold produced
+  twenty minutes of audio labelled `5:00`, under a waveform drawn from the
+  first five.
+
+  That duration is not cosmetic: it travels in the message rather than the
+  blob, and it is what `VoiceBubble` renders and what `playbackProgress` uses
+  — so the receiver saw a note that kept playing long past the end of its own
+  progress bar. The validation in `attachment.ts` did not catch it either,
+  because its ceiling is an hour and the sender was reporting five minutes.
+
+  The cap stops the recorder now. Stopping is memoised as a promise rather
+  than a boolean, because the cap and the user releasing the button can both
+  reach it, and `recorder.uri` is only trustworthy once the recorder has
+  actually finished — a flag would let the second caller past mid-flush.
+
+  Both found by writing the first tests `media/voice.ts` has ever had.
+  `waveform.ts`, the arithmetic, was already covered; what was not was the
+  part that touches the microphone, the clock and the file. Two of those three
+  were wrong. The recorder double throws when stopped twice, the way a real
+  one does, so "stopped once" is observed rather than assumed.
+
 - **The wipe gave up halfway, twice, on the same two lines.** `eraseKeystore`
   was two bare awaits in a row — delete the master key, then delete the
   credentials. A keychain that refused the first call meant the second never
