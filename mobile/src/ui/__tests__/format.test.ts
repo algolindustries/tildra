@@ -205,6 +205,51 @@ describe('account identifiers', () => {
     });
   });
 
+  it('maps the glyphs the alphabet was designed to let people confuse', () => {
+    // The ID alphabet excludes I, L, O and U precisely so these can be mapped
+    // back. Until this existed, an ID read aloud over a phone and typed with an
+    // O for a zero failed the length-and-alphabet test and was sent to a handle
+    // lookup — and the user was told the person does not exist.
+    expect(parseContactInput('O123456789ABCDEFGHJKMNPQRS')).toEqual({
+      kind: 'accountId',
+      value: '0123456789ABCDEFGHJKMNPQRS',
+    });
+    expect(parseContactInput('0I23456789ABCDEFGHJKMNPQRS')).toEqual({
+      kind: 'accountId',
+      value: '0123456789ABCDEFGHJKMNPQRS',
+    });
+    // Lowercase too, which is how it is actually typed.
+    expect(parseContactInput('0l23456789abcdefghjkmnpqrs')).toEqual({
+      kind: 'accountId',
+      value: '0123456789ABCDEFGHJKMNPQRS',
+    });
+  });
+
+  it('maps every excluded glyph, and only those', () => {
+    // Exhaustive over the four the design names, rather than the one anyone
+    // would think to write down. U is excluded outright rather than confusable
+    // with anything, so a string carrying one is not an ID.
+    const body = '123456789ABCDEFGHJKMNPQRS'; // 25 characters
+    for (const [typed, want] of [
+      ['I', '1'],
+      ['L', '1'],
+      ['O', '0'],
+    ] as const) {
+      expect(parseContactInput(typed + body)).toEqual({
+        kind: 'accountId',
+        value: want + body,
+      });
+    }
+    expect(parseContactInput('U' + body).kind).toBe('handle');
+  });
+
+  it('does not remap a handle', () => {
+    // 'olivia' must not become '0livia'. The mapping belongs to the account-ID
+    // candidate only.
+    expect(parseContactInput('@Olivia')).toEqual({ kind: 'handle', value: 'olivia' });
+    expect(parseContactInput('olivia')).toEqual({ kind: 'handle', value: 'olivia' });
+  });
+
   it('treats ambiguous input as a handle', () => {
     // Wrong length, so it cannot be an account ID. Treating it as a handle
     // gives a "no such handle" the user can act on, rather than a lookup that

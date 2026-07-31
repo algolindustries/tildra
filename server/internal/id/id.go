@@ -8,7 +8,6 @@ package id
 
 import (
 	"crypto/rand"
-	"errors"
 	"strings"
 )
 
@@ -50,35 +49,4 @@ func encode(src []byte) string {
 		sb.WriteByte(alphabet[(acc<<(5-bits))&0x1f])
 	}
 	return sb.String()
-}
-
-// ErrInvalid is returned by Normalize for strings that cannot be an ID.
-var ErrInvalid = errors.New("invalid identifier")
-
-// Normalize canonicalises user-typed IDs: uppercases, strips hyphens and
-// spaces, and maps the glyphs humans confuse (I, L → 1; O → 0). It does not
-// check length, because different ID kinds have different lengths.
-func Normalize(s string) (string, error) {
-	var sb strings.Builder
-	sb.Grow(len(s))
-	for _, r := range strings.ToUpper(s) {
-		switch r {
-		case '-', ' ', '_':
-			continue
-		case 'I', 'L':
-			r = '1'
-		case 'O':
-			r = '0'
-		case 'U':
-			return "", ErrInvalid // U is excluded outright, not remapped
-		}
-		if !strings.ContainsRune(alphabet, r) {
-			return "", ErrInvalid
-		}
-		sb.WriteRune(r)
-	}
-	if sb.Len() == 0 {
-		return "", ErrInvalid
-	}
-	return sb.String(), nil
 }

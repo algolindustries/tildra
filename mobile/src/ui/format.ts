@@ -130,7 +130,23 @@ export function parseContactInput(input: string): { kind: 'handle' | 'accountId'
   if (trimmed.startsWith('@')) {
     return { kind: 'handle', value: trimmed.slice(1).toLowerCase() };
   }
-  const compact = trimmed.replace(/[\s-]/g, '').toUpperCase();
+  // The account ID alphabet leaves out I, L, O and U so that the glyphs people
+  // confuse can be mapped back rather than guessed at — that is what makes an
+  // ID readable aloud over a phone call, which is the only way anyone hands one
+  // over. Nothing did the mapping. An ID read out and typed with an O for a
+  // zero, or a lowercase l for a one, failed the test below and fell through to
+  // a handle lookup that cannot succeed, and the user was told the person does
+  // not exist. The server has carried this mapping in `id.Normalize` since the
+  // beginning and calls it from nowhere, because the place a human types an ID
+  // is here.
+  //
+  // U is not remapped: it is excluded outright rather than confusable with
+  // anything, so a string containing one is not an ID and falls through.
+  const compact = trimmed
+    .replace(/[\s-]/g, '')
+    .toUpperCase()
+    .replace(/[IL]/g, '1')
+    .replace(/O/g, '0');
   if (/^[0-9A-HJKMNP-TV-Z]{26}$/.test(compact)) {
     return { kind: 'accountId', value: compact };
   }

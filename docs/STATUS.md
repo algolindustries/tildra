@@ -56,6 +56,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Two devices through the real server, driven entirely through the store: delivery, the reply, the shared safety number, and the handle path with its downgrade refusal | done |
 | Server authentication: the registration proof, challenge single-use and device binding, domain separation on both signature contexts, token storage by hash, and the middleware | done |
 | The WebSocket hub: backlog drain, live delivery, a closed socket leaving the listener set, and refusing both a subscribe and an ack for a mailbox the connection does not own | done |
+| Identifier generation: the Crockford alphabet, hand-computed encoder vectors, every input bit reaching the output, and confusable glyphs mapped where a human types them | done |
 
 Counts at time of writing: 700 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
@@ -216,6 +217,35 @@ holds an invariant, that is the signal.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **An account ID read aloud over the phone could not be typed back in.** The
+  ID alphabet excludes I, L, O and U so that the glyphs people confuse can be
+  mapped back rather than guessed at — `internal/id`'s doc comment says the
+  point of the whole scheme is that an ID is "readable aloud over a phone call
+  without a spelling alphabet". The server has carried that mapping in
+  `id.Normalize` since the beginning and calls it from **nowhere**, because the
+  place a human types an ID is the client. And `parseContactInput` did not map
+  anything.
+
+  So an ID read out and typed with an O for a zero, or a lowercase l for a one,
+  failed the length-and-alphabet test and fell through to a handle lookup —
+  and the user was told the person does not exist. The one property the
+  alphabet is chosen for was not delivered anywhere.
+
+  The mapping is in `parseContactInput` now, on the account-ID candidate only,
+  so a handle called "olivia" does not become "0livia". U is not remapped: it
+  is excluded outright rather than confusable with anything, so a string
+  carrying one is not an ID and still falls through. `id.Normalize` and
+  `id.ErrInvalid` are deleted — unreachable behaviour is deleted or wired up,
+  and it cannot be wired up on a server that never sees user-typed IDs.
+
+  Found by writing the first tests for `internal/id`, which is also now covered
+  for the two things a round trip cannot show, since there is no decoder: that
+  the alphabet is the one the design names, and that **every one of the 128
+  input bits reaches the output** — checked over all 128 positions rather than
+  a few samples, because an encoder that drops the tail loses entropy while
+  every ID it produces still looks exactly right. The negative control that
+  removes the tail turns four tests red.
+
 - **`internal/gateway` had no tests either, only whatever the client suites
   happened to drive through it.** It has ten now, over a real WebSocket against
   an `httptest` server and the real in-memory store. `Conn` is built inside
