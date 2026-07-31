@@ -1136,18 +1136,52 @@ async function startSession(
     },
   });
 
-  await manager.publishMailboxes();
+  /**
+   * Register this device's addresses with the server.
+   *
+   * Reported rather than thrown, and this is the whole point. Everything else
+   * in this function that touches the network is deliberately non-blocking —
+   * the socket reconnects on its own, push registration is best effort, the
+   * auditor check must not hold up the app — and this one call was awaited, so
+   * a plane, a tunnel or an hour of server downtime looked exactly like a
+   * broken install: bootstrap threw, the phase went to `error`, and the user
+   * could not read the messages already sitting decryptable on their own
+   * device.
+   *
+   * It still has to happen or nobody can reach this device, so a failure is
+   * retried when the socket reports it is open — which is the app's existing
+   * signal that the network came back.
+   */
+  let published = false;
+  const publishMailboxes = async (): Promise<void> => {
+    try {
+      await manager.publishMailboxes();
+      published = true;
+    } catch (err) {
+      set({ error: describeError(err, get().t) });
+    }
+  };
 
   socket = new TildraSocket(parts.serverUrl, parts.credentials.token, {
     onEnvelope: async (envelope) => {
       await manager.receiveEnvelope(envelope);
     },
-    onStateChange: (socketState) => set({ socketState }),
+    onStateChange: (socketState) => {
+      set({ socketState });
+      if (socketState === 'open' && !published) void publishMailboxes();
+    },
     onError: (error) => set({ error: describeError(error, get().t) }),
   });
   socket.connect();
 
   runtime = { ...parts, manager, socket };
+
+  // After the socket exists rather than before it, so the subscribe that
+  // follows a successful publish reaches a socket that can remember it. It
+  // used to run first, against `socket` still undefined, and the manager's
+  // own comment says why that matters: registering an address is not the same
+  // as listening on it.
+  void publishMailboxes();
 
   // Best effort, and after the socket is up: a device that declines push still
   // receives everything while the app is open.

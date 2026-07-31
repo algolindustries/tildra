@@ -51,8 +51,9 @@ tested by running the real Go server and pushing real traffic through it.
 | Voice recording: the duration cap against the audio it actually produces, and the plaintext capture removed on every path out | done |
 | Photo and avatar picking: scaling, the budget walk against the platform, and no encode left in the cache directory on any path | done |
 | Locales: the guard against every inherited property, tag resolution, and both tables complete, non-empty and actually translated | done |
+| Startup against the real server: account creation, a cold restart onto the same account, and a device with no network at all | done |
 
-Counts at time of writing: 678 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 685 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -205,6 +206,49 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **The app would not start without a network.** Everything in `startSession`
+  that touches the server is deliberately non-blocking, and each one says why
+  in a comment: the socket reconnects on its own, push registration is best
+  effort, the auditor check "must not hold up the app starting". One call was
+  awaited anyway — `publishMailboxes` — and it took the whole startup down with
+  it. A plane, a tunnel or an hour of server downtime looked exactly like a
+  broken install: `bootstrap` threw, the phase went to `error`, and the user
+  could not read messages already sitting decryptable on their own device.
+
+  It is fired rather than awaited now, and reported rather than thrown. It
+  still has to happen or nobody can reach this device, so a failure is retried
+  when the socket reports it is open — the app's existing signal that the
+  network came back. It also moved to after the socket is constructed, so the
+  subscribe that follows a successful publish reaches a socket that can
+  remember it; it used to run against `socket` still undefined.
+
+  Found by writing the suite `bootstrap.test.ts` says it is deliberately not:
+  "a device with credentials goes on to open a socket and publish mailboxes,
+  which belongs in the integration suite that already runs a real server".
+  `state/__tests__/online.test.ts` is that suite, and it was the last item on
+  the list of code with no tests. Real registration against the real Go server,
+  a real vault, a real socket; `expo-secure-store` is a map and `expo-sqlite` is
+  `node:sqlite` over a file, so a cold start is a fresh module graph opening the
+  database the last one wrote.
+
+  Three of the seven tests exist because a negative control said the version
+  before them proved nothing:
+
+  - "says it is not reachable" passed against the *broken* build, because a
+    bootstrap that throws sets an error too — it just sets `phase: 'error'`
+    with it. It asserts the app is still usable while it says so.
+  - Removing the publish's error reporting entirely changed nothing
+    observable, because with a dead server the socket reports the outage
+    itself. So there is now a test for a server that answers, opens the socket
+    and *then* refuses the registration — the one case where nothing else is
+    watching and the device is silently unreachable.
+  - "registers its addresses once the server turns up" first started a second
+    server on the port the app was pointed at. It cannot work and the failure
+    is worth writing down: `tildrad` keeps its state in memory here, so a
+    second process has never heard of the account and answers 401. The test
+    forwards to the *same* server through a TCP proxy it opens late, which
+    moves only the thing under test.
+
 - **A type guard that answered true for `constructor`.**
   `isSupportedLocale` was `value in LOCALES`, and `in` walks the prototype
   chain. `constructor`, `toString`, `hasOwnProperty` and `__proto__` all passed
