@@ -242,12 +242,16 @@ knowing before trusting a UI change.
     itself. So there is now a test for a server that answers, opens the socket
     and *then* refuses the registration — the one case where nothing else is
     watching and the device is silently unreachable.
-  - "registers its addresses once the server turns up" first started a second
-    server on the port the app was pointed at. It cannot work and the failure
-    is worth writing down: `tildrad` keeps its state in memory here, so a
-    second process has never heard of the account and answers 401. The test
-    forwards to the *same* server through a TCP proxy it opens late, which
-    moves only the thing under test.
+  - The retry test went through two wrong shapes before it was a test. First
+    it started a *second* server on the port the app was pointed at, which
+    cannot work: `tildrad` keeps its state in memory here, so a second process
+    has never heard of the account and answers 401. Then it forwarded to the
+    same server through a TCP proxy opened late — the honest shape of "the
+    network came back", and still not a test, because it depends on the
+    socket's reconnect backoff escalating to 20- and 30-second delays. It
+    passed locally and timed out in CI. The failure is injected now: the first
+    registration is refused and the rest are real, against a server that is up
+    the whole time. Same wiring, about a second, nothing racing.
 
 - **A type guard that answered true for `constructor`.**
   `isSupportedLocale` was `value in LOCALES`, and `in` walks the prototype
