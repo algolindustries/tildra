@@ -409,10 +409,16 @@ export const useApp = create<AppState>((set, get) => ({
       const credentials = await base.client.login(identity, accountId, deviceId);
 
       const { secrets, upload } = generatePreKeys(identity);
-      await base.client.publishKeys(upload);
 
       // Persist before going online: a crash between registering and storing
       // the key would leave an account nobody can ever log into again.
+      //
+      // That included the prekeys, and `publishKeys` used to run above this
+      // comment rather than below it — so the public halves reached the server
+      // before the secrets reached the disk. `docs/STATUS.md` has the rule from
+      // the last time this went wrong in the top-up path: published key
+      // material must reach disk first, or the server hands out keys this
+      // device cannot use.
       await base.db.setMeta(
         IDENTITY_META_KEY,
         base.vault.encrypt('identity', IDENTITY_META_KEY, encodeIdentity(identity)),
@@ -422,6 +428,8 @@ export const useApp = create<AppState>((set, get) => ({
         base.vault.encryptJson('prekeys', PREKEYS_META_KEY, encodePreKeys(secrets)),
       );
       await saveCredentials(credentials);
+
+      await base.client.publishKeys(upload);
 
       await startSession(
         { ...base, identity, preKeys: secrets, credentials },
@@ -671,8 +679,12 @@ export const useApp = create<AppState>((set, get) => ({
       const credentials = await base.client.login(identity, backup.accountId, backup.deviceId);
 
       const { secrets, upload } = generatePreKeys(identity);
-      await base.client.publishKeys(upload);
 
+      // Same order as `createAccount`, and it matters more here: this account
+      // already exists and people are already talking to it. Publishing before
+      // the secrets are on disk means a failure at the next line leaves the
+      // server handing out prekeys nobody holds, and every contact who starts
+      // a session with one produces messages this device can never read.
       await base.db.setMeta(
         IDENTITY_META_KEY,
         base.vault.encrypt('identity', IDENTITY_META_KEY, encodeIdentity(identity)),
@@ -682,6 +694,8 @@ export const useApp = create<AppState>((set, get) => ({
         base.vault.encryptJson('prekeys', PREKEYS_META_KEY, encodePreKeys(secrets)),
       );
       await saveCredentials(credentials);
+
+      await base.client.publishKeys(upload);
 
       // Contacts come back as rows with no identity key: trust on first use
       // again, and the safety number is what closes that. Restoring a key from
@@ -915,11 +929,16 @@ export const useApp = create<AppState>((set, get) => ({
       );
 
       const { secrets, upload } = generatePreKeys(link.identity);
-      await base.client.publishKeys(upload);
 
       // Persisted before going online, for the same reason as account
       // creation: a crash in between would leave a device on the account that
       // can never sign in again, and no way to notice from this side.
+      //
+      // The publish was above this comment rather than below it, which is the
+      // third place that got the order backwards. It matters as much here as
+      // in recovery: this device is joining an account people already talk to,
+      // so publishing first and failing next leaves the server handing out
+      // prekeys whose secrets nobody has.
       await base.db.setMeta(
         IDENTITY_META_KEY,
         base.vault.encrypt('identity', IDENTITY_META_KEY, encodeIdentity(link.identity)),
@@ -929,6 +948,8 @@ export const useApp = create<AppState>((set, get) => ({
         base.vault.encryptJson('prekeys', PREKEYS_META_KEY, encodePreKeys(secrets)),
       );
       await saveCredentials(credentials);
+
+      await base.client.publishKeys(upload);
 
       await startSession({ ...base, identity: link.identity, preKeys: secrets, credentials }, set, get);
       activeLink = null;

@@ -214,6 +214,74 @@ holds an invariant, that is the signal.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **The safety number was computed for contacts whose key we do not have.**
+  `recoverAccount` restores contacts from the backup blob with an empty
+  identity key on purpose — restoring one would let a stolen phrase pin a
+  contact to a key of the thief's choosing, so it is trust on first use again
+  and the safety number is what closes it.
+
+  Two of the three paths that meet that empty key already refused:
+  `safetyQrFor` returns null, `matchesSafetyCode` returns false. The third
+  hashed it anyway. `safetyNumber(ourKey, empty)` is a perfectly well-formed
+  sixty digits that depends on our own key alone — so every restored contact
+  showed the *same* number, none of them matched what the other side computed,
+  and `SafetyNumberScreen` enables "mark verified" whenever the number is
+  non-null. A verification aid that verifies nothing, on the one screen in the
+  app whose entire job is to require a human decision.
+
+  The same shape as the HTTP-but-not-socket fix and the recording-but-not-
+  playback one: a rule applied on two paths out of three. It returns null now,
+  which the screen already handled, because groups have no safety number
+  either.
+
+- **Prekeys were published before the secrets reached the disk.** `docs/STATUS.md`
+  has carried the rule since the top-up path broke it: published key material
+  must reach disk first, or the server hands out keys the device cannot use.
+  Both account paths did it in the wrong order — `publishKeys` ran, and the
+  secrets were persisted on the next line.
+
+  Three paths, not two: `createAccount`, `recoverAccount` and `confirmLink`.
+  All three had it backwards, and the last two carried a comment saying the
+  persist came first while the publish sat above it.
+
+  In `createAccount` the blast radius is small: a failure in between orphans an
+  account nobody has heard of. In the other two it is not. Both join an account
+  that already exists and that people are already talking to, so a failure
+  between the publish and the write leaves the server handing out prekeys
+  nobody holds, and every contact who opens a session with one produces
+  messages that device can never read.
+
+  Fault injection covers `createAccount` and `recoverAccount` — the disk
+  refuses the prekey write, and the test asserts nothing was published.
+  `confirmLink` is fixed by the same edit and has no direct test: driving it
+  from the store needs both halves of a provisioning exchange, which
+  `linking.test.ts` does at the manager level and nothing does at this one.
+  Worth writing, and not written.
+
+- **The two-device harness had never isolated anything.** Written last turn,
+  it captured each device's keychain and database file inside the `vi.mock`
+  factories, on the theory that a factory runs once per module graph. It does
+  not — `vi.resetModules()` does not re-run a mock factory, so every graph in
+  the file shared the first device's storage.
+
+  The tests passed anyway, for a reason worth writing down: each store keeps
+  its vault, identity and manager in memory after `createAccount`, so nobody
+  ever re-read the disk they were all trampling. Real accounts, real delivery,
+  real assertions — over a fiction. What caught it was adding a device that had
+  to boot to `onboarding`, which is the one assertion that has to read the disk
+  to pass.
+
+  The lookup is per call now, against a pointer `boot()` sets; the database is
+  still bound once at `openDatabaseAsync`, which is the part that has to
+  survive two sockets interleaving. Three assertions guard it: two accounts
+  that differ, and two keychains each holding their own distinct master key.
+
+  The file also signs each booted store out at the end. Nothing in the app
+  closes a socket except `signOut`, so eleven devices were left reconnecting to
+  a server `afterAll` had killed — for the rest of the run, through every file
+  after this one. `fileParallelism` is off precisely so files do not fight for
+  the CPU.
+
 - **Two real stores now talk to each other through the real server.** The
   online suite drove one device; the half it could not reach is the one where
   two devices have to agree. `integration.test.ts` already proves a sealed

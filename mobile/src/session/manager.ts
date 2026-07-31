@@ -2256,9 +2256,26 @@ export class SessionManager {
   // -------------------------------------------------------------------------
 
   /** The 60-digit number the user compares with their contact, in person. */
+  /**
+   * The number the two people read to each other, or null when there is
+   * nothing to read.
+   *
+   * A conversation can exist before its identity key does: `recoverAccount`
+   * restores contacts from the backup blob with an empty key on purpose, so a
+   * stolen phrase cannot pin a contact to a key of the thief's choosing. This
+   * used to hash that empty key anyway and return a perfectly well-formed
+   * sixty digits — the same sixty for *every* restored contact, because the
+   * digest then depends on our own key alone, and matching nothing the other
+   * side computes. A verification aid that verifies nothing is worse than an
+   * absent one: the screen disables "mark verified" when this is null, and did
+   * not when it was a number.
+   *
+   * `safetyQrFor` and `matchesSafetyCode` already refused. This is the third
+   * of three, and the only one anyone reads aloud.
+   */
   async safetyNumberFor(accountId: string): Promise<string | null> {
     const conversation = await this.store.getConversation(accountId);
-    if (!conversation) return null;
+    if (!conversation || conversation.identityKey.length === 0) return null;
     return safetyNumber(this.identity.publicKey, conversation.identityKey);
   }
 

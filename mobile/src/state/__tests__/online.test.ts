@@ -5,6 +5,9 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { TildraClient as RawClient } from '../../api/client';
+import { generateIdentity, generatePreKeys } from '../../crypto/identity';
+import type { Database as DatabaseType } from '../../storage/db';
 import { freePort } from '../../__tests__/free-port';
 
 /**
@@ -42,35 +45,44 @@ const describeOnline = canRun ? describe : describe.skip;
 // --------------------------------------------------------------------------
 
 /**
- * Which phone the next module graph belongs to.
+ * The phone the mocks are currently pointed at.
  *
- * Both mock factories read these once, when the graph is created, rather than
- * on every call. That is what lets two devices exist in one process: each gets
- * the keychain and the database file that were current when it booted, and
- * neither can reach into the other's afterwards — which a lookup at call time
- * would allow the moment their sockets started interleaving.
+ * The first version of this captured the keychain and the database file inside
+ * the mock factories, on the theory that a factory runs once per module graph.
+ * It does not: `vi.resetModules()` does not re-run a `vi.mock` factory, so
+ * every graph in the file shared the first device's storage. Two-device tests
+ * still passed, for the wrong reason — each store keeps its vault, identity and
+ * manager in memory after `createAccount`, so nobody re-read the disk they were
+ * trampling. What caught it was asserting that a brand new device boots to
+ * `onboarding`.
+ *
+ * So the lookup happens per call, against this pointer. The database is bound
+ * once at `openDatabaseAsync` and the connection is the device's from then on,
+ * which is the part that has to survive two sockets interleaving. The keychain
+ * is read per call, which is safe because every path that touches it —
+ * bootstrap, createAccount, recoverAccount, linking, signOut — is awaited from
+ * the test rather than running in the background.
  */
-let activeKeystore = new Map<string, string>();
-let activeDatabaseFile = '';
+let current: { keystore: Map<string, string>; databaseFile: string } = {
+  keystore: new Map<string, string>(),
+  databaseFile: '',
+};
 
-vi.mock('expo-secure-store', () => {
-  const items = activeKeystore;
-  return {
-    WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'WHEN_UNLOCKED_THIS_DEVICE_ONLY',
-    async isAvailableAsync() {
-      return true;
-    },
-    async getItemAsync(key: string) {
-      return items.get(key) ?? null;
-    },
-    async setItemAsync(key: string, value: string) {
-      items.set(key, value);
-    },
-    async deleteItemAsync(key: string) {
-      items.delete(key);
-    },
-  };
-});
+vi.mock('expo-secure-store', () => ({
+  WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'WHEN_UNLOCKED_THIS_DEVICE_ONLY',
+  async isAvailableAsync() {
+    return true;
+  },
+  async getItemAsync(key: string) {
+    return current.keystore.get(key) ?? null;
+  },
+  async setItemAsync(key: string, value: string) {
+    current.keystore.set(key, value);
+  },
+  async deleteItemAsync(key: string) {
+    current.keystore.delete(key);
+  },
+}));
 
 function bridge(file: string): unknown {
   const db = new DatabaseSync(file);
@@ -104,16 +116,15 @@ function bridge(file: string): unknown {
   };
 }
 
-vi.mock('expo-sqlite', () => {
-  const file = activeDatabaseFile;
-  return {
-    async openDatabaseAsync() {
-      // A new connection per open, against the same file — an app restart, not
-      // a handle handed round.
-      return bridge(file);
-    },
-  };
-});
+vi.mock('expo-sqlite', () => ({
+  async openDatabaseAsync() {
+    // Bound at open time: the connection belongs to whichever device was
+    // booting, and everything afterwards goes through it rather than through
+    // the pointer. A new connection per open, so reopening the same file is an
+    // app restart rather than a handle handed round.
+    return bridge(current.databaseFile);
+  },
+}));
 
 vi.mock('../../push/register', () => ({
   PushError: class extends Error {},
@@ -204,11 +215,24 @@ function newDevice(label: string): Device {
  * device it is a second phone — the graph already imported keeps working, so
  * both stores are live at once and can talk to each other through the server.
  */
+/**
+ * Every store this file has booted, so the sockets can be closed at the end.
+ *
+ * Nothing in the app closes a socket except `signOut`, and a graph that is no
+ * longer the current one keeps its own. Left alone, each device booted here
+ * goes on reconnecting to a server that `afterAll` has killed — for the rest of
+ * the run, through every file that comes after this one. `fileParallelism` is
+ * off precisely so files do not fight for the CPU, and eleven orphaned backoff
+ * loops undo that quietly.
+ */
+const booted: Array<{ useApp: { getState(): { signOut(): Promise<void> } } }> = [];
+
 async function boot(device: Device) {
-  activeKeystore = device.keystore;
-  activeDatabaseFile = device.databaseFile;
+  current = device;
   vi.resetModules();
-  return import('../app');
+  const app = await import('../app');
+  booted.push(app);
+  return app;
 }
 
 beforeAll(async () => {
@@ -226,9 +250,38 @@ beforeAll(async () => {
   await waitForHealth(BASE_URL);
 }, 180_000);
 
-afterAll(() => {
+afterAll(async () => {
+  // Before the server goes, so the logout each one sends has somewhere to
+  // land. Best effort: a store that never finished starting has nothing to
+  // sign out of, and that is not a test failure.
+  for (const app of booted) {
+    try {
+      await app.useApp.getState().signOut();
+    } catch {
+      // Nothing to close.
+    }
+  }
   server?.kill('SIGTERM');
 });
+
+/**
+ * A contact that exists on the server but has no app in this process.
+ *
+ * `startConversation` needs the other side to have devices and prekeys
+ * published. It does not need a second store, and booting one costs a recovery
+ * phrase derivation, a prekey batch and a socket handshake — worth paying when
+ * the test asks that side to receive something, and pure waiting when it does
+ * not.
+ */
+async function registerContact(name: string): Promise<string> {
+  const identity = generateIdentity();
+  const client = new RawClient({ baseUrl: BASE_URL });
+  const { accountId, deviceId } = await client.register(identity, name);
+  await client.login(identity, accountId, deviceId);
+  const { upload } = generatePreKeys(identity, { count: 5 });
+  await client.publishKeys(upload);
+  return accountId;
+}
 
 /** The device the first two blocks share, so a cold start is the same phone. */
 let phone: Device;
@@ -426,8 +479,21 @@ describeOnline('two devices through the real server', () => {
   }
 
   it('carries a message from one store to the other', async () => {
-    const alice = await signedUp(newDevice('alice'), 'Alice iPhone', 'Ayşe');
-    const bob = await signedUp(newDevice('bob'), 'Bob Pixel', 'Bora');
+    const aliceDevice = newDevice('alice');
+    const bobDevice = newDevice('bob');
+    const alice = await signedUp(aliceDevice, 'Alice iPhone', 'Ayşe');
+    const bob = await signedUp(bobDevice, 'Bob Pixel', 'Bora');
+
+    // Two phones, not one wearing two hats. Each wrote its own master key into
+    // its own keychain — without this the suite passed while both devices
+    // shared a single store, because each keeps its runtime in memory after
+    // createAccount and nobody re-read the disk they were trampling.
+    expect(alice.accountId).not.toBe(bob.accountId);
+    expect(aliceDevice.keystore.has('tildra.master.v1')).toBe(true);
+    expect(bobDevice.keystore.has('tildra.master.v1')).toBe(true);
+    expect(aliceDevice.keystore.get('tildra.master.v1')).not.toBe(
+      bobDevice.keystore.get('tildra.master.v1'),
+    );
 
     // Alice looks Bob up by account id, which is the path that fetches his
     // devices and creates the conversation row with a real identity key.
@@ -531,6 +597,157 @@ describeOnline('two devices through the real server', () => {
       ).rejects.toThrow(/stopped providing key transparency proofs/);
     } finally {
       spy.mockRestore();
+    }
+  }, 90_000);
+});
+
+describeOnline('losing the phone and getting the account back', () => {
+  async function signedUp(device: Device, deviceName: string, displayName: string) {
+    const app = await boot(device);
+    const { TildraClient } = await import('../../api/client');
+    await app.useApp.getState().bootstrap({ serverUrl: BASE_URL });
+    await app.useApp.getState().createAccount(deviceName, displayName);
+    await waitFor(() => app.useApp.getState().socketState === 'open');
+    return { app, client: TildraClient, accountId: app.useApp.getState().accountId! };
+  }
+
+  it('restores the account and its contacts onto a new device', async () => {
+    const alice = await signedUp(newDevice('lost'), 'Alice iPhone', 'Ayşe');
+    const phrase = alice.app.useApp.getState().pendingPhrase!;
+    expect(phrase.split(/\s+/)).toHaveLength(24);
+
+    const bobId = await registerContact('Bob Pixel');
+
+    // Alice adds Bob, which is what puts him in the recovery blob: the backup
+    // is republished at the end of startConversation. Delivery is not the
+    // subject here and is covered two blocks up.
+    await alice.app.useApp.getState().startConversation(bobId);
+
+    // The phone goes in a river. A different device, with nothing on it but
+    // the twenty-four words.
+    const fresh = newDevice('found');
+    const replacement = await boot(fresh);
+    await replacement.useApp.getState().bootstrap({ serverUrl: BASE_URL });
+    // A brand new phone has nothing on it. This is also the assertion that
+    // caught the harness sharing one device's storage with every other.
+    expect(replacement.useApp.getState().phase).toBe('onboarding');
+
+    await replacement.useApp.getState().recoverAccount(phrase);
+
+    expect(replacement.useApp.getState().phase).toBe('ready');
+    expect(replacement.useApp.getState().accountId).toBe(alice.accountId);
+    expect(
+      replacement.useApp.getState().conversations.map((c) => c.accountId),
+    ).toContain(bobId);
+  }, 120_000);
+
+  it('shows no safety number for a contact whose key it does not have yet', async () => {
+    // Contacts come back from the blob deliberately without an identity key:
+    // restoring one would let a stolen phrase pin a contact to a key of the
+    // thief's choosing. So there is nothing to verify against yet, and the two
+    // paths that know it — the QR and the scanner — already returned null and
+    // false.
+    //
+    // The number did not. It hashed the empty key and produced a well-formed
+    // sixty digits that depend on our own key alone, so every restored contact
+    // showed the *same* number, none of them matched what the other side
+    // computed, and the screen's "mark verified" button was enabled over it.
+    const alice = await signedUp(newDevice('lost2'), 'Alice iPhone', 'Ayşe');
+    const phrase = alice.app.useApp.getState().pendingPhrase!;
+    const bobId = await registerContact('Bob Pixel');
+
+    await alice.app.useApp.getState().startConversation(bobId);
+    await alice.app.useApp.getState().openConversation(bobId);
+    const realNumber = alice.app.useApp.getState().safetyNumber;
+    expect(realNumber).toBeTruthy();
+
+    const replacement = await boot(newDevice('found2'));
+    await replacement.useApp.getState().bootstrap({ serverUrl: BASE_URL });
+    await replacement.useApp.getState().recoverAccount(phrase);
+    await replacement.useApp.getState().openConversation(bobId);
+
+    expect(replacement.useApp.getState().safetyNumber).toBeNull();
+    expect(replacement.useApp.getState().safetyQr).toBeNull();
+  }, 120_000);
+
+  it('does not publish prekeys it has not written down, recovering either', async () => {
+    // The same rule on the path where breaking it costs the most. This account
+    // already exists and people are already talking to it, so publishing keys
+    // whose secrets never reached the disk means every session a contact opens
+    // with one is unreadable forever — not an orphaned account nobody knows
+    // about, which is all the same failure costs during creation.
+    const alice = await signedUp(newDevice('lost3'), 'Alice iPhone', 'Ayşe');
+    const phrase = alice.app.useApp.getState().pendingPhrase!;
+
+    const app = await boot(newDevice('nodisk2'));
+    const { TildraClient } = await import('../../api/client');
+    const { Database } = await import('../../storage/db');
+    const PREKEYS_META_KEY = 'prekeys.v1';
+
+    await app.useApp.getState().bootstrap({ serverUrl: BASE_URL });
+
+    let published = 0;
+    const publishSpy = vi
+      .spyOn(TildraClient.prototype, 'publishKeys')
+      .mockImplementation(async () => {
+        published += 1;
+      });
+    const originalSetMeta = Database.prototype.setMeta;
+    const metaSpy = vi
+      .spyOn(Database.prototype, 'setMeta')
+      .mockImplementation(async function (this: DatabaseType, key: string, value: string) {
+        if (key === PREKEYS_META_KEY) throw new Error('the disk is full');
+        return originalSetMeta.call(this, key, value);
+      });
+
+    try {
+      await expect(app.useApp.getState().recoverAccount(phrase)).rejects.toThrow(/disk is full/);
+      expect(published).toBe(0);
+    } finally {
+      publishSpy.mockRestore();
+      metaSpy.mockRestore();
+    }
+  }, 120_000);
+
+  it('does not publish prekeys it has not written down', async () => {
+    // The rule STATUS.md records from the top-up path: published key material
+    // must reach disk first. Both account paths broke it — the public halves
+    // went to the server and the secrets were persisted on the next line, so a
+    // failure in between left the server handing out keys this device does not
+    // hold, and every session opened with one is unreadable forever.
+    const device = newDevice('nodisk');
+    const app = await boot(device);
+    const { TildraClient } = await import('../../api/client');
+    const { Database } = await import('../../storage/db');
+
+    // Written out rather than imported: private to app.ts, and if it is renamed
+    // this fails loudly rather than quietly covering nothing.
+    const PREKEYS_META_KEY = 'prekeys.v1';
+
+    await app.useApp.getState().bootstrap({ serverUrl: BASE_URL });
+
+    let published = 0;
+    const publishSpy = vi
+      .spyOn(TildraClient.prototype, 'publishKeys')
+      .mockImplementation(async () => {
+        published += 1;
+      });
+    const originalSetMeta = Database.prototype.setMeta;
+    const metaSpy = vi
+      .spyOn(Database.prototype, 'setMeta')
+      .mockImplementation(async function (this: DatabaseType, key: string, value: string) {
+        if (key === PREKEYS_META_KEY) throw new Error('the disk is full');
+        return originalSetMeta.call(this, key, value);
+      });
+
+    try {
+      await expect(app.useApp.getState().createAccount('Doomed iPhone')).rejects.toThrow(
+        /disk is full/,
+      );
+      expect(published).toBe(0);
+    } finally {
+      publishSpy.mockRestore();
+      metaSpy.mockRestore();
     }
   }, 90_000);
 });
