@@ -54,6 +54,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Startup against the real server: account creation, a cold restart onto the same account, and a device with no network at all | done |
 | Voice playback: the decrypted audio removed on every path out — finished, stopped, unmounted, and a player that would not open | done |
 | Two devices through the real server, driven entirely through the store: delivery, the reply, the shared safety number, and the handle path with its downgrade refusal | done |
+| Server authentication: the registration proof, challenge single-use and device binding, domain separation on both signature contexts, token storage by hash, and the middleware | done |
 
 Counts at time of writing: 700 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
@@ -214,6 +215,37 @@ holds an invariant, that is the signal.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **`internal/auth` had no tests, and it is the only thing between a bearer
+  token and every mailbox on the server.** It has nineteen now. Nothing was
+  wrong, which is worth recording rather than dressing up.
+
+  Almost all of the package's behaviour is what it refuses, so almost all of
+  the suite is refusals: another key's signature, a proof whose timestamp
+  drifts in either direction, an identity key of the wrong length, a challenge
+  redeemed twice, a challenge redeemed for a different device or account, an
+  unknown challenge, an unknown token, and — the two that matter most —
+  signatures that skip the domain-separating context prefix, in both the
+  registration and the challenge direction. Any signature Tildra asks a key to
+  make carries a distinct prefix so that one protocol's signature is never
+  valid in another; nothing had checked that.
+
+  Two claims in the package's own doc comment are now assertions rather than
+  prose. The server stores only SHA-256 of a token, so a database leak does not
+  hand an attacker live sessions: the test looks the raw token up in the store
+  and requires it to miss. And a failed redemption spends the challenge either
+  way, which is the difference between one attempt at forging a signature and
+  two minutes of them.
+
+  Five negative controls: deleting the context prefix, not consuming the
+  challenge on failure, storing the raw token, dropping the device binding, and
+  dropping the timestamp window each go red.
+
+  The store is the real in-memory implementation rather than a double — the
+  conformance suite already holds it to the same contract as Postgres, and
+  token expiry is enforced there rather than in `auth`, which is a thing to
+  exercise rather than assume. Checked before writing any of this: both stores
+  do filter on `expires_at`, so `TokenTTL` is real.
+
 - **Calls now have a store-level test, and the last uncovered path in `app.ts`
   is closed.** `call-driver.test.ts` drives the peer-connection sequencing
   against a double and `manager.test.ts` carries the signalling end to end
