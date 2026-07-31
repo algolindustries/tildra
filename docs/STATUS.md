@@ -58,6 +58,7 @@ tested by running the real Go server and pushing real traffic through it.
 | The WebSocket hub: backlog drain, live delivery, a closed socket leaving the listener set, and refusing both a subscribe and an ack for a mailbox the connection does not own | done |
 | Identifier generation: the Crockford alphabet, hand-computed encoder vectors, every input bit reaching the output, and confusable glyphs mapped where a human types them | done |
 | Configuration: defaults, every variable read, malformed values named, and a bound of zero or less refused rather than silently inverting the limit | done |
+| The conformance suite covers every `store.Store` method, enforced by a test rather than by a rule in this file, with the provisioning channel included | done |
 
 Counts at time of writing: 700 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
@@ -218,6 +219,34 @@ holds an invariant, that is the signal.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **The conformance suite had a hole exactly where it says it must not.** This
+  file already carries the rule — "If you add a method to `store.Store`, add it
+  to the suite too, or Postgres and memory are free to drift" — and nothing
+  enforced it. Four of the thirty-nine methods had never been in the suite, and
+  they were the whole device-linking provisioning channel:
+  `CreateProvisioning`, `GetProvisioning`, `SetProvisioningApproval`,
+  `DeleteProvisioning`. That is the one operation where a difference between
+  the two implementations hands somebody else a seat at the table.
+
+  They are covered now, including the invariant the in-memory store spells out
+  in a comment: one approval per channel, because a second "would let a server
+  that captured the first replace it after the user had already compared
+  codes". Both implementations do enforce it — checked before writing anything,
+  and the Postgres side does it in the `WHERE` clause so two concurrent
+  approvals cannot both land. No drift, this time.
+
+  The rule is enforced mechanically now. `storetest_test.go` reflects over
+  `store.Store` and fails on any method the suite does not call, with an
+  allowlist that requires a written reason — `Close` is on it, because both
+  factories close in `t.Cleanup` and asserting it here as well would close the
+  pgx pool twice. A second test catches the other way to have coverage on
+  paper: a case defined but never registered in `Run`, which the scan would
+  otherwise be satisfied by while it never executed.
+
+  One trap worth recording: Postgres coalesces a null approval to an empty
+  slice and the in-memory store leaves it nil. The assertion is on length, not
+  on nil, or the suite would report a difference that is not one.
+
 - **A configured bound of zero turned the server into one that destroys mail.**
   `config.Load` parsed every duration and size and accepted whatever came back.
   Each one is enforced by comparing against it, so zero does not mean "no

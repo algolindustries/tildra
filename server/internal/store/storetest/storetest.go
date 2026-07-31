@@ -42,6 +42,7 @@ func Run(t *testing.T, newStore Factory) {
 		{"PushTokens", testPushTokens},
 		{"TransparencyLog", testTransparencyLog},
 		{"AuthTokens", testAuthTokens},
+		{"Provisioning", testProvisioning},
 		{"Sweep", testSweep},
 	}
 	for _, tc := range tests {
@@ -756,5 +757,109 @@ func testRecoveryBlobs(t *testing.T, s store.Store) {
 	// An unknown account cannot publish one at all.
 	if err := s.PutRecoveryBlob(ctx(), "lookup-2", "NOSUCH", blob); err != store.ErrNotFound {
 		t.Fatalf("PutRecoveryBlob for an unknown account = %v, want ErrNotFound", err)
+	}
+}
+
+// testProvisioning covers the device-linking channel.
+//
+// Four of the Store methods had never been in this suite, and these are them.
+// A difference between the two implementations here is a difference in how a
+// new device joins an account, which is the one operation where getting it
+// wrong hands somebody else a seat at the table.
+func testProvisioning(t *testing.T, s store.Store) {
+	now := time.Now().UTC()
+	p := &model.Provisioning{
+		ID:           "PROV1",
+		IdentityKey:  bytesOf(32, 0x11),
+		EphemeralKey: bytesOf(32, 0x22),
+		CreatedAt:    now,
+		ExpiresAt:    now.Add(5 * time.Minute),
+	}
+	if err := s.CreateProvisioning(ctx(), p); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := s.CreateProvisioning(ctx(), p); err != store.ErrAlreadyExists {
+		t.Errorf("duplicate create: got %v, want ErrAlreadyExists", err)
+	}
+
+	got, err := s.GetProvisioning(ctx(), "PROV1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if string(got.IdentityKey) != string(p.IdentityKey) ||
+		string(got.EphemeralKey) != string(p.EphemeralKey) {
+		t.Errorf("keys did not round-trip: %+v", got)
+	}
+	// Length rather than nil: Postgres coalesces a null approval to an empty
+	// slice and the in-memory store leaves it nil. Both mean "not approved",
+	// and asserting on nil would report a difference that is not one.
+	if len(got.Approval) != 0 {
+		t.Errorf("a fresh channel already carries an approval: %x", got.Approval)
+	}
+
+	if _, err := s.GetProvisioning(ctx(), "NOPE"); err != store.ErrNotFound {
+		t.Errorf("unknown channel: got %v, want ErrNotFound", err)
+	}
+	if err := s.SetProvisioningApproval(ctx(), "NOPE", []byte("x")); err != store.ErrNotFound {
+		t.Errorf("approve unknown channel: got %v, want ErrNotFound", err)
+	}
+
+	approval := []byte("sealed-approval")
+	if err := s.SetProvisioningApproval(ctx(), "PROV1", approval); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	got, err = s.GetProvisioning(ctx(), "PROV1")
+	if err != nil {
+		t.Fatalf("get after approve: %v", err)
+	}
+	if string(got.Approval) != string(approval) {
+		t.Errorf("approval did not round-trip: %x", got.Approval)
+	}
+
+	// One approval per channel. A second would let a server that captured the
+	// first replace it after the user had already compared the six digits, which
+	// is the whole check that device linking rests on.
+	if err := s.SetProvisioningApproval(ctx(), "PROV1", []byte("substituted")); err != store.ErrAlreadyExists {
+		t.Fatalf("second approval: got %v, want ErrAlreadyExists", err)
+	}
+	got, err = s.GetProvisioning(ctx(), "PROV1")
+	if err != nil {
+		t.Fatalf("get after refused approval: %v", err)
+	}
+	if string(got.Approval) != string(approval) {
+		t.Errorf("the refused approval overwrote the first: %x", got.Approval)
+	}
+
+	// An expired channel is gone as far as every caller is concerned.
+	expired := &model.Provisioning{
+		ID:           "PROV2",
+		IdentityKey:  bytesOf(32, 0x33),
+		EphemeralKey: bytesOf(32, 0x44),
+		CreatedAt:    now.Add(-10 * time.Minute),
+		ExpiresAt:    now.Add(-time.Minute),
+	}
+	if err := s.CreateProvisioning(ctx(), expired); err != nil {
+		t.Fatalf("create expired: %v", err)
+	}
+	if _, err := s.GetProvisioning(ctx(), "PROV2"); err != store.ErrNotFound {
+		t.Errorf("expired channel: got %v, want ErrNotFound", err)
+	}
+	if err := s.SetProvisioningApproval(ctx(), "PROV2", []byte("late")); err != store.ErrNotFound {
+		t.Errorf("approve expired channel: got %v, want ErrNotFound", err)
+	}
+
+	if err := s.DeleteProvisioning(ctx(), "PROV1"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := s.GetProvisioning(ctx(), "PROV1"); err != store.ErrNotFound {
+		t.Errorf("after delete: got %v, want ErrNotFound", err)
+	}
+	// Deleting a channel that is not there is how the linking flow cleans up
+	// after itself, so it is not an error.
+	if err := s.DeleteProvisioning(ctx(), "PROV1"); err != nil {
+		t.Errorf("second delete: %v", err)
+	}
+	if err := s.DeleteProvisioning(ctx(), "NEVER-EXISTED"); err != nil {
+		t.Errorf("delete unknown: %v", err)
 	}
 }
