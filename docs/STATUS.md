@@ -214,6 +214,26 @@ holds an invariant, that is the signal.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **Device linking now has a test where the two halves meet.**
+  `linking.test.ts` drives the provisioning exchange at the manager level.
+  Nothing drove it through the store, which is where the halves are wired to
+  each other — the new device shows a payload and polls in the background, the
+  signed-in device approves it and is handed six digits, and the entire security
+  of the pairing is that both screens show the *same* six.
+
+  The test asserts exactly that, and the negative control for it perturbs one
+  side's derivation so the two codes diverge: `449979` against `095624`. Without
+  that control the assertion could have been comparing a value with itself.
+
+  It also asserts the new device ends up on the same account with its *own*
+  master key and credentials in its own keychain — linking joins an account, it
+  does not clone a phone.
+
+  This closes the gap the previous entry named and left open: `confirmLink` was
+  the third site with the publish-before-persist order and the only one fixed
+  without a test. It has one now, by the same fault injection — the disk refuses
+  the prekey write, and nothing is published.
+
 - **The safety number was computed for contacts whose key we do not have.**
   `recoverAccount` restores contacts from the backup blob with an empty
   identity key on purpose — restoring one would let a stolen phrase pin a
@@ -251,12 +271,9 @@ holds an invariant, that is the signal.
   nobody holds, and every contact who opens a session with one produces
   messages that device can never read.
 
-  Fault injection covers `createAccount` and `recoverAccount` — the disk
-  refuses the prekey write, and the test asserts nothing was published.
-  `confirmLink` is fixed by the same edit and has no direct test: driving it
-  from the store needs both halves of a provisioning exchange, which
-  `linking.test.ts` does at the manager level and nothing does at this one.
-  Worth writing, and not written.
+  Fault injection covers all three — the disk refuses the prekey write, and the
+  test asserts nothing was published. `confirmLink`'s was written one commit
+  later, along with the store-level linking test it needed.
 
 - **The two-device harness had never isolated anything.** Written last turn,
   it captured each device's keychain and database file inside the `vi.mock`

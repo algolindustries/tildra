@@ -283,6 +283,22 @@ async function registerContact(name: string): Promise<string> {
   return accountId;
 }
 
+/**
+ * A device with a brand new account on it, signed in and connected.
+ *
+ * The client class comes from the same graph, so a spy on its prototype reaches
+ * the client this store uses. Every boot resets the registry, so it has to be
+ * taken before the next one.
+ */
+async function signedUp(device: Device, deviceName: string, displayName: string) {
+  const app = await boot(device);
+  const { TildraClient } = await import('../../api/client');
+  await app.useApp.getState().bootstrap({ serverUrl: BASE_URL });
+  await app.useApp.getState().createAccount(deviceName, displayName);
+  await waitFor(() => app.useApp.getState().socketState === 'open');
+  return { app, client: TildraClient, accountId: app.useApp.getState().accountId! };
+}
+
 /** The device the first two blocks share, so a cold start is the same phone. */
 let phone: Device;
 
@@ -467,17 +483,6 @@ describeOnline('two devices through the real server', () => {
    * them lives, and where two components can each be right while nothing
    * arrives.
    */
-  async function signedUp(device: Device, deviceName: string, displayName: string) {
-    const app = await boot(device);
-    // From the same graph, so a spy on it reaches the client this store uses.
-    // Every boot resets the registry, so this has to happen before the next one.
-    const { TildraClient } = await import('../../api/client');
-    await app.useApp.getState().bootstrap({ serverUrl: BASE_URL });
-    await app.useApp.getState().createAccount(deviceName, displayName);
-    await waitFor(() => app.useApp.getState().socketState === 'open');
-    return { app, client: TildraClient, accountId: app.useApp.getState().accountId! };
-  }
-
   it('carries a message from one store to the other', async () => {
     const aliceDevice = newDevice('alice');
     const bobDevice = newDevice('bob');
@@ -602,15 +607,6 @@ describeOnline('two devices through the real server', () => {
 });
 
 describeOnline('losing the phone and getting the account back', () => {
-  async function signedUp(device: Device, deviceName: string, displayName: string) {
-    const app = await boot(device);
-    const { TildraClient } = await import('../../api/client');
-    await app.useApp.getState().bootstrap({ serverUrl: BASE_URL });
-    await app.useApp.getState().createAccount(deviceName, displayName);
-    await waitFor(() => app.useApp.getState().socketState === 'open');
-    return { app, client: TildraClient, accountId: app.useApp.getState().accountId! };
-  }
-
   it('restores the account and its contacts onto a new device', async () => {
     const alice = await signedUp(newDevice('lost'), 'Alice iPhone', 'Ayşe');
     const phrase = alice.app.useApp.getState().pendingPhrase!;
@@ -750,4 +746,93 @@ describeOnline('losing the phone and getting the account back', () => {
       metaSpy.mockRestore();
     }
   }, 90_000);
+});
+
+describeOnline('adding a second device to an account', () => {
+  /**
+   * The gap the last commit named and did not close.
+   *
+   * `linking.test.ts` drives the provisioning exchange at the manager level.
+   * Nothing drove it through the store, which is where the two halves are
+   * wired to each other: the new device shows a payload and polls, the
+   * signed-in device approves it and is handed six digits, and the whole
+   * security of the pairing is that both screens show the *same* six.
+   */
+  it('carries the same six digits to both screens, and joins the account', async () => {
+    const phone = await signedUp(newDevice('primary'), 'Alice iPhone', 'Ayşe');
+
+    const tabletDevice = newDevice('tablet');
+    const tablet = await boot(tabletDevice);
+    await tablet.useApp.getState().bootstrap({ serverUrl: BASE_URL });
+    expect(tablet.useApp.getState().phase).toBe('onboarding');
+
+    // The new device shows a code immediately and waits. A spinner here would
+    // last as long as it takes the user to walk to the other device.
+    await tablet.useApp.getState().startLinking('Alice iPad');
+    const pending = tablet.useApp.getState().pendingLink;
+    expect(pending?.payload).toBeTruthy();
+    expect(pending?.code).toBeNull();
+
+    // The signed-in device scans it and is told what to compare.
+    const approved = await phone.app.useApp.getState().approveLink(pending!.payload);
+    expect(approved).toMatch(/^\d{6}$/);
+
+    // The same six reach the other screen, over a different path — this is the
+    // comparison the user is asked to make, and it is the only thing standing
+    // between a link and a substituted key.
+    await waitFor(() => tablet.useApp.getState().pendingLink?.code !== null);
+    expect(tablet.useApp.getState().pendingLink?.code).toBe(approved);
+
+    await tablet.useApp.getState().confirmLink();
+
+    expect(tablet.useApp.getState().phase).toBe('ready');
+    expect(tablet.useApp.getState().accountId).toBe(phone.accountId);
+    expect(tablet.useApp.getState().pendingLink).toBeNull();
+
+    // Its own device identity, in its own keychain: linking joins an account,
+    // it does not clone a phone.
+    expect(tabletDevice.keystore.has('tildra.master.v1')).toBe(true);
+    expect(tabletDevice.keystore.has('tildra.credentials.v1')).toBe(true);
+  }, 120_000);
+
+  it('does not publish prekeys it has not written down, linking either', async () => {
+    // The third of the three sites that had the order backwards, and the one
+    // the previous commit fixed without a test. It joins an account people are
+    // already talking to, so publishing keys whose secrets never reached the
+    // disk leaves the server handing out prekeys nobody holds.
+    const phone = await signedUp(newDevice('primary2'), 'Alice iPhone', 'Ayşe');
+
+    const tablet = await boot(newDevice('tablet2'));
+    const { TildraClient } = await import('../../api/client');
+    const { Database } = await import('../../storage/db');
+    const PREKEYS_META_KEY = 'prekeys.v1';
+
+    await tablet.useApp.getState().bootstrap({ serverUrl: BASE_URL });
+    await tablet.useApp.getState().startLinking('Alice iPad');
+    const payload = tablet.useApp.getState().pendingLink!.payload;
+    await phone.app.useApp.getState().approveLink(payload);
+    await waitFor(() => tablet.useApp.getState().pendingLink?.code !== null);
+
+    let published = 0;
+    const publishSpy = vi
+      .spyOn(TildraClient.prototype, 'publishKeys')
+      .mockImplementation(async () => {
+        published += 1;
+      });
+    const originalSetMeta = Database.prototype.setMeta;
+    const metaSpy = vi
+      .spyOn(Database.prototype, 'setMeta')
+      .mockImplementation(async function (this: DatabaseType, key: string, value: string) {
+        if (key === PREKEYS_META_KEY) throw new Error('the disk is full');
+        return originalSetMeta.call(this, key, value);
+      });
+
+    try {
+      await expect(tablet.useApp.getState().confirmLink()).rejects.toThrow(/disk is full/);
+      expect(published).toBe(0);
+    } finally {
+      publishSpy.mockRestore();
+      metaSpy.mockRestore();
+    }
+  }, 120_000);
 });
