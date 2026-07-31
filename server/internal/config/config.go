@@ -82,37 +82,37 @@ func Load() (*Config, error) {
 		SweepInterval:      10 * time.Minute,
 	}
 	if v := os.Getenv("TILDRA_ENVELOPE_TTL"); v != "" {
-		d, err := time.ParseDuration(v)
+		d, err := positiveDuration("TILDRA_ENVELOPE_TTL", v)
 		if err != nil {
-			return nil, fmt.Errorf("TILDRA_ENVELOPE_TTL: %w", err)
+			return nil, err
 		}
 		c.EnvelopeTTL = d
 	}
 	if v := os.Getenv("TILDRA_MAX_ENVELOPE_BYTES"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
+		n, err := positiveBytes("TILDRA_MAX_ENVELOPE_BYTES", v)
 		if err != nil {
-			return nil, fmt.Errorf("TILDRA_MAX_ENVELOPE_BYTES: %w", err)
+			return nil, err
 		}
 		c.MaxEnvelopeBytes = n
 	}
 	if v := os.Getenv("TILDRA_MAX_ATTACHMENT_BYTES"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
+		n, err := positiveBytes("TILDRA_MAX_ATTACHMENT_BYTES", v)
 		if err != nil {
-			return nil, fmt.Errorf("TILDRA_MAX_ATTACHMENT_BYTES: %w", err)
+			return nil, err
 		}
 		c.MaxAttachmentBytes = n
 	}
 	if v := os.Getenv("TILDRA_ATTACHMENT_TTL"); v != "" {
-		d, err := time.ParseDuration(v)
+		d, err := positiveDuration("TILDRA_ATTACHMENT_TTL", v)
 		if err != nil {
-			return nil, fmt.Errorf("TILDRA_ATTACHMENT_TTL: %w", err)
+			return nil, err
 		}
 		c.AttachmentTTL = d
 	}
 	if v := os.Getenv("TILDRA_TURN_TTL"); v != "" {
-		d, err := time.ParseDuration(v)
+		d, err := positiveDuration("TILDRA_TURN_TTL", v)
 		if err != nil {
-			return nil, fmt.Errorf("TILDRA_TURN_TTL: %w", err)
+			return nil, err
 		}
 		c.TURNTTL = d
 	}
@@ -130,4 +130,37 @@ func env(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// positiveDuration parses a duration and refuses one that is not positive.
+//
+// Every bound in this package is enforced by comparing against it, so zero
+// does not mean "no limit" — it means the opposite, silently. A zero envelope
+// TTL puts the sweep's cutoff at `now` and destroys every undelivered message
+// on the next pass ten minutes later; a zero attachment TTL stores blobs that
+// have already expired; a zero relay TTL issues credentials that are dead on
+// arrival. Refusing at startup is the argument the TURN pairing already makes:
+// the operator should find this out from the server, not from a user.
+func positiveDuration(key, v string) (time.Duration, error) {
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%s must be positive, got %q", key, v)
+	}
+	return d, nil
+}
+
+// positiveBytes is the same argument for the size limits: a maximum of zero
+// rejects every message as too large rather than allowing any size.
+func positiveBytes(key, v string) (int64, error) {
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("%s must be positive, got %q", key, v)
+	}
+	return n, nil
 }

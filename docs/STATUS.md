@@ -57,6 +57,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Server authentication: the registration proof, challenge single-use and device binding, domain separation on both signature contexts, token storage by hash, and the middleware | done |
 | The WebSocket hub: backlog drain, live delivery, a closed socket leaving the listener set, and refusing both a subscribe and an ack for a mailbox the connection does not own | done |
 | Identifier generation: the Crockford alphabet, hand-computed encoder vectors, every input bit reaching the output, and confusable glyphs mapped where a human types them | done |
+| Configuration: defaults, every variable read, malformed values named, and a bound of zero or less refused rather than silently inverting the limit | done |
 
 Counts at time of writing: 700 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
@@ -217,6 +218,30 @@ holds an invariant, that is the signal.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **A configured bound of zero turned the server into one that destroys mail.**
+  `config.Load` parsed every duration and size and accepted whatever came back.
+  Each one is enforced by comparing against it, so zero does not mean "no
+  limit", it means the opposite — silently:
+
+  - `TILDRA_ENVELOPE_TTL=0s` puts the sweep's cutoff at `now`, so every
+    undelivered message is destroyed on the next pass, ten minutes later.
+  - `TILDRA_MAX_ENVELOPE_BYTES=0` rejects every message as too large.
+  - `TILDRA_ATTACHMENT_TTL=0s` stores blobs that have already expired.
+  - `TILDRA_TURN_TTL=0s` issues relay credentials that are dead on arrival.
+
+  Negatives parse too, and are worse. None of it failed at startup; the
+  operator would find out from a user.
+
+  The file already argues the other side of this for the relay — "half a
+  configuration is worse than none, ... the operator would find out when a call
+  failed to connect for one user in ten" — and then did not apply it to the
+  bounds. It does now: every duration and size must be positive, and the error
+  names the variable.
+
+  Found by writing the first tests for `internal/config`. Ten of the suite's
+  cases failed on the first run; the rest passed, including the relay pairing
+  and a list of separators not counting as configured URLs.
+
 - **An account ID read aloud over the phone could not be typed back in.** The
   ID alphabet excludes I, L, O and U so that the glyphs people confuse can be
   mapped back rather than guessed at — `internal/id`'s doc comment says the
