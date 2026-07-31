@@ -47,8 +47,9 @@ tested by running the real Go server and pushing real traffic through it.
 | Session and group-key rows: a ratchet that has been through storage still decrypts, including skipped and post-step messages | done |
 | Media adapter logic: ICE restart on widening, candidate filtering, connection-state mapping, teardown order — against a double of `react-native-webrtc`, not a device | done |
 | Push registration and, more to the point, what a sign-out leaves on the device | done |
+| The platform keystore: key persistence across runs, the accessibility option on every call, and erasing under a keychain that refuses | done |
 
-Counts at time of writing: 626 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 641 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -201,6 +202,39 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **The wipe gave up halfway, twice, on the same two lines.** `eraseKeystore`
+  was two bare awaits in a row — delete the master key, then delete the
+  credentials. A keychain that refused the first call meant the second never
+  ran, so the credentials stayed: a live server session, on a device the user
+  had just asked to wipe. That is the same shape as the `eraseAll` bug below,
+  one level further down, and the earlier fix did not look inside.
+
+  Both items are attempted independently now, credentials first — the master
+  key only opens local data the database wipe has already removed, while the
+  credentials are something whoever ends up holding the phone could resume. It
+  still throws when either did not go, because a wipe that only partly
+  happened must not be reported as one that did.
+
+  And the caller had the same defect for the same reason. `signOut` awaited
+  `eraseKeystore()` unguarded, so a throw stopped everything below it:
+  `runtime = null` and the state reset never ran, leaving a live runtime and a
+  signed-in screen for an account whose database had just been erased. Guarded
+  now, with the failure folded into the one the user is already shown.
+
+  Found by writing the first tests `storage/keystore.ts` has ever had. One of
+  them was too weak and the negative control said so: asserting the error
+  mentioned "credentials" passed against the old code too, because the
+  platform's own exception names the item it refused.
+
+  Two of those thirteen tests are not about erasing at all and matter as much.
+  A second run must return the *same* master key — a `loadOrCreate` that
+  quietly creates a second one turns every byte on the device into noise, with
+  no error where it happens. And `keychainAccessible:
+  WHEN_UNLOCKED_THIS_DEVICE_ONLY` must be on every call: that option is the
+  entire basis for the claim that the key never reaches iCloud Keychain or an
+  encrypted backup, and until now it lived only in a comment. Dropping it from
+  one call site changes no type and broke no test.
+
 - **The wipe did not reach the lock screen.** `presentLocalNotification` puts
   the contact's name in the title and the decrypted message in the body — on
   purpose, because the device knows both and the push service must not. That

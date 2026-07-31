@@ -983,7 +983,15 @@ export const useApp = create<AppState>((set, get) => ({
     } catch (err) {
       wipeFailure = err;
     }
-    await eraseKeystore();
+    // Guarded for the same reason the line above is. Unguarded, a keystore
+    // that refuses to erase stopped everything below it: the runtime stayed
+    // live and the screen stayed signed in, for an account whose database had
+    // just been wiped.
+    try {
+      await eraseKeystore();
+    } catch (err) {
+      if (!wipeFailure) wipeFailure = err;
+    }
     runtime = null;
     set({
       phase: 'onboarding',

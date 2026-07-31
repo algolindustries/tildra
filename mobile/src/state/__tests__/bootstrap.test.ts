@@ -34,6 +34,7 @@ const secureStore = {
   items: new Map<string, string>(),
   failWith: null as Error | null,
   available: true,
+  failDeletes: false,
 };
 
 vi.mock('expo-secure-store', () => ({
@@ -50,6 +51,7 @@ vi.mock('expo-secure-store', () => ({
     secureStore.items.set(key, value);
   },
   async deleteItemAsync(key: string) {
+    if (secureStore.failDeletes) throw new Error('keychain refused the delete');
     secureStore.items.delete(key);
   },
 }));
@@ -134,6 +136,7 @@ beforeEach(() => {
   secureStore.items.clear();
   secureStore.failWith = null;
   secureStore.available = true;
+  secureStore.failDeletes = false;
   meta.clear();
   dbOpens.length = 0;
   erase.calls = 0;
@@ -340,6 +343,32 @@ describe('signing out', () => {
     await useApp.getState().signOut();
 
     expect(push.unregisterCalls).toEqual([null]);
+  });
+
+  it('ends signed out even when the keystore refuses to erase', async () => {
+    // The same shape as the eraseAll bug, one line further down and still
+    // there: eraseKeystore was awaited unguarded, so a keychain that threw
+    // stopped everything after it. The runtime stayed live and the screen
+    // stayed signed in — for an account whose database had just been wiped.
+    const { useApp, currentRuntime } = await signedIn();
+    secureStore.failDeletes = true;
+
+    await useApp.getState().signOut();
+
+    expect(useApp.getState().phase).toBe('onboarding');
+    expect(useApp.getState().accountId).toBeNull();
+    expect(currentRuntime()).toBeNull();
+  });
+
+  it('says the keystore is still holding something', async () => {
+    // Signing out anyway is right, but a wipe that did not finish must not be
+    // reported as one that did.
+    const { useApp } = await signedIn();
+    secureStore.failDeletes = true;
+
+    await useApp.getState().signOut();
+
+    expect(useApp.getState().error).toMatch(/keystore did not erase/);
   });
 
   it('reports the failure rather than swallowing it', async () => {

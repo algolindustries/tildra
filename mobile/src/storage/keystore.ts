@@ -68,10 +68,34 @@ export async function loadCredentials<T>(): Promise<T | null> {
  * Erase everything. Used by "delete account" and by the panic path when the
  * device is being handed to someone else.
  *
+ * Both items are attempted, and one failing does not cancel the other. As two
+ * bare awaits in a row, a keychain that refused the first call kept the second
+ * secret forever — the same shape as the bug that left the master key behind
+ * when `eraseAll` threw, one level further down.
+ *
+ * Credentials go first because they are the more dangerous half to leave. The
+ * master key opens local data the database wipe has already removed; the
+ * credentials are a live server session that whoever ends up holding the phone
+ * could resume.
+ *
+ * It still throws when something did not go. A wipe that only partly happened
+ * must not be reported as one that did.
+ *
  * The SQLite file must be deleted separately — dropping the master key makes
  * its contents undecryptable, but undecryptable is not the same as gone.
  */
 export async function eraseKeystore(): Promise<void> {
-  await SecureStore.deleteItemAsync(MASTER_KEY_ID, OPTIONS);
-  await SecureStore.deleteItemAsync(CREDENTIALS_ID, OPTIONS);
+  const remaining: string[] = [];
+  for (const id of [CREDENTIALS_ID, MASTER_KEY_ID]) {
+    try {
+      await SecureStore.deleteItemAsync(id, OPTIONS);
+    } catch {
+      remaining.push(id);
+    }
+  }
+  if (remaining.length > 0) {
+    throw new KeystoreUnavailableError(
+      `Tildra: the keystore did not erase, and still holds ${remaining.join(' and ')}`,
+    );
+  }
 }
