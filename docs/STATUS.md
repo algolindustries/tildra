@@ -46,8 +46,9 @@ tested by running the real Go server and pushing real traffic through it.
 | The local database against real SQLite: blind indexes, encryption of every row, ordering, paging, cascade, erase | done |
 | Session and group-key rows: a ratchet that has been through storage still decrypts, including skipped and post-step messages | done |
 | Media adapter logic: ICE restart on widening, candidate filtering, connection-state mapping, teardown order — against a double of `react-native-webrtc`, not a device | done |
+| Push registration and, more to the point, what a sign-out leaves on the device | done |
 
-Counts at time of writing: 609 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 626 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -200,6 +201,35 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **The wipe did not reach the lock screen.** `presentLocalNotification` puts
+  the contact's name in the title and the decrypted message in the body — on
+  purpose, because the device knows both and the push service must not. That
+  is the right trade while the account exists and the wrong thing to leave
+  behind once it does not.
+
+  `signOut` deleted the push token server-side, erased the database and
+  dropped the master key. Nothing dismissed the notifications already on the
+  device. So a user could delete their account, hand the phone over, and the
+  lock screen would still be showing a contact's name and the plaintext of the
+  last message — the exact data the entire stack exists to protect, sitting in
+  the one place the wipe never looked.
+
+  The only dismissal function that existed, `dismissWakeNotifications`, is not
+  a wipe and cannot become one by accident: it matches `data.type === 'wake'`,
+  and the named notifications are posted with `data: { accountId }`, so they
+  were never in scope. A test asserts that the message body survives that call,
+  so anyone who reaches for it on the sign-out path is told why it is not
+  enough.
+
+  `unregisterForPush` now clears the shade before it touches the network, is
+  called unconditionally rather than only when a client exists — a device
+  whose bootstrap never finished has no client and can still be holding
+  notifications — and guards each step separately, so a notification centre
+  that will not enumerate does not also cost the server-side revocation.
+
+  Same family as the `eraseAll` bug below, found the same way: by writing the
+  first tests `push/register.ts` has ever had.
+
 - **A stored ratchet is only correct if it still decrypts.** The session and
   group-key rows carry the most consequential state on the device, and the
   useful assertion about them is not that the fields match after a round trip

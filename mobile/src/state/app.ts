@@ -959,7 +959,11 @@ export const useApp = create<AppState>((set, get) => ({
   async signOut() {
     // Order matters: revoke the token first, then destroy the keys. Doing it
     // the other way round leaves a live session nobody can revoke.
-    if (runtime?.client) await unregisterForPush(runtime.client);
+    // Unconditional, and not guarded on the client: this also dismisses the
+    // notifications already on the lock screen, which name contacts and quote
+    // decrypted messages. A device whose bootstrap never finished has no
+    // client and can still have those.
+    await unregisterForPush(runtime?.client ?? null);
     try {
       await runtime?.client.logout();
     } catch {

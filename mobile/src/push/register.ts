@@ -46,12 +46,57 @@ export async function registerForPush(client: TildraClient): Promise<boolean> {
   return true;
 }
 
-/** Stop notifications for this device, and remove the token server-side. */
-export async function unregisterForPush(client: TildraClient): Promise<void> {
+/**
+ * Stop notifications for this device, and remove the token server-side.
+ *
+ * The local half is the one that matters. Deleting the server token only stops
+ * what has not been sent yet; the notifications already sitting in the shade
+ * were posted by `presentLocalNotification`, whose titles are contact names
+ * and whose bodies are decrypted message text. A sign-out that wipes the
+ * database and the master key but leaves those behind hands the next person
+ * holding the phone exactly what the encryption existed to keep from them.
+ *
+ * `client` may be null: sign-out has to work on a device whose bootstrap never
+ * finished, and the notifications still need clearing there.
+ *
+ * Nothing here may throw. This runs on the sign-out path, where failing early
+ * once already left an account intact on a device the user believed was wiped.
+ */
+export async function unregisterForPush(client: TildraClient | null): Promise<void> {
+  await dismissAllNotifications();
+  if (!client) return;
   try {
     await client.deletePushToken();
   } catch {
     // A server we cannot reach must not block a local sign-out.
+  }
+}
+
+/**
+ * Clear every notification this app has put on the device — presented and
+ * scheduled alike.
+ *
+ * Each step is guarded on its own rather than sharing one try block. They are
+ * independent, and the first one failing is not a reason to skip the second on
+ * a path whose whole job is to leave nothing behind.
+ */
+async function dismissAllNotifications(): Promise<void> {
+  let Notifications: typeof import('expo-notifications');
+  try {
+    Notifications = await import('expo-notifications');
+  } catch {
+    return;
+  }
+  try {
+    await Notifications.dismissAllNotificationsAsync();
+  } catch {
+    // Best effort: a platform that cannot enumerate the shade is not a reason
+    // to abandon the rest of the wipe.
+  }
+  try {
+    await Notifications.cancelAllScheduledNotificationsAsync();
+  } catch {
+    // As above.
   }
 }
 

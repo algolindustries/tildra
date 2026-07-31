@@ -84,12 +84,21 @@ class FakeDatabase {
 
 vi.mock('../../storage/db', () => ({ Database: FakeDatabase }));
 
+// `unregisterForPush` is what clears the notifications already on the lock
+// screen, whose titles are contact names and whose bodies are decrypted
+// message text. The module's own tests prove it clears them; what is recorded
+// here is that sign-out actually calls it, which is the half a fix in one
+// place and not the other keeps getting wrong.
+const push = { unregisterCalls: [] as unknown[] };
+
 vi.mock('../../push/register', () => ({
   PushError: class extends Error {},
   async registerForPush() {
     return false;
   },
-  async unregisterForPush() {},
+  async unregisterForPush(client: unknown) {
+    push.unregisterCalls.push(client);
+  },
   async presentLocalNotification() {},
   async dismissWakeNotifications() {},
 }));
@@ -129,6 +138,7 @@ beforeEach(() => {
   dbOpens.length = 0;
   erase.calls = 0;
   erase.failWith = null;
+  push.unregisterCalls.length = 0;
 });
 
 describe('a device with no account yet', () => {
@@ -305,6 +315,31 @@ describe('signing out', () => {
     expect(erase.calls).toBe(1);
     expect(secureStore.items.has('tildra.master.v1')).toBe(false);
     expect(secureStore.items.has('tildra.credentials.v1')).toBe(false);
+  });
+
+  it('clears the notifications the wipe cannot reach', async () => {
+    // The database and the master key are not the whole device. A sign-out
+    // that leaves the shade alone leaves a contact's name and the plaintext
+    // of the last message on the lock screen of a phone the user has just
+    // been told is wiped.
+    const { useApp } = await signedIn();
+
+    await useApp.getState().signOut();
+
+    expect(push.unregisterCalls).toHaveLength(1);
+  });
+
+  it('clears them on a device that never finished starting', async () => {
+    // No runtime means no client. It does not mean no notifications, and
+    // guarding the call on the client is how they used to survive.
+    secureStore.failWith = new Error('keychain unavailable');
+    const { useApp, currentRuntime } = await freshApp();
+    await useApp.getState().bootstrap({ serverUrl: 'http://server.test' });
+    expect(currentRuntime()).toBeNull();
+
+    await useApp.getState().signOut();
+
+    expect(push.unregisterCalls).toEqual([null]);
   });
 
   it('reports the failure rather than swallowing it', async () => {
