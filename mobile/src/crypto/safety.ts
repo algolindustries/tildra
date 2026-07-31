@@ -24,9 +24,24 @@ export function safetyNumber(ourIdentityKey: Uint8Array, theirIdentityKey: Uint8
 
   const groups: string[] = [];
   for (let i = 0; i < DIGIT_GROUPS; i++) {
-    // 5 digits per group, from 20 bits of digest — the modulo bias here is
-    // negligible (2^20 / 100000 ≈ 10.49) and the value is a comparison aid,
-    // not a key.
+    // Each group reads 24 bits at a two-byte stride, so consecutive groups
+    // overlap by one byte and only the first 25 of the 30 digest bytes are
+    // read at all.
+    //
+    // That is not what the digest was sized for: twelve disjoint 20-bit fields
+    // is exactly 30 bytes, and this comment used to say 20 bits and quote the
+    // bias for it. The code has always done the above.
+    //
+    // It stays. Changing the extraction changes every safety number anyone has
+    // compared and written down, and the app's own words for a number that no
+    // longer matches are "this is what a key substitution looks like" — a real
+    // alarm, raised by a cosmetic edit. There is nothing to gain either: 25
+    // bytes is 200 bits reaching a 60-digit output that can express about 199,
+    // so the comparison is as strong as its length allows whichever way the
+    // bits are cut. The modulo bias is 2^24 / 100000 ≈ 167.8, which is
+    // negligible for a value that is a comparison aid rather than a key.
+    //
+    // `safety.test.ts` pins the result so this cannot drift by accident.
     const chunk = (digest[i * 2] << 16) | (digest[i * 2 + 1] << 8) | digest[i * 2 + 2];
     groups.push((chunk % 100000).toString().padStart(DIGITS_PER_GROUP, '0'));
   }

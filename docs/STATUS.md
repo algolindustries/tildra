@@ -60,6 +60,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Configuration: defaults, every variable read, malformed values named, and a bound of zero or less refused rather than silently inverting the limit | done |
 | The conformance suite covers every `store.Store` method, enforced by a test rather than by a rule in this file, with the provisioning channel included | done |
 | `PROTOCOL.md` §9 checked against the code: no primitive named without an implementation, none implemented without a row, and the Argon2id costs pinned to the constants | done |
+| Safety numbers: the construction pinned by a recorded vector, symmetry, and every byte of both identity keys reaching the digits | done |
 
 Counts at time of writing: 700 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
@@ -231,6 +232,41 @@ holds an invariant, that is the signal.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **The safety number's comment described a construction the code does not
+  have.** It said each group takes "20 bits of digest" and quoted the modulo
+  bias for `2^20`. The code reads 24 bits at a two-byte stride, so consecutive
+  groups overlap by a byte and only the first 25 of the 30 digest bytes are read
+  at all. The digest length is the tell: twelve disjoint 20-bit fields is
+  exactly 30 bytes, which is what somebody sized it for.
+
+  Left as it is, and the comment now says why. Changing the extraction changes
+  every safety number anyone has compared and written down, and this app's own
+  words for a number that no longer matches are "this is what a key
+  substitution looks like" — a real alarm raised by a cosmetic edit. There is
+  nothing to gain: 25 bytes is 200 bits reaching a 60-digit output that can
+  express about 199, so the comparison is as strong as its length allows
+  whichever way the bits are cut.
+
+  `crypto/safety.ts` had no test file of its own — five assertions in
+  `crypto.test.ts` covered symmetry, the group count and that different peers
+  differ, and nothing pinned the construction. It has eleven now, including a
+  recorded vector, so the extraction cannot drift by accident. The vector is a
+  characterisation and the test says so: it was produced by running this code,
+  which locks the behaviour in place and is not evidence that the behaviour is
+  what §7 intended.
+
+  The assertion that earns its place is the exhaustive one: flipping any single
+  byte of *either* identity key must change the number, over all sixty-four
+  positions. A construction that dropped part of its input would let a
+  substituted key produce the same digits for the bytes it still read, and two
+  people comparing them would confirm an imposter. Dropping the second key from
+  the derivation turns that test red along with two others.
+
+  Checked and found faithful on the way past, since §5.1 writes them literally:
+  the mailbox derivations match the document byte for byte — the `/` separator
+  between owner account and device, the `mb_` prefix, the `:day` suffix on the
+  label, sixteen bytes of hex. So do all twelve KDF labels the document names.
+
 - **The threat model promised something the code does not do.** Its table of
   what the server learns had a row reading "Who sent a message — **Nothing.**
   Sealed sender puts the sender identity inside the ciphertext." The first half
