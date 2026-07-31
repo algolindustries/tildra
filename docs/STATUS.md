@@ -55,6 +55,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Voice playback: the decrypted audio removed on every path out — finished, stopped, unmounted, and a player that would not open | done |
 | Two devices through the real server, driven entirely through the store: delivery, the reply, the shared safety number, and the handle path with its downgrade refusal | done |
 | Server authentication: the registration proof, challenge single-use and device binding, domain separation on both signature contexts, token storage by hash, and the middleware | done |
+| The WebSocket hub: backlog drain, live delivery, a closed socket leaving the listener set, and refusing both a subscribe and an ack for a mailbox the connection does not own | done |
 
 Counts at time of writing: 700 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
@@ -215,6 +216,41 @@ holds an invariant, that is the signal.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **`internal/gateway` had no tests either, only whatever the client suites
+  happened to drive through it.** It has ten now, over a real WebSocket against
+  an `httptest` server and the real in-memory store. `Conn` is built inside
+  `Serve` and closes the socket on the slow-consumer path, so a nil double
+  would only have proved that a nil pointer panics.
+
+  Two of the hub's rules are written into the code as warnings about what
+  happens without them, and both are one authenticated account reaching
+  another's mail. A subscribe is resolved against the store rather than
+  believed from the client — "ownership comes from the store, never from the
+  client's claim". And an ack is refused for a mailbox the connection does not
+  own, because "without this check, any authenticated account could delete
+  anyone else's undelivered mail". Both are asserted now, and the ack one
+  checks the other device's queue is still full afterwards.
+
+  Nothing was wrong. The first version of the suite was, though, in a way worth
+  keeping: `connect` returns when the client has dialled, which is not when the
+  server has registered, so every negative assertion was also what an
+  unfinished connection looks like. Each one now follows an observed positive —
+  and for the two subscribe refusals, a second *owned* mailbox is subscribed
+  after the refused one, so delivery working there proves the refused frame was
+  already processed. The read loop takes frames in order; that is the
+  happens-after.
+
+- **The hub registers a connection before it drains the backlog, and that is
+  not a bug.** `Serve` calls `register` and then `drain`, so an envelope
+  arriving in between reaches the socket ahead of older queued ones — which the
+  code's own comment says must not happen. Followed through rather than
+  reported: `Dequeue` is a read and deletion happens on ack, so the system is
+  at-least-once by construction; the client's message insert is `ON
+  CONFLICT(id) DO UPDATE`, and the ratchet has tested handling for messages
+  arriving out of order. The consequence is a duplicate and a skipped-key walk,
+  both of which the design already carries. Written down so the next reader
+  does not have to re-derive it.
+
 - **`internal/auth` had no tests, and it is the only thing between a bearer
   token and every mailbox on the server.** It has nineteen now. Nothing was
   wrong, which is worth recording rather than dressing up.
