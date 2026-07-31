@@ -52,14 +52,21 @@ tested by running the real Go server and pushing real traffic through it.
 | Photo and avatar picking: scaling, the budget walk against the platform, and no encode left in the cache directory on any path | done |
 | Locales: the guard against every inherited property, tag resolution, and both tables complete, non-empty and actually translated | done |
 | Startup against the real server: account creation, a cold restart onto the same account, and a device with no network at all | done |
+| Voice playback: the decrypted audio removed on every path out — finished, stopped, unmounted, and a player that would not open | done |
 
-Counts at time of writing: 685 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 697 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
 renderer. What stands behind them is typecheck plus the Metro bundle, and the
 logic they call is tested directly. That is weaker than it sounds and is worth
 knowing before trusting a UI change.
+
+It is also where bugs have hidden, so the answer when a component turns out to
+own something that matters is to move it out rather than to shrug: `state/errors.ts`,
+`storage/prekeys.ts` and now `media/playback.ts` all exist because logic that
+could not be tested inside a screen could be tested a file away. If a component
+holds an invariant, that is the signal.
 
 ## Not done
 
@@ -206,6 +213,34 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **"Does not linger on disk after playback" was true of one path out of four.**
+  `expo-audio` plays from a uri, so a received voice note is decrypted and
+  written to the cache directory before it can be heard. `VoiceBubble` deleted
+  that file when playback reached its own end — and only then. Pressing stop
+  removed the player and returned, keeping the file *and* leaving the position
+  poll running for the life of the app. Leaving the conversation removed the
+  player and kept the file. A player that failed to open kept it too, because
+  the audio is written before the player exists.
+
+  So the fourth disk finding in a row, and the first one where the code had a
+  comment claiming otherwise. `db.ts` proves by dumping every row that a
+  forensic image finds nothing legible; a stopped voice note sat next to it in
+  the clear.
+
+  The lifecycle moved to `media/playback.ts`, which is the point as much as the
+  fix. A screen cannot be tested here — there is no React Native test renderer,
+  and STATUS has said so for a long time — but this was never screen logic. It
+  is a lifecycle with one invariant, and out of the component it has twelve
+  tests. Cleanup is one idempotent `stop()` because three things call it: the
+  poll noticing the end, the user pressing stop, and the unmount, and two of
+  those can land in the same tick.
+
+  The player double throws on a second `remove()`, the way the real one does,
+  and reports `playing: false` before the first frame as well as after the last
+  — which is why the end condition needs `currentTime > 0` and why deleting on
+  `!playing` alone would take the audio out from under a note that had not
+  started yet. Five negative controls, all red.
+
 - **The app would not start without a network.** Everything in `startSession`
   that touches the server is deliberately non-blocking, and each one says why
   in a comment: the socket reconnects on its own, push registration is best

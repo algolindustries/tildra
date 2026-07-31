@@ -3,6 +3,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 
 import { useApp } from '../state/app';
 import { Message } from '../storage/db';
+import { Playback, startVoicePlayback } from '../media/playback';
 import { barHeights, formatDuration, playbackProgress } from '../media/waveform';
 import { palette, radius, spacing, typography } from './theme';
 
@@ -20,20 +21,29 @@ export function VoiceBubble({ message, outgoing }: { message: Message; outgoing:
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
   const [position, setPosition] = useState(0);
-  const playerRef = useRef<{ remove: () => void } | null>(null);
+  const playbackRef = useRef<Playback | null>(null);
 
   const durationMs = message.attachment?.durationMs ?? 0;
   const waveform = message.attachment?.waveform ?? new Uint8Array(0);
   const progress = playbackProgress(position, durationMs);
 
-  useEffect(() => () => playerRef.current?.remove(), []);
+  // Leaving the conversation stops playback and takes the decrypted audio off
+  // the disk with it. This used to remove the player and keep the file.
+  useEffect(
+    () => () => {
+      void playbackRef.current?.stop();
+      playbackRef.current = null;
+    },
+    [],
+  );
 
   async function toggle() {
     if (playing) {
-      playerRef.current?.remove();
-      playerRef.current = null;
+      const current = playbackRef.current;
+      playbackRef.current = null;
       setPlaying(false);
       setPosition(0);
+      await current?.stop();
       return;
     }
 
@@ -42,37 +52,17 @@ export function VoiceBubble({ message, outgoing }: { message: Message; outgoing:
       const bytes = await loadAttachment(message.id);
       if (!bytes) return;
 
-      const Audio = await import('expo-audio');
-      // expo-file-system's modern File API is not typed for reads and writes yet,
-      // and its top-level readAsStringAsync/writeAsStringAsync now throw at runtime
-      // with a pointer here. The legacy entrypoint is Expo's documented path and is
-      // fully typed, so that is what this uses until the new API exposes the same
-      // operations.
-      const FileSystem = await import('expo-file-system/legacy');
-
-      // expo-audio plays from a URI, so the decrypted bytes go to the app's
-      // cache directory rather than anywhere the system indexes or backs up.
-      const path = `${FileSystem.cacheDirectory}tildra-voice-${message.id.replace(/[^a-zA-Z0-9]/g, '')}.m4a`;
-      let binary = '';
-      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-      await FileSystem.writeAsStringAsync(path, globalThis.btoa(binary), { encoding: 'base64' });
-
-      const player = Audio.createAudioPlayer({ uri: path });
-      playerRef.current = player;
-      player.play();
-      setPlaying(true);
-
-      const tick = setInterval(() => {
-        const seconds = player.currentTime ?? 0;
-        setPosition(seconds * 1000);
-        if (!player.playing && seconds > 0) {
-          clearInterval(tick);
+      playbackRef.current = await startVoicePlayback({
+        messageId: message.id,
+        bytes,
+        onPosition: setPosition,
+        onEnded: () => {
+          playbackRef.current = null;
           setPlaying(false);
           setPosition(0);
-          // The plaintext audio does not linger on disk after playback.
-          void FileSystem.deleteAsync(path, { idempotent: true }).catch(() => undefined);
-        }
-      }, 100);
+        },
+      });
+      setPlaying(true);
     } finally {
       setLoading(false);
     }
