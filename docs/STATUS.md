@@ -61,6 +61,7 @@ tested by running the real Go server and pushing real traffic through it.
 | The conformance suite covers every `store.Store` method, enforced by a test rather than by a rule in this file, with the provisioning channel included | done |
 | `PROTOCOL.md` §9 checked against the code: no primitive named without an implementation, none implemented without a row, and the Argon2id costs pinned to the constants | done |
 | Safety numbers: the construction pinned by a recorded vector, symmetry, and every byte of both identity keys reaching the digits | done |
+| Every KDF label in `src/crypto` documented in `PROTOCOL.md` and vice versa, enforced by a test | done |
 
 Counts at time of writing: 700 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
@@ -232,6 +233,34 @@ holds an invariant, that is the signal.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **§3 specified a message-key expansion Tildra has never used.** It said
+  message keys are `HKDF(MK, info="Tildra_MsgKey_v1")` expanded to an 88-byte
+  block, `32 enc ‖ 32 auth ‖ 24 nonce`. The code expands 56 bytes as
+  `32 key ‖ 24 nonce`, and there is no separate authentication key because
+  XChaCha20-Poly1305 is an AEAD and derives its own Poly1305 key. The document
+  described an encrypt-then-MAC construction that does not exist here, and an
+  implementer following it would have produced ciphertexts this client cannot
+  read.
+
+- **Six protocol-level derivations were in the code and nowhere in the
+  document.** `Tildra_RootKey_v1` (the DH ratchet step, 96 bytes into root ‖
+  chain ‖ next header key), `Tildra_HeaderKeys_v1`, `Tildra_GroupSenderKey_v1`,
+  `Tildra_GroupMsg_v1` (the signature transcript), `Tildra_SealedSender_v1` and
+  `Tildra_Provisioning_v1`. §§3–5 could not have been implemented from the
+  document as written — which is the document's whole job.
+
+  All six are written up now, each with its ikm, salt, info and output split,
+  taken from the call sites rather than from memory. The `Tildra_Vault_*`
+  domains and the blind index are deliberately still absent: they encrypt the
+  local database and have no place in a document about what goes over the wire.
+
+  `protocol-doc.test.ts` enforces both directions now. Every `Tildra_*` label
+  under `src/crypto` must appear in `PROTOCOL.md`, and every label the document
+  names must exist in the code — the second being how "blind-signed delivery
+  token" became a guarantee in the threat model. Removing a label from the
+  document, inventing one in the document, and adding one to the code each turn
+  a different assertion red.
+
 - **The safety number's comment described a construction the code does not
   have.** It said each group takes "20 bits of digest" and quoted the modulo
   bias for `2^20`. The code reads 24 bits at a two-byte stride, so consecutive

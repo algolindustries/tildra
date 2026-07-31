@@ -132,3 +132,49 @@ describe('the Argon2id parameters', () => {
     expect(Number(parallelism![1])).toBe(ARGON2_PARALLELISM);
   });
 });
+
+describe('the KDF labels', () => {
+  /**
+   * Scoped to `src/crypto`, which is the protocol layer.
+   *
+   * `storage/vault.ts` has its own `Tildra_Vault_*` domains and a blind-index
+   * label; those encrypt the local database and are deliberately not in a
+   * document about what goes over the wire. Nothing else is exempt — if a label
+   * under `src/crypto` is not in `PROTOCOL.md`, a second implementation cannot
+   * be built from the document, which is the document's whole job.
+   */
+  const LABEL = /Tildra_[A-Za-z0-9_]*/g;
+
+  function labelsIn(text: string): Set<string> {
+    return new Set(text.match(LABEL) ?? []);
+  }
+
+  it('found labels on both sides, so the comparison means something', () => {
+    expect(labelsIn(cryptoSource()).size).toBeGreaterThanOrEqual(15);
+    expect(labelsIn(protocolDoc()).size).toBeGreaterThanOrEqual(15);
+  });
+
+  it('are every one of them documented', () => {
+    // Six were not, until 2026-07-31: the root-key ratchet step, the header
+    // keys, the group message-key expansion, the group signature transcript,
+    // the sealed-sender key and the provisioning payload key. An implementer
+    // reading §§3-5 could not have built a client that interoperates.
+    const undocumented = [...labelsIn(cryptoSource())].filter(
+      (label) => !labelsIn(protocolDoc()).has(label),
+    );
+    expect(
+      undocumented.sort(),
+      'these derivations exist in the code and nowhere in PROTOCOL.md',
+    ).toEqual([]);
+  });
+
+  it('are not named by the document unless the code has them', () => {
+    // The other direction, and the one that has bitten hardest: a label in the
+    // document with nothing behind it is how "blind-signed delivery token"
+    // became a guarantee in the threat model.
+    const invented = [...labelsIn(protocolDoc())].filter(
+      (label) => !labelsIn(cryptoSource()).has(label),
+    );
+    expect(invented.sort(), 'the document names a derivation the code does not do').toEqual([]);
+  });
+});

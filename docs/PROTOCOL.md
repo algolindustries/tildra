@@ -205,8 +205,29 @@ Standard Signal Double Ratchet, with two deliberate choices:
   cannot correlate messages into conversations by watching ratchet keys.
 - **Chain keys advance with a domain-separated KDF:**
   `CK' = HMAC(CK, 0x02)`, `MK = HMAC(CK, 0x01)`, and message keys are
-  `HKDF(MK, info="Tildra_MsgKey_v1")` expanded to an 88-byte
-  (32 enc ‖ 32 auth ‖ 24 nonce) block.
+  `HKDF(MK, info="Tildra_MsgKey_v1")` expanded to a 56-byte
+  (32 key ‖ 24 nonce) block. There is no separate authentication key:
+  XChaCha20-Poly1305 is an AEAD and derives its own Poly1305 key from the
+  encryption key. This paragraph said 88 bytes as `32 enc ‖ 32 auth ‖ 24 nonce`
+  until 2026-07-31, which describes an encrypt-then-MAC construction Tildra has
+  never used — an implementer following it would have produced ciphertexts this
+  client cannot read.
+
+The two derivations either side of that one, which this section did not state
+at all:
+
+- **The DH ratchet step**, run whenever the conversation changes direction:
+  ```
+  HKDF(ikm = DH(our ratchet secret, their ratchet public),
+       salt = current root key,
+       info = "Tildra_RootKey_v1") → 96 bytes
+     = root key' ‖ chain key ‖ next header key
+  ```
+- **The initial header keys**, from the PQXDH shared secret:
+  ```
+  HKDF(ikm = SK, salt = none, info = "Tildra_HeaderKeys_v1") → 64 bytes
+     = initiator header key ‖ responder next header key
+  ```
 
 Skipped message keys are cached for at most 1000 messages / 7 days per session,
 then dropped. This bounds the damage of a device compromise.
@@ -237,6 +258,17 @@ Tildra groups use **sender keys over pairwise sessions**:
 4. **Membership changes force a rotation.** When a member leaves or is removed,
    every remaining member generates a fresh sender chain. A removed member cannot
    read anything sent after their removal.
+
+A group message key is expanded exactly as a pairwise one is, under its own
+label, and every message carries a signature over a domain-separated
+transcript so one member cannot forge another's:
+
+```
+HKDF(ikm = group message key, salt = none,
+     info = "Tildra_GroupSenderKey_v1") → 56 bytes = key ‖ nonce
+
+signed bytes = "Tildra_GroupMsg_v1:" ‖ group_id ‖ u32(iteration) ‖ ciphertext
+```
 
 Group membership is stored client-side and mirrored on the server as an encrypted
 blob. The server knows a group exists and how many mailboxes to fan out to. It
@@ -271,6 +303,16 @@ account that made it. Unlinkable delivery — a blind-signed token that proves a
 account without naming one — would close that, and is **not implemented**. It
 was described here as though it were, which is the kind of claim this document
 exists to avoid; see §11.
+
+The envelope itself is sealed to the recipient's identity key under an
+ephemeral X25519 key, with both public keys bound into the salt so a captured
+shared secret cannot be replayed against a different pair:
+
+```
+HKDF(ikm = DH(ephemeral secret, recipient DH public),
+     salt = ephemeral public ‖ recipient DH public,
+     info = "Tildra_SealedSender_v1") → 32 bytes
+```
 
 ### 5.1 Mailbox addressing
 
@@ -397,6 +439,15 @@ the provisioning channel *is* the server.
 2. An existing, signed-in device reads the channel, and checks the identity key
    the server handed over against `commit`. **The commitment travelled over a
    camera, not the network**, so a substituted key fails here.
+The approval is sealed under its own label, with both ephemeral public keys
+bound into the salt in the order the sealer computes them:
+
+```
+HKDF(ikm = DH(sealer ephemeral secret, new device ephemeral public),
+     salt = sealer ephemeral public ‖ new device ephemeral public,
+     info = "Tildra_Provisioning_v1") → 32 bytes
+```
+
 3. The existing device registers the new one and seals an approval to the
    ephemeral key: `{accountId, deviceId, approvedBy, signature}` over a
    transcript binding all three.
