@@ -7,7 +7,7 @@
  * fill someone else's disk, and the server enforces its own limit anyway.
  */
 
-import { compressToBudget } from './avatar';
+import { compressToBudget, renderJpegBytes } from './avatar';
 
 /** Longest edge of a sent photo. */
 export const PHOTO_DIMENSION = 1600;
@@ -27,12 +27,6 @@ export interface PickedPhoto {
 /** Returns null when the user cancels, which is not an error. */
 export async function pickPhoto(): Promise<PickedPhoto | null> {
   const ImagePicker = await import('expo-image-picker');
-  const ImageManipulator = await import('expo-image-manipulator');
-  // expo-file-system's modern File API is not typed for reads and writes yet,
-  // and its top-level readAsStringAsync/writeAsStringAsync now throw at
-  // runtime with a pointer here. The legacy entrypoint is Expo's documented
-  // path and is fully typed, so that is what this uses.
-  const FileSystem = await import('expo-file-system/legacy');
 
   const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
   if (!permission.granted) {
@@ -51,20 +45,7 @@ export async function pickPhoto(): Promise<PickedPhoto | null> {
   const height = Math.max(1, Math.round((asset.height || PHOTO_DIMENSION) * scale));
 
   const bytes = await compressToBudget(
-    async (quality) => {
-      const context = ImageManipulator.ImageManipulator.manipulate(asset.uri);
-      context.resize({ width, height });
-      const image = await context.renderAsync();
-      const saved = await image.saveAsync({
-        compress: quality,
-        format: ImageManipulator.SaveFormat.JPEG,
-      });
-      const base64 = await FileSystem.readAsStringAsync(saved.uri, { encoding: 'base64' });
-      const binary = globalThis.atob(base64);
-      const out = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
-      return out;
-    },
+    (quality) => renderJpegBytes(asset.uri, { width, height }, quality),
     MAX_PHOTO_BYTES,
     PHOTO_QUALITY_STEPS,
   );

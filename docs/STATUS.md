@@ -49,8 +49,9 @@ tested by running the real Go server and pushing real traffic through it.
 | Push registration and, more to the point, what a sign-out leaves on the device | done |
 | The platform keystore: key persistence across runs, the accessibility option on every call, and erasing under a keychain that refuses | done |
 | Voice recording: the duration cap against the audio it actually produces, and the plaintext capture removed on every path out | done |
+| Photo and avatar picking: scaling, the budget walk against the platform, and no encode left in the cache directory on any path | done |
 
-Counts at time of writing: 656 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 667 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -203,6 +204,28 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **So was every photo, five times over.** `saveAsync` writes each encode to
+  the cache directory and returns a uri. `compressToBudget` calls the encoder
+  once per quality step, and nothing deleted any of them — so sending one photo
+  left up to five unencrypted copies of it in app storage, and setting an
+  avatar left five more. The worst case was the failure path, where no quality
+  fit: every step ran, and every file stayed.
+
+  The cache directory is not a wipe. The OS may reclaim it or may not, and it
+  was the one place a plaintext copy of a message the user sent survived
+  everything the vault does.
+
+  The encode is one shared function now — `renderJpegBytes` — rather than the
+  same fifteen lines in `photo.ts` and `avatar.ts`. That is the point as much
+  as the delete is: a fix applied to one path and not its twin is this
+  project's most repeated mistake, and these two were already a copy of each
+  other. A test asserts both pickers come out with nothing on disk, and the
+  negative control for it splits them apart again to prove it would notice.
+
+  Found by writing the first tests `media/photo.ts` has ever had.
+  `avatar.test.ts` covered `compressToBudget`, the arithmetic; the platform
+  half of both pickers was untested, and that is where the bug was.
+
 - **Every voice message ever recorded was still on the disk, unencrypted.**
   The platform writes the microphone capture to app storage as a plain .m4a.
   `stop()` read it, encrypted the bytes, sent them — and left the file. So did

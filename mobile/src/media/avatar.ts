@@ -26,6 +26,59 @@ export class AvatarError extends Error {}
 export type Compressor = (quality: number) => Promise<Uint8Array>;
 
 /**
+ * Render a resized JPEG and return its bytes, keeping nothing.
+ *
+ * `saveAsync` writes the encoded image to the cache directory and hands back a
+ * uri. The bytes are all anyone here wants, so the file goes as soon as it has
+ * been read. Nothing did that before: `compressToBudget` calls this once per
+ * quality step, so picking a single photo left up to five unencrypted copies
+ * of it in app storage, and picking an avatar left five more. The cache
+ * directory is not a wipe — the OS may reclaim it, or may not, and it is the
+ * one place on the device where a plaintext copy of a message the user sent
+ * survives everything the vault does.
+ *
+ * Shared by both pickers rather than written twice, because a fix applied to
+ * one path and not its twin is this project's most repeated mistake.
+ */
+export async function renderJpegBytes(
+  source: string,
+  size: { width: number; height: number },
+  quality: number,
+): Promise<Uint8Array> {
+  const ImageManipulator = await import('expo-image-manipulator');
+  // expo-file-system's modern File API is not typed for reads and writes yet,
+  // and its top-level readAsStringAsync/writeAsStringAsync now throw at
+  // runtime with a pointer here. The legacy entrypoint is Expo's documented
+  // path and is fully typed, so that is what this uses.
+  const FileSystem = await import('expo-file-system/legacy');
+
+  const context = ImageManipulator.ImageManipulator.manipulate(source);
+  context.resize(size);
+  const image = await context.renderAsync();
+  const saved = await image.saveAsync({
+    compress: quality,
+    format: ImageManipulator.SaveFormat.JPEG,
+  });
+
+  try {
+    const base64 = await FileSystem.readAsStringAsync(saved.uri, { encoding: 'base64' });
+    const binary = globalThis.atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  } finally {
+    // In a finally: a read that throws is exactly when the temporary file is
+    // most likely to be forgotten, and it is on disk either way.
+    try {
+      await FileSystem.deleteAsync(saved.uri, { idempotent: true });
+    } catch {
+      // Best effort. A cache file that will not delete must not turn a
+      // successful encode into a failed send.
+    }
+  }
+}
+
+/**
  * Find the highest quality that fits the budget.
  *
  * Walks down rather than binary-searching: each step is an image encode, the
@@ -61,12 +114,6 @@ export async function compressToBudget(
  */
 export async function pickAvatar(): Promise<Uint8Array | null> {
   const ImagePicker = await import('expo-image-picker');
-  const ImageManipulator = await import('expo-image-manipulator');
-  // expo-file-system's modern File API is not typed for reads and writes yet,
-  // and its top-level readAsStringAsync/writeAsStringAsync now throw at
-  // runtime with a pointer here. The legacy entrypoint is Expo's documented
-  // path and is fully typed, so that is what this uses.
-  const FileSystem = await import('expo-file-system/legacy');
 
   const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
   if (!permission.granted) {
@@ -83,19 +130,7 @@ export async function pickAvatar(): Promise<Uint8Array | null> {
 
   const source = result.assets[0].uri;
 
-  return compressToBudget(async (quality) => {
-    const context = ImageManipulator.ImageManipulator.manipulate(source);
-    context.resize({ width: AVATAR_DIMENSION, height: AVATAR_DIMENSION });
-    const image = await context.renderAsync();
-    const saved = await image.saveAsync({
-      compress: quality,
-      format: ImageManipulator.SaveFormat.JPEG,
-    });
-
-    const base64 = await FileSystem.readAsStringAsync(saved.uri, { encoding: 'base64' });
-    const binary = globalThis.atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes;
-  });
+  return compressToBudget((quality) =>
+    renderJpegBytes(source, { width: AVATAR_DIMENSION, height: AVATAR_DIMENSION }, quality),
+  );
 }
