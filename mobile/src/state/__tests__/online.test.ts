@@ -147,6 +147,63 @@ vi.mock('../../media/photo', () => ({
   },
 }));
 
+/**
+ * The media stack, which does not exist in Node.
+ *
+ * `call-driver.test.ts` already drives the peer-connection sequencing against a
+ * double, and `manager.test.ts` carries call signalling end to end through a
+ * real server. What neither touches is the store: what `placeCall` leaves in
+ * `call` and `callBusy`, and whether `endCall` takes the call screen down when
+ * the hangup cannot be sent.
+ */
+const peer = {
+  created: 0,
+  closes: 0,
+  failCreate: null as Error | null,
+};
+
+/** Valid enough for `crypto/calling.ts` to parse and bind a fingerprint to. */
+function fakeSdp(seed = 1): string {
+  const bytes: string[] = [];
+  for (let i = 0; i < 32; i++) {
+    bytes.push(((i * 13 + seed * 29) % 256).toString(16).padStart(2, '0').toUpperCase());
+  }
+  return [
+    'v=0',
+    'o=- 1 2 IN IP4 127.0.0.1',
+    's=-',
+    't=0 0',
+    'm=audio 9 UDP/TLS/RTP/SAVPF 111',
+    'c=IN IP4 0.0.0.0',
+    'a=setup:actpass',
+    `a=fingerprint:sha-256 ${bytes.join(':')}`,
+    '',
+  ].join('\r\n');
+}
+
+vi.mock('../../session/webrtc-peer', () => ({
+  async createWebRtcPeer() {
+    if (peer.failCreate) throw peer.failCreate;
+    peer.created += 1;
+    return {
+      async createOffer() {
+        return fakeSdp(1);
+      },
+      async createAnswer() {
+        return fakeSdp(2);
+      },
+      async setLocalDescription() {},
+      async setRemoteDescription() {},
+      async addIceCandidate() {},
+      async setConfiguration() {},
+      close() {
+        peer.closes += 1;
+      },
+      setMuted() {},
+    };
+  },
+}));
+
 vi.mock('../../push/register', () => ({
   PushError: class extends Error {},
   async registerForPush() {
@@ -293,6 +350,11 @@ afterAll(async () => {
  * phrase derivation, a prekey batch and a socket handshake — worth paying when
  * the test asks that side to receive something, and pure waiting when it does
  * not.
+ *
+ * It cannot *receive*: mailboxes are registered by `publishMailboxes` at
+ * startSession, which a raw client never runs, so anything addressed here comes
+ * back "unknown mailbox". Use `signedUp` when the other side has to get
+ * something.
  */
 async function registerContact(name: string): Promise<string> {
   const identity = generateIdentity();
@@ -314,10 +376,20 @@ async function registerContact(name: string): Promise<string> {
 async function signedUp(device: Device, deviceName: string, displayName: string) {
   const app = await boot(device);
   const { TildraClient } = await import('../../api/client');
+  // The manager class too, and from this graph: a spy on the prototype of some
+  // *other* device's copy patches nothing this store will ever call. That is
+  // exactly what happened to the first version of the hangup test, which
+  // passed against a build with the bug put back in.
+  const { SessionManager } = await import('../../session/manager');
   await app.useApp.getState().bootstrap({ serverUrl: BASE_URL });
   await app.useApp.getState().createAccount(deviceName, displayName);
   await waitFor(() => app.useApp.getState().socketState === 'open');
-  return { app, client: TildraClient, accountId: app.useApp.getState().accountId! };
+  return {
+    app,
+    client: TildraClient,
+    manager: SessionManager,
+    accountId: app.useApp.getState().accountId!,
+  };
 }
 
 /** The device the first two blocks share, so a cold start is the same phone. */
@@ -1010,5 +1082,100 @@ describeOnline('a photo across two devices', () => {
 
     expect(alice.app.useApp.getState().messages).toHaveLength(before);
     expect(alice.app.useApp.getState().error).toBe(errorBefore);
+  }, 120_000);
+});
+
+describeOnline('placing a call, and getting off it', () => {
+  /**
+   * One pair for the whole block. Signing up costs a recovery phrase
+   * derivation and a prekey batch, and every test here needs the same two
+   * devices with a session between them.
+   */
+  let alice: Awaited<ReturnType<typeof signedUp>>;
+  let bob: Awaited<ReturnType<typeof signedUp>>;
+
+  beforeAll(async () => {
+    if (!canRun) return;
+    alice = await signedUp(newDevice('ca'), 'Alice iPhone', 'Ayşe');
+    bob = await signedUp(newDevice('cb'), 'Bob Pixel', 'Bora');
+
+    // Call signalling travels over the pairwise ratchet, so there has to be a
+    // session before there can be a call.
+    await alice.app.useApp.getState().startConversation(bob.accountId);
+    await alice.app.useApp.getState().openConversation(bob.accountId);
+    await alice.app.useApp.getState().send('bir saniye');
+    await waitFor(() =>
+      bob.app.useApp.getState().conversations.some((c) => c.accountId === alice.accountId),
+    );
+  }, 180_000);
+
+  it('rings the other device, and is not busy once it is ringing', async () => {
+    peer.failCreate = null;
+
+    await alice.app.useApp.getState().placeCall(bob.accountId);
+
+    expect(alice.app.useApp.getState().call?.direction).toBe('outgoing');
+    // The flag exists to keep the button from being pressed twice while the
+    // media stack comes up; leaving it set would disable hanging up too.
+    expect(alice.app.useApp.getState().callBusy).toBe(false);
+
+    // And the other end actually rings, which is the half a single-device test
+    // cannot see.
+    await waitFor(() => bob.app.useApp.getState().call !== null);
+    expect(bob.app.useApp.getState().call?.direction).toBe('incoming');
+
+    await alice.app.useApp.getState().endCall();
+    expect(alice.app.useApp.getState().call).toBeNull();
+    await waitFor(() => bob.app.useApp.getState().call === null);
+  }, 120_000);
+
+  it('ignores a second call placed on top of a live one', async () => {
+    peer.failCreate = null;
+    await alice.app.useApp.getState().placeCall(bob.accountId);
+    const first = alice.app.useApp.getState().call;
+    expect(first).not.toBeNull();
+
+    await alice.app.useApp.getState().placeCall(bob.accountId);
+
+    expect(alice.app.useApp.getState().call).toBe(first);
+
+    await alice.app.useApp.getState().endCall();
+    await waitFor(() => bob.app.useApp.getState().call === null);
+  }, 120_000);
+
+  it('leaves no call behind when the media stack will not come up', async () => {
+    peer.failCreate = new Error('no camera or microphone');
+    try {
+      await alice.app.useApp.getState().placeCall(bob.accountId);
+
+      expect(alice.app.useApp.getState().call).toBeNull();
+      // Busy is cleared in a finally: stuck on would mean the user cannot try
+      // again without restarting the app.
+      expect(alice.app.useApp.getState().callBusy).toBe(false);
+    } finally {
+      peer.failCreate = null;
+    }
+  }, 120_000);
+
+  it('takes the call screen down even when the hangup cannot be sent', async () => {
+    // `endCall` clears the state before the hangup goes out, and says why: a
+    // hangup that fails must still take the screen down, or the user is
+    // looking at a call that is over and cannot leave it. Nothing checked it.
+    peer.failCreate = null;
+
+    await alice.app.useApp.getState().placeCall(bob.accountId);
+    expect(alice.app.useApp.getState().call).not.toBeNull();
+
+    const spy = vi
+      .spyOn(alice.manager.prototype, 'endCall')
+      .mockRejectedValue(new Error('the server is unreachable'));
+    try {
+      await alice.app.useApp.getState().endCall();
+
+      expect(alice.app.useApp.getState().call).toBeNull();
+      expect(alice.app.useApp.getState().callBusy).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
   }, 120_000);
 });

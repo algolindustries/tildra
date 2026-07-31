@@ -214,6 +214,39 @@ holds an invariant, that is the signal.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **Calls now have a store-level test, and the last uncovered path in `app.ts`
+  is closed.** `call-driver.test.ts` drives the peer-connection sequencing
+  against a double and `manager.test.ts` carries the signalling end to end
+  through a real server. Neither touches the store: what `placeCall` leaves in
+  `call` and `callBusy`, whether a second press is ignored, whether a media
+  stack that will not come up leaves the app stuck busy, and whether `endCall`
+  takes the screen down when the hangup cannot be sent.
+
+  That last one is written into the code as a comment — "a hangup that fails to
+  send must still take the call screen down, or the user is looking at a call
+  that is over and cannot leave it" — and had nothing checking it. It does now,
+  and the negative control puts the clear back after the await and goes red.
+
+  Two devices ring each other through the real server, with only
+  `session/webrtc-peer` doubled, so the incoming side is observed rather than
+  assumed. One pair is shared across the block: signing up costs a recovery
+  phrase derivation and a prekey batch, and four tests needed the same two
+  devices.
+
+  Two things went wrong writing it, both caught by controls rather than by
+  reading:
+
+  - The callee was a `registerContact` at first — an account registered
+    straight through the client. It cannot receive anything: mailboxes are
+    registered by `publishMailboxes` at startSession, which a raw client never
+    runs, so every send came back "unknown mailbox". The helper says so now.
+  - The failing-hangup test spied on `SessionManager.prototype.endCall` from
+    the *wrong module graph*. Every `boot()` resets the registry, so the class
+    imported after the last boot is a different object from the one the first
+    device's store uses. The spy patched nothing and the test passed against a
+    build with the bug put back. `signedUp` returns the class from its own
+    graph now, the way it already did for the client.
+
 - **Attachments now cross two devices in a test, and nothing was wrong.**
   `sendPhoto` and `loadAttachment` were the last two network paths in `app.ts`
   with no coverage. A photo goes from one store to the other through the real
