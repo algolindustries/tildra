@@ -49,6 +49,12 @@ check() {
 
 # WebRTC needs all of these on Android. RECORD_AUDIO and CAMERA are the ones a
 # user notices; the rest are what the media stack needs to find a path at all.
+#
+# This list is the media stack's, not the app's. Android merges every library's
+# manifest at build time, so permissions like POST_NOTIFICATIONS arrive from
+# expo-notifications' own manifest and are not in what prebuild writes here —
+# checked, rather than assumed, when this comment was written. Asserting them
+# here would fail against a project that is correct.
 for permission in \
   android.permission.INTERNET \
   android.permission.ACCESS_NETWORK_STATE \
@@ -60,10 +66,20 @@ for permission in \
   check "android $permission" "$MANIFEST" "$permission"
 done
 
-# iOS refuses the camera or microphone outright, at runtime, without a usage
-# string — and the crash log says nothing useful.
+# iOS refuses the camera, the microphone or the photo library outright, at
+# runtime, without a usage string — and the crash log says nothing useful.
+#
+# The photo one was missing from this list while "send a photo" shipped. It is
+# present in the generated project today, which is the point: the failure this
+# script exists to catch is a key that stops being written, and an assertion
+# only catches that if it is here before it happens.
+#
+# These three are the whole iOS surface. Unlike Android, an Info.plist key
+# cannot arrive from a library at build time — it has to be in the app's own
+# plist, so what prebuild produces is what ships.
 check "ios NSCameraUsageDescription" "$INFO_PLIST" "NSCameraUsageDescription"
 check "ios NSMicrophoneUsageDescription" "$INFO_PLIST" "NSMicrophoneUsageDescription"
+check "ios NSPhotoLibraryUsageDescription" "$INFO_PLIST" "NSPhotoLibraryUsageDescription"
 
 # A placeholder identifier means two people generating from the same source
 # get different apps.

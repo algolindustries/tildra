@@ -101,10 +101,21 @@ holds an invariant, that is the signal.
   57 release, but it uses only long-standing `expo/config-plugins` helpers.
   It is installed with an npm `overrides` entry so `npm ci` needs no flags,
   and — the part that makes this a decision rather than a hope —
-  `scripts/check-native-config.sh` runs `expo prebuild` in CI and asserts every
-  Android permission and both iOS usage strings are actually in the generated
-  project. Verified it bites by removing the plugin and watching four
-  permissions disappear.
+  `scripts/check-native-config.sh` runs `expo prebuild` in CI and asserts the
+  permissions the media stack needs and all three iOS usage strings are
+  actually in the generated project. Verified it bites by removing the plugin
+  and watching four permissions disappear.
+
+  Two corrections to what that sentence used to claim, both measured rather
+  than reasoned. It said "every Android permission", and it is not: Android
+  merges every library's manifest at build time, so `POST_NOTIFICATIONS`
+  arrives from `expo-notifications`' own manifest and is not in what prebuild
+  writes — asserting it here would fail against a project that is correct. And
+  it said "both iOS usage strings" when the app depends on three: the photo
+  library one was unasserted while "send a photo" shipped. On iOS a usage
+  string cannot arrive from a library, so what prebuild produces is what ships,
+  and an absent key denies the picker at runtime with a crash log that says
+  nothing useful — which is the exact failure this script exists to catch.
 
   There is now a call UI: a phone button in the conversation header, a ring
   screen above everything else, answer and decline, mute, hang up, and — since
@@ -219,6 +230,27 @@ holds an invariant, that is the signal.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **The CI workflow was audited against what this file claims, and holds.**
+  Every "checked in CI" row maps to a step: `reproduce.sh` covers both
+  `tildrad` and `tildra-auditor`, the app bundle is built twice for iOS and
+  Android, the native projects are regenerated and compared, the Postgres
+  conformance suite has a service container and a URL so it fails rather than
+  skips, and the client job installs Go because its integration suites build
+  the real server. `gofmt`, `go vet`, `staticcheck`, `-race`, typecheck,
+  `check:reachable`, the bundle and the crypto vectors are all there.
+
+  One gap, in the native check rather than the workflow: it asserted two of the
+  three iOS usage strings the app depends on. It asserts the photo library one
+  now, and the negative control — pointing the assertion at a key the project
+  genuinely does not have — exits 1 rather than printing "ok".
+
+  Everything else in this audit was verified and found correct, including the
+  one that looked like a defect on the way past: the generated Android manifest
+  has no `POST_NOTIFICATIONS`, which would break every notification on Android
+  13 and later. It arrives from `expo-notifications`' library manifest at
+  Gradle merge time. Generated both projects and read them rather than
+  reasoning about it.
+
 - **The conformance suite had a hole exactly where it says it must not.** This
   file already carries the rule — "If you add a method to `store.Store`, add it
   to the suite too, or Postgres and memory are free to drift" — and nothing
