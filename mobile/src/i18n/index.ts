@@ -495,8 +495,23 @@ const tr: Strings = {
 
 const LOCALES: Record<Locale, Strings> = { en, tr };
 
+/**
+ * Own keys only.
+ *
+ * This was `value in LOCALES`, which walks the prototype chain: `constructor`,
+ * `toString`, `hasOwnProperty` and `__proto__` all answered true, and this is a
+ * type guard, so TypeScript then treated those strings as a `Locale`. Feeding
+ * one to `strings` returned a function or `Object.prototype` instead of a
+ * table, and every label in the app rendered as `undefined` — with the compiler
+ * satisfied throughout, because the guard had said so.
+ *
+ * Nothing reaches it that way today: the only caller is `resolveLocale`, and
+ * the only tag comes from `Localization.getLocales()`, which returns real
+ * BCP-47. The defect is that an exported guard is wrong for anyone who later
+ * points it at a stored preference, a language picker or a deep link.
+ */
 export function isSupportedLocale(value: string): value is Locale {
-  return value in LOCALES;
+  return Object.prototype.hasOwnProperty.call(LOCALES, value);
 }
 
 /**
@@ -509,8 +524,22 @@ export function resolveLocale(tag: string | undefined | null): Locale {
   return isSupportedLocale(base) ? base : 'en';
 }
 
+/**
+ * The table for a locale, and never `undefined`.
+ *
+ * The parameter is typed, so in a compiling program the fallback is dead code.
+ * It is here because the guard above was wrong once and the compiler believed
+ * it: the failure was not an exception anyone could trace, it was every string
+ * in the interface silently becoming `undefined`. English is a worse answer
+ * than the user's own language and a much better one than a blank app.
+ *
+ * It goes through the same guard rather than `?? en`, which was the first
+ * attempt and did not work: `LOCALES['constructor']` is the `Object` function,
+ * which is perfectly truthy, so the fallback never fired for the one input it
+ * existed to catch. One definition of "is a locale", used by both.
+ */
 export function strings(locale: Locale): Strings {
-  return LOCALES[locale];
+  return isSupportedLocale(locale) ? LOCALES[locale] : en;
 }
 
 export const availableLocales = Object.keys(LOCALES) as Locale[];

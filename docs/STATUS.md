@@ -50,8 +50,9 @@ tested by running the real Go server and pushing real traffic through it.
 | The platform keystore: key persistence across runs, the accessibility option on every call, and erasing under a keychain that refuses | done |
 | Voice recording: the duration cap against the audio it actually produces, and the plaintext capture removed on every path out | done |
 | Photo and avatar picking: scaling, the budget walk against the platform, and no encode left in the cache directory on any path | done |
+| Locales: the guard against every inherited property, tag resolution, and both tables complete, non-empty and actually translated | done |
 
-Counts at time of writing: 667 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 678 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -204,6 +205,37 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **A type guard that answered true for `constructor`.**
+  `isSupportedLocale` was `value in LOCALES`, and `in` walks the prototype
+  chain. `constructor`, `toString`, `hasOwnProperty` and `__proto__` all passed
+  it. Because it is a *type guard*, TypeScript then narrowed those strings to
+  `Locale`, and `strings` handed back a function or `Object.prototype` instead
+  of a table — every label in the interface rendering as `undefined`, with the
+  compiler satisfied the whole way down and nothing raised anywhere.
+
+  Honestly: not reachable today. The only caller is `resolveLocale`, and the
+  only tag comes from `Localization.getLocales()`, which returns real BCP-47.
+  What is wrong is that an exported guard lies, so anyone who later points it
+  at a stored preference, a language picker or a deep link inherits a blank
+  app that typechecks. Own keys only now.
+
+  The first fix for the second half was wrong, and the test said so before the
+  commit did: `strings` fell back with `?? en`, which never fired, because
+  `LOCALES['constructor']` is the `Object` function and perfectly truthy. It
+  goes through the same guard now — one definition of "is a locale", used by
+  both.
+
+  The guard is checked against every name on `Object.prototype` rather than the
+  three anyone would think to write down, which is the same reason the Merkle
+  verifier is checked over every index rather than a handful.
+
+  Two more things the compiler cannot see are now tested. `const tr: Strings`
+  guarantees the Turkish table has every key; it does not guarantee any of them
+  is non-empty, and `welcomeTitle: ''` typechecks and renders a blank screen.
+  And a new key added to both tables with the English text pasted into the
+  Turkish one reads as finished work — the only string deliberately shared is
+  the brand name, and the test says so by name.
+
 - **So was every photo, five times over.** `saveAsync` writes each encode to
   the cache directory and returns a uri. `compressToBudget` calls the encoder
   once per quality step, and nothing deleted any of them — so sending one photo
