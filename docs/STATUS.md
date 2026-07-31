@@ -53,8 +53,9 @@ tested by running the real Go server and pushing real traffic through it.
 | Locales: the guard against every inherited property, tag resolution, and both tables complete, non-empty and actually translated | done |
 | Startup against the real server: account creation, a cold restart onto the same account, and a device with no network at all | done |
 | Voice playback: the decrypted audio removed on every path out — finished, stopped, unmounted, and a player that would not open | done |
+| Two devices through the real server, driven entirely through the store: delivery, the reply, the shared safety number, and the handle path with its downgrade refusal | done |
 
-Counts at time of writing: 697 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 700 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -213,6 +214,43 @@ holds an invariant, that is the signal.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **Two real stores now talk to each other through the real server.** The
+  online suite drove one device; the half it could not reach is the one where
+  two devices have to agree. `integration.test.ts` already proves a sealed
+  message survives the round trip, but it drives the crypto directly — nothing
+  had ever driven `startConversation`, `send` and the socket's delivery path
+  through the store the screens actually call, which is where two components
+  can each be right while nothing arrives.
+
+  Both mock factories now capture the keychain and the database file when the
+  module graph is created rather than reading a global at call time, which is
+  what lets two devices exist in one process without reaching into each
+  other's storage once their sockets start interleaving.
+
+  Three properties, none of which had a test above the crypto layer: a message
+  arrives in a store that had never heard of the sender; the *reply* arrives,
+  which runs different code because that side accepted the session rather than
+  initiating it, and a messenger that works one way is exactly what unit tests
+  on both halves will let through; and both ends derive the same safety number,
+  without which every verification in the product is theatre.
+
+  A fourth covers the handle path end to end: claim a handle, follow it, verify
+  the inclusion and consistency proofs, write the checkpoint down — and then
+  refuse the same lookup when the server stops answering with proofs, which is
+  the downgrade that would make a later key swap invisible.
+
+  Two things went wrong writing it, and the code was right both times. The
+  downgrade test first failed because the test server ran with no
+  `TILDRA_TRANSPARENCY_KEY`, so there was no log and every lookup came back
+  unproven — the client cannot refuse a downgrade it has never seen an upgrade
+  from, and the server warns about exactly this at startup. And the assertion
+  that the send worked was `error === null`, which is not the same claim: that
+  field collects anything from a prekey rotation to a socket blip, and a run
+  where one of those fired failed a test that was about the send. It asserts
+  the message's own state now — the row alone proves nothing, because `send`
+  leaves a failed message on disk on purpose so the user can see what did not
+  go out.
+
 - **"Does not linger on disk after playback" was true of one path out of four.**
   `expo-audio` plays from a uri, so a received voice note is decrypted and
   written to the cache directory before it can be heard. `VoiceBubble` deleted
