@@ -44,9 +44,10 @@ tested by running the real Go server and pushing real traffic through it.
 | The error funnel: every failure's user-facing sentence, over both locales, with the identity codec's length check | done |
 | Startup: the offline paths of `bootstrap`, including damaged storage and an unavailable keystore | done |
 | The local database against real SQLite: blind indexes, encryption of every row, ordering, paging, cascade, erase | done |
+| Session and group-key rows: a ratchet that has been through storage still decrypts, including skipped and post-step messages | done |
 | Media adapter logic: ICE restart on widening, candidate filtering, connection-state mapping, teardown order — against a double of `react-native-webrtc`, not a device | done |
 
-Counts at time of writing: 592 client tests, Go suite clean under `-race`, both
+Counts at time of writing: 609 client tests, Go suite clean under `-race`, both
 store implementations passing the same conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
@@ -199,6 +200,27 @@ knowing before trusting a UI change.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **A stored ratchet is only correct if it still decrypts.** The session and
+  group-key rows carry the most consequential state on the device, and the
+  useful assertion about them is not that the fields match after a round trip
+  — a serializer that drops a chain key passes that by inspection and wedges
+  the session on the next message.
+
+  So the tests run the real thing. Alice encrypts, Bob's ratchet goes through
+  the vault and SQLite, comes back, and has to open the message: fresh,
+  mid-conversation, with a message that arrived out of order and sits in the
+  skipped-key cache, and across a DH ratchet step where a message overtaken
+  before the step still has to open afterwards. Group sender and receiver
+  chains the same way, including that a restored sending chain advances
+  rather than rewinding — a repeated iteration number in a group chain is key
+  reuse.
+
+  Six deliberate breakages of the database paths and three of
+  `serializeRatchet`. The one that stayed green was the previous chain
+  length, because none of the tests crossed a ratchet step with storage in
+  the middle; the test that covers it exists because the control found that,
+  not because I thought of it.
+
 - **"Delete my account" left the account on the device.** `Database.eraseAll`
   is the local half of it — the header says "pairs with `eraseKeystore()` for
   a full account deletion" — and its statement list named a `prekeys` table

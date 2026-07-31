@@ -2,8 +2,18 @@ import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Vault } from '../vault';
-import type { Conversation, Database as DatabaseType, Message } from '../db';
-import { randomBytes, toBase64, toHex, utf8 } from '../../crypto/primitives';
+import type { Conversation, Database as DatabaseType, Message, StoredSession } from '../db';
+import { fromBase64, randomBytes, toBase64, toHex, utf8 } from '../../crypto/primitives';
+import { generateIdentity, generatePreKeys } from '../../crypto/identity';
+import { PreKeyBundle, acceptSession, initiateSession } from '../../crypto/pqxdh';
+import { decrypt, encrypt } from '../../crypto/ratchet';
+import {
+  createSenderKey,
+  decodeDistribution,
+  decryptGroupMessage,
+  encodeDistribution,
+  encryptGroupMessage,
+} from '../../crypto/group';
 
 /**
  * The local database, against real SQLite.
@@ -442,5 +452,301 @@ describe('erasing the account', () => {
     // and the caller never reached eraseKeystore().
     await db.upsertConversation(contact());
     await expect(db.eraseAll()).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sessions and group keys
+// ---------------------------------------------------------------------------
+
+/**
+ * A real handshake, so the state below is the state a device actually holds.
+ *
+ * The assertion that matters for these rows is not that the fields match. It
+ * is that a ratchet which has been through the database can still decrypt: a
+ * serializer that drops a chain key or the skipped-message cache round-trips
+ * perfectly by inspection and wedges the session on the next message.
+ */
+function handshake() {
+  const bobIdentity = generateIdentity();
+  const { secrets, upload } = generatePreKeys(bobIdentity, { count: 2 });
+  const bundle: PreKeyBundle = {
+    accountId: 'ACCT',
+    deviceId: 'DEV',
+    identityKey: fromBase64(upload.identityKey),
+    signedPreKey: {
+      id: upload.signedPreKey.id,
+      publicKey: fromBase64(upload.signedPreKey.publicKey),
+      signature: fromBase64(upload.signedPreKey.signature),
+    },
+    signedPqPreKey: {
+      id: upload.signedPqPreKey.id,
+      publicKey: fromBase64(upload.signedPqPreKey.publicKey),
+      signature: fromBase64(upload.signedPqPreKey.signature),
+    },
+    oneTimePreKey: {
+      id: upload.oneTimePreKeys[0].id,
+      publicKey: fromBase64(upload.oneTimePreKeys[0].publicKey),
+    },
+    oneTimePqPreKey: {
+      id: upload.oneTimePqPreKeys[0].id,
+      publicKey: fromBase64(upload.oneTimePqPreKeys[0].publicKey),
+    },
+  };
+  const alice = initiateSession(generateIdentity(), bundle);
+  const bob = acceptSession(secrets, alice.init);
+  return { alice, bob };
+}
+
+function storedSession(overrides: Partial<StoredSession> = {}): StoredSession {
+  const { bob } = handshake();
+  return {
+    accountId: CONTACT,
+    deviceId: 'DEVICE-ONE',
+    ratchet: bob.ratchet,
+    associatedData: bob.associatedData,
+    mailboxSecret: randomBytes(32),
+    confirmed: false,
+    ...overrides,
+  };
+}
+
+describe('sessions', () => {
+  it('restores a ratchet that can still decrypt', async () => {
+    // The real test of a serializer. Alice encrypts, Bob's state goes through
+    // SQLite and the vault, comes back, and has to open the message.
+    const { alice, bob } = handshake();
+    await db.saveSession({
+      accountId: CONTACT,
+      deviceId: 'DEVICE-ONE',
+      ratchet: bob.ratchet,
+      associatedData: bob.associatedData,
+      mailboxSecret: randomBytes(32),
+      confirmed: false,
+    });
+
+    const envelope = encrypt(alice.ratchet, utf8('yarın buluşalım'), alice.associatedData);
+    const restored = await db.loadSession(CONTACT, 'DEVICE-ONE');
+    const plaintext = decrypt(restored!.ratchet, envelope, restored!.associatedData);
+    expect(new TextDecoder().decode(plaintext)).toBe('yarın buluşalım');
+  });
+
+  it('restores a ratchet mid-conversation, not just a fresh one', async () => {
+    // A ratchet that has advanced holds more state than one that has not:
+    // chain counters, the previous chain length, and the sending chain that
+    // only exists after the first reply.
+    const { alice, bob } = handshake();
+    decrypt(bob.ratchet, encrypt(alice.ratchet, utf8('bir'), alice.associatedData), bob.associatedData);
+    decrypt(alice.ratchet, encrypt(bob.ratchet, utf8('iki'), bob.associatedData), alice.associatedData);
+    decrypt(bob.ratchet, encrypt(alice.ratchet, utf8('üç'), alice.associatedData), bob.associatedData);
+
+    await db.saveSession({
+      accountId: CONTACT,
+      deviceId: 'DEVICE-ONE',
+      ratchet: bob.ratchet,
+      associatedData: bob.associatedData,
+      mailboxSecret: randomBytes(32),
+      confirmed: true,
+    });
+
+    const envelope = encrypt(alice.ratchet, utf8('dört'), alice.associatedData);
+    const restored = await db.loadSession(CONTACT, 'DEVICE-ONE');
+    expect(new TextDecoder().decode(decrypt(restored!.ratchet, envelope, restored!.associatedData))).toBe(
+      'dört',
+    );
+  });
+
+  it('carries the skipped-message cache, so a late message still opens', async () => {
+    // Messages arrive out of order and the keys for the gap are kept. If the
+    // cache does not survive storage, a message that overtook another is lost
+    // for good the first time the app restarts.
+    const { alice, bob } = handshake();
+    const first = encrypt(alice.ratchet, utf8('bir'), alice.associatedData);
+    const second = encrypt(alice.ratchet, utf8('iki'), alice.associatedData);
+
+    decrypt(bob.ratchet, second, bob.associatedData);
+    await db.saveSession({
+      accountId: CONTACT,
+      deviceId: 'DEVICE-ONE',
+      ratchet: bob.ratchet,
+      associatedData: bob.associatedData,
+      mailboxSecret: randomBytes(32),
+      confirmed: true,
+    });
+
+    const restored = await db.loadSession(CONTACT, 'DEVICE-ONE');
+    expect(new TextDecoder().decode(decrypt(restored!.ratchet, first, restored!.associatedData))).toBe(
+      'bir',
+    );
+  });
+
+  it('carries the previous chain length across a ratchet step', async () => {
+    // The field that only matters after a DH step: it tells the peer how many
+    // messages the old chain had, so they can skip the ones that never
+    // arrived. Lose it and a message that was overtaken *before* the step is
+    // unrecoverable — and nothing catches that until someone sends on a flaky
+    // connection after the app restarts.
+    const { alice, bob } = handshake();
+    const first = encrypt(alice.ratchet, utf8('bir'), alice.associatedData);
+    const overtaken = encrypt(alice.ratchet, utf8('iki'), alice.associatedData);
+    decrypt(bob.ratchet, first, bob.associatedData);
+
+    // Bob replies, which makes Alice ratchet forward when she reads it.
+    const reply = encrypt(bob.ratchet, utf8('cevap'), bob.associatedData);
+    decrypt(alice.ratchet, reply, alice.associatedData);
+
+    await db.saveSession({
+      accountId: CONTACT,
+      deviceId: 'DEVICE-ONE',
+      ratchet: alice.ratchet,
+      associatedData: alice.associatedData,
+      mailboxSecret: randomBytes(32),
+      confirmed: true,
+    });
+    const restored = await db.loadSession(CONTACT, 'DEVICE-ONE');
+
+    // Sent from the restored state, on the new chain.
+    const afterStep = encrypt(restored!.ratchet, utf8('üç'), restored!.associatedData);
+    expect(new TextDecoder().decode(decrypt(bob.ratchet, afterStep, bob.associatedData))).toBe('üç');
+
+    // And the one that was overtaken before the step still opens.
+    expect(new TextDecoder().decode(decrypt(bob.ratchet, overtaken, bob.associatedData))).toBe('iki');
+  });
+
+  it('keeps the fields the session layer decides with', async () => {
+    const mailboxSecret = randomBytes(32);
+    await db.saveSession(
+      storedSession({ mailboxSecret, confirmed: true, initFingerprint: 'fp-1' }),
+    );
+    const restored = await db.loadSession(CONTACT, 'DEVICE-ONE');
+    expect(toHex(restored!.mailboxSecret)).toBe(toHex(mailboxSecret));
+    expect(restored!.confirmed).toBe(true);
+    expect(restored!.initFingerprint).toBe('fp-1');
+    expect(restored!.accountId).toBe(CONTACT);
+    expect(restored!.deviceId).toBe('DEVICE-ONE');
+  });
+
+  it('treats a session written by an older version as unconfirmed', async () => {
+    // `confirmed` was added after the first sessions existed. Defaulting it to
+    // true would have the initiator stop attaching the handshake to a peer
+    // that never processed one.
+    await db.saveSession(storedSession({ confirmed: undefined as unknown as boolean }));
+    expect((await db.loadSession(CONTACT, 'DEVICE-ONE'))!.confirmed).toBe(false);
+  });
+
+  it('is null for a device with no session', async () => {
+    expect(await db.loadSession(CONTACT, 'NO-SUCH-DEVICE')).toBeNull();
+  });
+
+  it('replaces a session rather than accumulating rows', async () => {
+    await db.saveSession(storedSession({ confirmed: false }));
+    await db.saveSession(storedSession({ confirmed: true }));
+    const all = await db.loadSessionsFor(CONTACT);
+    expect(all).toHaveLength(1);
+    expect(all[0].confirmed).toBe(true);
+  });
+
+  it('finds every device an account has registered', async () => {
+    // Fanout depends on this: a device missed here is a device that never
+    // receives the message.
+    await db.saveSession(storedSession({ deviceId: 'DEVICE-ONE' }));
+    await db.saveSession(storedSession({ deviceId: 'DEVICE-TWO' }));
+    await db.saveSession(storedSession({ accountId: 'OTHER456789ABCDEFGHJKMNPQR', deviceId: 'X' }));
+
+    const devices = (await db.loadSessionsFor(CONTACT)).map((s) => s.deviceId).sort();
+    expect(devices).toEqual(['DEVICE-ONE', 'DEVICE-TWO']);
+  });
+
+  it('drops every device of an account when the session is reset', async () => {
+    await db.saveSession(storedSession({ deviceId: 'DEVICE-ONE' }));
+    await db.saveSession(storedSession({ deviceId: 'DEVICE-TWO' }));
+    await db.saveSession(storedSession({ accountId: 'OTHER456789ABCDEFGHJKMNPQR', deviceId: 'X' }));
+
+    await db.deleteSessions(CONTACT);
+    expect(await db.loadSessionsFor(CONTACT)).toEqual([]);
+    expect(await db.loadSessionsFor('OTHER456789ABCDEFGHJKMNPQR')).toHaveLength(1);
+  });
+
+  it('names nobody in the rows it writes', async () => {
+    await db.saveSession(storedSession({ deviceId: 'DEVICE-ONE' }));
+    const serialized = JSON.stringify((sqlite as { dump(): unknown[] }).dump());
+    expect(serialized).not.toContain(CONTACT);
+    expect(serialized).not.toContain('DEVICE-ONE');
+  });
+});
+
+describe('group keys', () => {
+  it('restores a sender key that still produces readable messages', async () => {
+    const sender = createSenderKey('GROUP-ONE');
+    const receiver = decodeDistribution('MEMBER-ONE', encodeDistribution(sender));
+    await db.saveSenderKey('GROUP-ONE', sender);
+
+    const restored = await db.loadSenderKey('GROUP-ONE');
+    const message = encryptGroupMessage(restored!, utf8('gruba merhaba'));
+    expect(new TextDecoder().decode(decryptGroupMessage(receiver, message))).toBe('gruba merhaba');
+  });
+
+  it('restores a receiver key that can still read the chain', async () => {
+    const sender = createSenderKey('GROUP-ONE');
+    const receiver = decodeDistribution('MEMBER-ONE', encodeDistribution(sender));
+    await db.saveReceiverKey('GROUP-ONE', 'MEMBER-ONE', receiver);
+
+    const message = encryptGroupMessage(sender, utf8('gruba merhaba'));
+    const restored = await db.loadReceiverKey('GROUP-ONE', 'MEMBER-ONE');
+    expect(new TextDecoder().decode(decryptGroupMessage(restored!, message))).toBe('gruba merhaba');
+  });
+
+  it('advances rather than rewinding when the same chain is saved again', async () => {
+    // The sending chain counter has to survive: saving a stale copy over a
+    // newer one would reuse a message number, and a repeated number in a
+    // group chain is key reuse.
+    const sender = createSenderKey('GROUP-ONE');
+    encryptGroupMessage(sender, utf8('bir'));
+    encryptGroupMessage(sender, utf8('iki'));
+    await db.saveSenderKey('GROUP-ONE', sender);
+
+    const restored = await db.loadSenderKey('GROUP-ONE');
+    const receiver = decodeDistribution('MEMBER-ONE', encodeDistribution(sender));
+    const next = encryptGroupMessage(restored!, utf8('üç'));
+    expect(next.iteration).toBeGreaterThanOrEqual(2);
+    expect(new TextDecoder().decode(decryptGroupMessage(receiver, next))).toBe('üç');
+  });
+
+  it('keeps one receiver chain per member', async () => {
+    const sender = createSenderKey('GROUP-ONE');
+    await db.saveReceiverKey('GROUP-ONE', 'MEMBER-ONE', decodeDistribution('MEMBER-ONE', encodeDistribution(sender)));
+    await db.saveReceiverKey('GROUP-ONE', 'MEMBER-TWO', decodeDistribution('MEMBER-TWO', encodeDistribution(sender)));
+
+    expect(await db.loadReceiverKey('GROUP-ONE', 'MEMBER-ONE')).not.toBeNull();
+    expect(await db.loadReceiverKey('GROUP-ONE', 'MEMBER-TWO')).not.toBeNull();
+    expect(await db.loadReceiverKey('GROUP-ONE', 'MEMBER-THREE')).toBeNull();
+  });
+
+  it('destroys every key for a group and leaves other groups alone', async () => {
+    // Called when a member is removed, before the replacement chain exists,
+    // so there must be no window where the old key still opens anything.
+    const one = createSenderKey('GROUP-ONE');
+    const two = createSenderKey('GROUP-TWO');
+    await db.saveSenderKey('GROUP-ONE', one);
+    await db.saveReceiverKey('GROUP-ONE', 'MEMBER-ONE', decodeDistribution('MEMBER-ONE', encodeDistribution(one)));
+    await db.saveSenderKey('GROUP-TWO', two);
+    await db.saveReceiverKey('GROUP-TWO', 'MEMBER-ONE', decodeDistribution('MEMBER-ONE', encodeDistribution(two)));
+
+    await db.deleteGroupKeys('GROUP-ONE');
+
+    expect(await db.loadSenderKey('GROUP-ONE')).toBeNull();
+    expect(await db.loadReceiverKey('GROUP-ONE', 'MEMBER-ONE')).toBeNull();
+    expect(await db.loadSenderKey('GROUP-TWO')).not.toBeNull();
+    expect(await db.loadReceiverKey('GROUP-TWO', 'MEMBER-ONE')).not.toBeNull();
+  });
+
+  it('names no group and no member in the rows it writes', async () => {
+    const sender = createSenderKey('GROUP-ONE');
+    await db.saveSenderKey('GROUP-ONE', sender);
+    await db.saveReceiverKey('GROUP-ONE', 'MEMBER-ONE', decodeDistribution('MEMBER-ONE', encodeDistribution(sender)));
+
+    const serialized = JSON.stringify((sqlite as { dump(): unknown[] }).dump());
+    expect(serialized).not.toContain('GROUP-ONE');
+    expect(serialized).not.toContain('MEMBER-ONE');
   });
 });
