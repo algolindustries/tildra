@@ -836,3 +836,91 @@ describeOnline('adding a second device to an account', () => {
     }
   }, 120_000);
 });
+
+describeOnline('a group, and someone taken out of it', () => {
+  /**
+   * Group messaging through the store: creating one, sending to it, and what a
+   * removed member sees afterwards.
+   *
+   * What this checks is *delivery* — a removed member is no longer addressed,
+   * so nothing arrives. It is not the rotation test, and the negative control
+   * is what settled that: taking the sender-key rotation out of
+   * `removeGroupAccount` leaves this green, because the message only ever goes
+   * to the mailboxes of the members who remain. The cryptographic lock-out,
+   * where a former member holding the ciphertext still cannot read it, is
+   * `group.test.ts`'s "locks a removed member out once the group rotates".
+   *
+   * The absence is the hard part to assert honestly either way. This project
+   * already has a test that asserted one after a bare sleep and so measured
+   * nothing. Here the removed member's silence is checked against a positive
+   * event rather than a timer: the same message reaching the member who stayed
+   * is what says the send happened and was delivered, and only then is the
+   * other one asked.
+   */
+  it('opens a group it just made, delivers to it, and stops addressing a removed member', async () => {
+    const alice = await signedUp(newDevice('ga'), 'Alice iPhone', 'Ayşe');
+    const bob = await signedUp(newDevice('gb'), 'Bob Pixel', 'Bora');
+    const carol = await signedUp(newDevice('gc'), 'Carol Nokia', 'Ceren');
+
+    // A sender key travels over the pairwise ratchet, so a group can only
+    // contain people this device has a session with.
+    for (const other of [bob, carol]) {
+      await alice.app.useApp.getState().startConversation(other.accountId);
+      await alice.app.useApp.getState().openConversation(other.accountId);
+      await alice.app.useApp.getState().send('merhaba');
+    }
+
+    const groupKey = await alice.app.useApp.getState().createGroup('Ekip', [
+      bob.accountId,
+      carol.accountId,
+    ]);
+    // In the chat list before a single message has gone through it. Nothing
+    // created the conversation row until the first send or receive, so a group
+    // was invisible here and unopenable until somebody else wrote to it.
+    expect(
+      alice.app.useApp.getState().conversations.map((c) => c.accountId),
+    ).toContain(groupKey);
+
+    await alice.app.useApp.getState().openConversation(groupKey);
+    expect(alice.app.useApp.getState().activeGroup?.name).toBe('Ekip');
+    // Without this the composer is a no-op: `send` reads activeAccountId and
+    // returns when it is null.
+    expect(alice.app.useApp.getState().activeAccountId).toBe(groupKey);
+
+    await alice.app.useApp.getState().send('herkese merhaba');
+
+    const hasInGroup = async (
+      app: Awaited<ReturnType<typeof boot>>,
+      text: string,
+    ): Promise<boolean> => {
+      await app.useApp.getState().openConversation(groupKey);
+      return app.useApp.getState().messages.some((m) => m.text === text);
+    };
+
+    await waitFor(() => hasInGroup(bob.app, 'herkese merhaba'));
+    await waitFor(() => hasInGroup(carol.app, 'herkese merhaba'));
+
+    // Carol is taken out. The store's job here is that she leaves the member
+    // list, because that list is what the next send is addressed to.
+    await alice.app.useApp.getState().removeFromGroup(carol.accountId);
+    // The member list, not `error`. `removeFromGroup` swallows a failure into
+    // that field and leaves `activeGroup` untouched, so this catches a failed
+    // removal on its own — and `error` collects anything from a prekey
+    // rotation to a socket blip, which is how an earlier version of this line
+    // failed a run that had nothing wrong with it.
+    expect(
+      alice.app.useApp.getState().activeGroup?.members.map((m) => m.accountId),
+    ).not.toContain(carol.accountId);
+
+    await alice.app.useApp.getState().send('sadece kalanlara');
+
+    // Bob having it is the happens-after. Until this holds, Carol not having
+    // it says nothing at all.
+    await waitFor(() => hasInGroup(bob.app, 'sadece kalanlara'));
+
+    expect(await hasInGroup(carol.app, 'sadece kalanlara')).toBe(false);
+    // And she still has what she was there for, so this is a rotation rather
+    // than a wipe of her side.
+    expect(await hasInGroup(carol.app, 'herkese merhaba')).toBe(true);
+  }, 180_000);
+});

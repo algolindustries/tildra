@@ -214,6 +214,37 @@ holds an invariant, that is the signal.
   bug rather than "the reply never came". Making it throw immediately
   revealed three call tests that had been passing on a wait that never
   completed.
+- **A group you had just made could not be opened, used or seen.**
+  `SessionManager.createGroup` saved the group, made a sender key and
+  distributed it — and did not create the conversation row the messages live
+  in. `ensureGroupConversation` exists for exactly that and was only reached
+  from sending and receiving.
+
+  So `App.tsx` created a group, called `openConversation` on it, and
+  `openConversation` found no row and returned early. `activeAccountId` stayed
+  null, which makes `send` a silent no-op; `activeGroup` stayed null, which
+  makes the members screen unable to add or remove anyone; and
+  `listConversations` reads the conversations table, so the group was not in
+  the chat list either. A group was unusable and invisible until somebody
+  *else* wrote to it.
+
+  Found by writing the first store-level group test. One line fixed the whole
+  flow.
+
+  The test's own claim needed correcting twice, and both corrections came from
+  the negative controls. It began as "a removed member cannot read", which it
+  does not check: taking the sender-key rotation out of `removeGroupAccount`
+  leaves it green, because the next message only goes to the mailboxes of the
+  members who remain. What it checks is delivery — the removed member is no
+  longer addressed. The cryptographic lock-out is `group.test.ts`'s "locks a
+  removed member out once the group rotates", and the two are now named apart.
+
+  The second correction is one this file already records and I made anyway:
+  asserting `error === null` to mean the removal worked. That field collects
+  anything from a prekey rotation to a socket blip and is never cleared until
+  the next action sets it, so a run with nothing wrong failed. The assertion is
+  on the member list now, which is what `removeFromGroup` actually changes.
+
 - **Device linking now has a test where the two halves meet.**
   `linking.test.ts` drives the provisioning exchange at the manager level.
   Nothing drove it through the store, which is where the halves are wired to

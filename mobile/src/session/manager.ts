@@ -1252,6 +1252,14 @@ export class SessionManager {
 
     const senderKey = createSenderKey(groupId);
     await this.store.saveSenderKey(groupId, senderKey);
+    // The conversation row, which nothing created until the first message went
+    // through. Creating a group is the demand `ensureGroupConversation` is
+    // supposed to answer, and it was only reached by sending and receiving —
+    // so the app opened a group it had just created, found no row, returned
+    // early, and left `activeAccountId` and `activeGroup` null. The composer
+    // then did nothing, the members screen had no group to change, and the
+    // group was absent from the chat list until somebody else wrote to it.
+    await this.ensureGroupConversation(groupId);
     await this.distributeSenderKey(groupId, members);
     return group;
   }
