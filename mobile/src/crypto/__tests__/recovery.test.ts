@@ -19,13 +19,41 @@ import {
   recoverySeed,
   sealBackup,
 } from '../recovery';
-import { equal, randomBytes, toHex } from '../primitives';
+import { equal, kdf, randomBytes, toHex, utf8 } from '../primitives';
+import { argon2id } from '@noble/hashes/argon2.js';
 
 // One phrase, stretched once. Argon2id at 64 MiB is slow on purpose, and
 // deriving it per test would make this file take a minute for no extra
 // coverage.
 const PHRASE = generateRecoveryPhrase();
 const SEED = recoverySeed(PHRASE);
+
+/**
+ * A fixed phrase, and what it has to keep deriving.
+ *
+ * Everything else in this file generates a phrase and checks the result
+ * against itself, which is the one property that cannot break: whatever the
+ * chain computes, it computes the same way twice in the same run. That leaves
+ * the failure this feature actually has, and it is the worst one in the
+ * repository. A recovery phrase is written on paper. If the Argon2 salt, any
+ * of the three info labels, an output length, the truncation, or what
+ * normalisation does to the words changes, every phrase already written down
+ * stops deriving the account it was written down for — permanently, with no
+ * error, and with this suite still green because it never looks at a value
+ * from before the change.
+ *
+ * The numbers below are not an independent check of the construction; the
+ * parameters are asserted against the protocol document separately and the
+ * labels are pinned by protocol-doc.test.ts. Their job is to notice.
+ *
+ * The phrase is BIP-39's canonical all-zero-entropy vector, so it is a value
+ * anyone can regenerate rather than one only this file knows.
+ */
+const RECORDED_PHRASE =
+  'abandon abandon abandon abandon abandon abandon abandon abandon ' +
+  'abandon abandon abandon abandon abandon abandon abandon abandon ' +
+  'abandon abandon abandon abandon abandon abandon abandon art';
+const RECORDED_SEED = recoverySeed(RECORDED_PHRASE);
 
 const BACKUP: RecoveryBackup = {
   accountId: 'acct-me',
@@ -116,6 +144,54 @@ describe('what the phrase derives', () => {
     expect(ARGON2_MEMORY_KIB).toBe(64 * 1024);
     expect(ARGON2_ITERATIONS).toBe(3);
     expect(ARGON2_PARALLELISM).toBe(4);
+  });
+});
+
+describe('the recorded phrase', () => {
+  it('still derives the account it derived before', () => {
+    expect(toHex(RECORDED_SEED)).toBe(
+      '95c37df83571e6c374b80f5356eb4278c5166095e868b6ce492452ad15b704eb',
+    );
+    expect(toHex(identityFromSeed(RECORDED_SEED).publicKey)).toBe(
+      '1042229abb94cbe25d8e86483f6c0808b6c44292b484cdf7388253df75b01321',
+    );
+    expect(toHex(backupKeyFromSeed(RECORDED_SEED))).toBe(
+      '3aa3aa8bcc16089ad8453ed581947316091e29a364fe33801f463f5563fded91',
+    );
+    expect(recoveryLookupId(RECORDED_SEED)).toBe('ccffe1023ef1146ded6985c73b73a3f6');
+  });
+
+  it('derives them the way the protocol document says, not merely repeatably', () => {
+    // Assembled here from the document's own literals rather than from the
+    // module's constants, so a value recorded above cannot quietly become a
+    // record of the wrong construction.
+    const seed = argon2id(utf8(RECORDED_PHRASE), utf8('Tildra_Recovery_v1'), {
+      m: 64 * 1024,
+      t: 3,
+      p: 4,
+      dkLen: 32,
+    });
+    expect(toHex(seed)).toBe(toHex(RECORDED_SEED));
+
+    expect(toHex(identityFromSeed(seed).secretKey)).toBe(
+      toHex(kdf(seed, undefined, 'Tildra_RecoveryIdentity_v1', 32)),
+    );
+    expect(toHex(backupKeyFromSeed(seed))).toBe(
+      toHex(kdf(seed, undefined, 'Tildra_RecoveryBackup_v1', 32)),
+    );
+    // The lookup id is the first 16 bytes of its own derivation, as hex.
+    expect(recoveryLookupId(seed)).toBe(
+      toHex(kdf(seed, undefined, 'Tildra_RecoveryLookup_v1', 16)),
+    );
+  });
+
+  it('still derives it from what a keyboard would produce', () => {
+    // Normalisation is inside the chain, so it can break the same phrase as
+    // silently as the KDF can. Nobody types 24 words the same way twice.
+    const asTyped = `  ABANDON\tAbandon ${RECORDED_PHRASE.split(' ').slice(2).join('  ')}\n`;
+    expect(recoveryLookupId(recoverySeed(asTyped))).toBe(
+      recoveryLookupId(RECORDED_SEED),
+    );
   });
 });
 

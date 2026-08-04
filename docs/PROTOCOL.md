@@ -87,9 +87,19 @@ words rather than calling it a backup.
 Two derivations from one seed, so handing the backup key to something does not
 hand it the identity. The blob carries the contact list and group memberships —
 **not messages**: a blob on a server that holds what was said is the thing this
-design is arranged to avoid. It is encrypted with the account id as associated
-data, so a server that serves the wrong blob fails to authenticate rather than
-restoring somebody else's contacts.
+design is arranged to avoid. A server that serves the wrong blob fails to
+decrypt rather than restoring somebody else's contacts — under the backup key,
+for the reason two paragraphs below. This said "encrypted with the account id
+as associated data" until 2026-08-04, which is the abandoned design and is
+contradicted further down the same section; nothing in the code has ever bound
+it, and binding it is what the paragraph below explains cannot work.
+
+**Every value here is pinned to a recorded vector.** A recovery phrase is
+written on paper, so a change to the salt, a label, an output length or what
+normalisation does to the words locks out every phrase already written down —
+permanently, silently, and with a suite that generates its own phrase every run
+staying green throughout. `crypto/__tests__/recovery.test.ts` holds a fixed
+phrase and the four values it has to keep producing.
 
 Argon2id is not load-bearing for a 24-word phrase, which already carries 256
 bits. The parameters are chosen for the weaker inputs a later version might
