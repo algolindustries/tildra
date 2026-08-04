@@ -364,6 +364,52 @@ func TestUnauthenticatedRoutesAreRejected(t *testing.T) {
 	}
 }
 
+// TestFetchingABundleNamesBothPeopleAtOnce is the other half of what A1's
+// social-graph row concedes, and the half the corrections to it missed.
+//
+// Those corrections were about *delivery*: the request that carries an envelope
+// is authenticated, and the mailbox it names resolves to a device. True, and it
+// needs a join across two tables and only happens once a message is sent.
+//
+// The prekey fetch is more direct than that and happens first. It is
+// authenticated, so the server knows who is asking, and the account and device
+// being asked about are in the path. One request, both parties named, before
+// any message exists — and it happens even if the conversation is never
+// started, because fetching the bundle is what starting one means.
+//
+// Nothing can be done about it inside this design: the bundle is Bob's and
+// asking for it is how Alice gets it. It is documented rather than defended
+// against, and this test is what stops the documentation drifting off it.
+func TestFetchingABundleNamesBothPeopleAtOnce(t *testing.T) {
+	h := newHarness(t)
+	bob := h.register("Bob")
+	alice := h.register("Alice")
+
+	if resp, body := h.do(http.MethodPut, "/v1/keys", bob.token, keyUpload(bob, 2)); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("put keys: status %d body %s", resp.StatusCode, body)
+	}
+
+	path := "/v1/keys/" + bob.accountID + "/" + bob.deviceID
+	if resp, body := h.do(http.MethodGet, path, alice.token, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("fetch bundle: status %d body %s", resp.StatusCode, body)
+	}
+
+	// Authenticated, which is what makes the *asker* known rather than
+	// anonymous. If this ever stops being true, A1 changes with it.
+	if resp, _ := h.do(http.MethodGet, path, "", nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated bundle fetch: status %d, want 401", resp.StatusCode)
+	}
+
+	// And the device list, which is the request before it: same shape, same
+	// pair of names.
+	if resp, _ := h.do(http.MethodGet, "/v1/devices/"+bob.accountID, alice.token, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("device list with a token should succeed, got %d", resp.StatusCode)
+	}
+	if resp, _ := h.do(http.MethodGet, "/v1/devices/"+bob.accountID, "", nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated device list: status %d, want 401", resp.StatusCode)
+	}
+}
+
 func TestKeyUploadAndBundleFetch(t *testing.T) {
 	h := newHarness(t)
 	bob := h.register("Bob Phone")

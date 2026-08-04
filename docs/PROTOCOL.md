@@ -846,6 +846,7 @@ the log it signs can be used to rewrite the whole thing.
 | Attachment contents | **no** | per-file key, held only in the message |
 | Handle→key bindings | **yes, on purpose** | public append-only log; that is the point |
 | Who uploaded an attachment | **no** | no owner column, by design |
+| Who asked for whose keys | not stored, observable | `GET /v1/keys/{account}/{device}` is authenticated, so the request names both parties; nothing writes it down, and nothing stops an operator from doing so |
 | **Device name** | **yes, in the clear** | the label you type into "name this device"; it is for your own device list and the operator can read it |
 | Push token | yes | opaque routing token for the push provider, one per device |
 | Which account a recovery blob belongs to | **yes** | `recovery_blobs.account_id`, so the first account to claim an id keeps it — see §1.1 |
@@ -1047,7 +1048,13 @@ marketing:
   Delivery is authenticated with the sender's own bearer token, so the server
   can link a sender to the mailbox they deliver to — and a mailbox to an
   account, because the device that reads it had to register it over an
-  authenticated request. Both ends, which is the social graph. §5 described a
+  authenticated request. Both ends, which is the social graph.
+
+  Fetching the prekey bundle gets there first and more directly:
+  `GET /v1/keys/{account}/{device}` is authenticated, so one request names the
+  asker and the account being asked about, before any message exists and
+  whether or not one is ever sent. There is no version of this design where
+  Alice obtains Bob's bundle without asking for it. §5 described a
   blind-signed delivery token that would remove the first link; it is designed
   and not built, and the second would need a blinded registration that is not
   even designed.

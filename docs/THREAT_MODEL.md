@@ -14,8 +14,9 @@ the one every centralised messenger asks you to ignore.
 |---|---|
 | Message content | Nothing. No key material capable of decryption exists server-side. |
 | Who sent a message | The account that delivered it. The envelope carries no sender — that is inside the ciphertext — but `POST /v1/messages` is authenticated, so the *request* identifies the sender even though the payload does not. This row used to say "Nothing", which was true only of a blind-signed delivery token that was never built. See `docs/PROTOCOL.md` §5 and §11. |
+| Who is starting a conversation with whom | **Both names, in one request, before any message exists.** Fetching a prekey bundle is `GET /v1/keys/{account}/{device}` and it is authenticated: the token names the asker and the path names who is being asked about. It happens even if the message is never sent, because fetching the bundle is what starting a conversation means. Nothing in this design can avoid it — the bundle is theirs and asking is how you get it. |
 | Who received a message | **The account.** A mailbox rotates daily and its *value* reveals nothing, but a device has to tell the server which addresses to deliver to it, and `POST /v1/mailboxes` is authenticated — so `mailboxes` maps every one of them to an account and a device. This row said "not linkable to an account without the recipient's cooperation" until 2026-08-04; the registration *is* that cooperation, and it is a table, not a moment. |
-| The social graph | **Who talks to whom, durably, if the operator writes it down.** Contact lists do live on the client and the backup blob is opaque, but the two rows above combine: the delivery names the sender because it is authenticated, and the mailbox names the recipient because they registered it. This row said "Nothing durable" while the row above it already conceded the sending half. `internal/api/api_test.go` holds both ends as a test. |
+| The social graph | **Who talks to whom, durably, if the operator writes it down.** Contact lists do live on the client and the backup blob is opaque, but the two rows above combine: the delivery names the sender because it is authenticated, and the mailbox names the recipient because they registered it — and the row above gets there sooner and more directly, without needing to join anything. This row said "Nothing durable" while the row above it already conceded the sending half. `internal/api/api_test.go` holds both ends as a test. |
 | Group membership | Group size (fanout count) and nothing else. |
 | Message timing | **Yes.** See "What we don't defend against". |
 | Message size | Bucketed. Padding hides exact length, not order of magnitude. |
@@ -150,7 +151,9 @@ isn't there:
 - **The operator learning who talks to whom.** This was listed as a defence
   until 2026-08-04, and it is not one. Delivery is authenticated, so the request
   names the sender; a mailbox is registered by the device that reads it, so the
-  table names the recipient. The server needs both to route at all. What it does
+  table names the recipient. And before either of those, fetching a prekey
+  bundle names both parties in a single authenticated request — which is the
+  most direct form of it and the one that happens first. The server needs both to route at all. What it does
   not get is the *content*, the contact list, or group membership — and what it
   would take to get the graph back is a blinded registration and a delivery
   token, neither of which exists. `docs/PROTOCOL.md` §5 and §11 carry the same

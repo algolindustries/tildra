@@ -61,8 +61,9 @@ You have a name and a photo, and the people you talk to see them. What is
 different is where they live: your profile is sent to each contact over their
 own encrypted session, exactly like a message. The server has no profile
 endpoint, stores no name, no photo, and no contact list, so it cannot tell you
-who anyone is. It *can* see who talks to whom: delivery is authenticated and a
-mailbox is registered by the device that reads it, which is what routing costs.
+who anyone is. It *can* see who talks to whom: fetching somebody's keys is an
+authenticated request that names them, and delivery is authenticated too, which
+is what routing costs.
 That is written up in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) rather
 than smoothed over here. Your account is a key; your name is something
 you hand to specific people rather than something you publish.
