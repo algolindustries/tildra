@@ -1,6 +1,11 @@
 # Where the work stands
 
-Written 2026-07-30. Update this when it stops being true.
+Written 2026-07-30, revised 2026-08-05. Update this when it stops being true.
+
+Three rows in the table below said **done** for a property that was not
+delivered, and an audit pass found each of them. They are corrected in place
+rather than quietly rewritten, because a status file that has been wrong before
+is more useful than one that looks as though it never was.
 
 ## Done and verified
 
@@ -14,16 +19,16 @@ tested by running the real Go server and pushing real traffic through it.
 | Client crypto: PQXDH (X25519 + ML-KEM-768), Double Ratchet with header encryption | done |
 | Sealed sender, rotating mailboxes, contact inbox for first contact | done |
 | Encrypted local storage: keystore master key + vault-encrypted SQLite | done |
-| Session manager: fanout per device, identity-change blocking, prekey top-up, self-repair when a peer's session is gone | done |
+| Session manager: fanout per device, identity-change blocking, prekey top-up, self-repair when a peer's session is gone | done — **the block did not cover calls** until 2026-08-04. Text and attachments read the flag; placing and answering did not, and the key comparison that looks like it covers the case does not, because flagging adopts the new key |
 | Account recovery: a 24-word phrase derives the identity, the blob is published under a lookup id derived from the same phrase, and both screens exist | done |
 | Signed prekey rotation every 48h, with the replaced pair honoured for one more window, and every change to the secrets written to disk | done |
 | Screens: onboarding, chat list, conversation, safety number, profile, device link (both halves) | done |
-| Encrypted groups: sender keys, signed messages, rotation on removal, and screens to create one, talk in it and change who is in it | done |
+| Encrypted groups: sender keys, signed messages, rotation on removal, and screens to create one, talk in it and change who is in it | done — **"rotation on removal" was half of one** until 2026-08-04. Only the member who performed the removal rotated: the removal never propagated, so everyone else kept the removed member on their fanout list and kept the chain that member already held. A membership epoch carries it now, and removing somebody forgets their chain rather than the whole group's |
 | Encrypted profiles (name, photo, about), mutual introduction on first contact | done |
 | Encrypted attachments; photo and voice messages with waveforms | done |
 | Push notifications with a content-free payload, pinned by a test against the bytes actually sent | done |
 | Key transparency: Merkle log, inclusion + consistency proofs verified by the client | done |
-| Gossip between contacts for split-view detection | done |
+| Gossip between contacts for split-view detection | done — **it ran once per contact** until 2026-08-04, inside the first-contact branch, which compares two views at the moment there is least to disagree about. Sent now whenever our view of the log moves |
 | `tildra-auditor`: standalone log watcher, signed publishable checkpoints | done |
 | Clients verify and cross-check pinned auditors' signed checkpoints, distinguishing a split view from a bad publisher from an unreachable one | done |
 | The app configures auditors, checks them at startup and every six hours, and shows a split view as a persistent alarm | done |
@@ -62,9 +67,15 @@ tested by running the real Go server and pushing real traffic through it.
 | `PROTOCOL.md` §9 checked against the code: no primitive named without an implementation, none implemented without a row, and the Argon2id costs pinned to the constants | done |
 | Safety numbers: the construction pinned by a recorded vector, symmetry, and every byte of both identity keys reaching the digits | done |
 | Every KDF label in `src/crypto` documented in `PROTOCOL.md` and vice versa, enforced by a test | done |
+| The transparency log's own code (`internal/transparency/log.go`): the leaf encoding as a recorded vector, the tree-head signature checked against bytes the test assembles, and a lookup's head and proofs proved to come from one snapshot | done |
+| `PROTOCOL.md` §8 enforced: the schema's columns are held against what the table says the operator can see, and a column named for something §8 says is not collected fails | done |
+| The recovery phrase pinned to a recorded vector — a fixed phrase and the four values it must keep deriving, plus the same derivation rebuilt from the document's own literals | done |
+| §6's padding buckets parsed out of the document and checked against the code that rounds to them | done |
+| A server address that is not `https` refused unless it is loopback, on the client and the socket both | done |
 
-Counts at time of writing: 700 client tests, Go suite clean under `-race`, both
-store implementations passing the same conformance suite, Metro bundle builds.
+Counts at time of writing: **756 client tests across 33 files**, twelve Go
+packages clean under `-race`, both store implementations passing the same
+conformance suite, Metro bundle builds.
 
 The screens themselves have no tests — this project has no React Native test
 renderer. What stands behind them is typecheck plus the Metro bundle, and the
@@ -207,6 +218,29 @@ holds an invariant, that is the signal.
 - **`docs/THREAT_MODEL.md` lists what Tildra does not defend against.** If a
   change would move something off that list, or onto it, the doc changes in the
   same commit.
+- **A claim lives in more than one file, and correcting it in one is how it
+  survives.** Three times in two days: the sender-side of sealed sender was
+  corrected in `PROTOCOL.md` and the threat model and stayed wrong in the
+  README, which is the file most people read; the social-graph row was
+  corrected in A1's table while the bullet above it still listed it under *what
+  we defend against*; and certificate pinning was removed from A2 one commit
+  before §6 was found still promising it "with a documented rotation
+  procedure". When a claim changes, grep the other four documents for it before
+  committing. `README.md`, `docs/PROTOCOL.md`, `docs/THREAT_MODEL.md`,
+  `SECURITY.md` and this file are the set.
+
+  This is not tidying. `SECURITY.md` sets the bar at "anything that lets the
+  server learn more than §8 says it can — if you can determine who is talking
+  to whom from server-side state, that is a vulnerability, not a design
+  limitation, **unless it is already listed** under known limitations". Until
+  those corrections landed it was not listed, so by this project's own
+  definition the gap between the documents was the vulnerability.
+- **A claim strong enough to matter should be pinned to code.** The ones that
+  are: §9's primitives, every `Tildra_*` label, §6's padding buckets, §8's
+  schema, the recovery derivation, and A1's both-ends-of-a-delivery. The ones
+  that cannot be — there is no pinning, and the server terminates no TLS —
+  say so in the document rather than describing an intention in the present
+  tense.
 - **Published key material must reach disk before it is published.** The
   top-up generated a hundred one-time secrets, published their public halves,
   and stored nothing; after a restart the server handed out keys the device no
@@ -217,10 +251,14 @@ holds an invariant, that is the signal.
   version of the test above kept a reference to the secrets and passed with the
   persistence call deleted, because the top-up mutates the same maps in place.
   It serialises on the way in now. Run the negative control.
-- **The unlinkability claim now has tests.** `deriveMailboxSecret` and
-  `contactInbox` carry what `docs/PROTOCOL.md` §5.1 promises — that the
-  contact inbox is a one-event leak per conversation and everything after it
-  is unlinkable — and neither had a test.
+- **The unlinkability claim now has tests, and it is a claim about the
+  derivation.** `deriveMailboxSecret` and `contactInbox` carry what
+  `docs/PROTOCOL.md` §5.1 promises about the *values* — that the contact inbox
+  is a one-event leak per conversation and that nothing in one mailbox id
+  relates it to another. That is not a claim about the operator, who does not
+  have to correlate addresses it was handed: a device registers its mailboxes
+  over an authenticated request, so `mailboxes` maps every one of them to an
+  account. §5.1 said "nothing the server can correlate" until 2026-08-04.
 - **The integration suites take a port from the OS.** They used fixed ones,
   and a killed run leaves `tildrad` behind — `afterAll` does not run when
   vitest is killed — so the orphan held the port and the next run's tests
