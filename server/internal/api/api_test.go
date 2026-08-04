@@ -712,7 +712,7 @@ func TestDeviceNamesAreNotHandedToOtherAccounts(t *testing.T) {
 	}
 
 	// And what the fanout actually needs is still there for everyone.
-	resp, body = h.do(http.MethodGet, "/v1/devices/"+bob.accountID, alice.token, nil)
+	_, body = h.do(http.MethodGet, "/v1/devices/"+bob.accountID, alice.token, nil)
 	if !bytes.Contains(body, []byte("deviceId")) || !bytes.Contains(body, []byte("identityKey")) {
 		t.Errorf("the device list stopped carrying what a fanout needs: %s", body)
 	}

@@ -249,6 +249,149 @@ func TestTreatsARefusedProofAsAnInconsistency(t *testing.T) {
 	}
 }
 
+// TestACriticalFindingDoesNotAdvanceTheCheckpoint is the rule §7.3 states and
+// the tests above do not reach: "An auditor never advances its checkpoint past
+// a critical finding. Recording a head it does not believe would make the next
+// run compare against a lie."
+//
+// Every test above asserts that the run which *sees* the problem reports it.
+// None asserts what happens on the run after. The rule is implemented as a
+// series of early returns, and collecting the findings and returning once at
+// the end is the most natural simplification anybody could make to that
+// function — after which the auditor records the head it just refused to
+// believe, the next run compares against it, finds everything consistent, and
+// says nothing. Silently, and for good.
+//
+// What the controls showed is narrower than "each of those returns is
+// load-bearing". The last one is, on its own: turning it into a fall-through
+// fails TestAForgedRootDoesNotBecomeTheCheckpoint below. The earlier ones are
+// each backed by a check further down — break the shrink return and the
+// re-derived root catches it anyway — so removing one alone still does not
+// advance the checkpoint. That is defence in depth rather than redundancy, and
+// it is worth knowing before deleting one of them because the suite stayed
+// green.
+//
+// So what this pins is the property across five failure modes: the checkpoint
+// does not move, and the run after still refuses.
+func TestACriticalFindingDoesNotAdvanceTheCheckpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		kind   string
+		break_ func(log *fakeLog)
+	}{
+		{"a rewritten entry", auditor.KindInconsistent, func(log *fakeLog) {
+			for i := range log.entries[1].IdentityKey {
+				log.entries[1].IdentityKey[i] = 0xEE
+			}
+			log.append("later", "ACCOUNT", 9)
+		}},
+		{"a shrinking log", auditor.KindShrank, func(log *fakeLog) {
+			log.entries = log.entries[:2]
+		}},
+		// A forged root on a log the auditor has already attested to fails the
+		// consistency proof before the re-derivation gets to it, which is the
+		// earlier of the two checks and equally critical. The root-mismatch
+		// path is the case below.
+		{"a forged root", auditor.KindInconsistent, func(log *fakeLog) {
+			log.append("later", "ACCOUNT", 9)
+			log.forgeRoot = make([]byte, 32)
+		}},
+		{"a changed log key", auditor.KindLogKeyChanged, func(log *fakeLog) {
+			_, other, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatalf("keygen: %v", err)
+			}
+			log.overrideKey = other
+		}},
+		{"entries the server will not serve", auditor.KindRootMismatch, func(log *fakeLog) {
+			log.append("later", "ACCOUNT", 9)
+			log.hideEntries = true
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			log := newFakeLog(t)
+			a := auditor.New(log)
+			for i := 0; i < 4; i++ {
+				log.append(fmt.Sprintf("user%d", i), "ACCOUNT", byte(i))
+			}
+			if _, err := a.Audit(ctx()); err != nil {
+				t.Fatalf("initial audit: %v", err)
+			}
+			believed := a.Checkpoint()
+
+			tc.break_(log)
+
+			findings, err := a.Audit(ctx())
+			if err != nil {
+				t.Fatalf("audit: %v", err)
+			}
+			if !hasKind(findings, tc.kind) {
+				t.Fatalf("expected a %v finding, got %+v", tc.kind, findings)
+			}
+
+			after := a.Checkpoint()
+			if after.Size != believed.Size || string(after.RootHash) != string(believed.RootHash) {
+				t.Fatalf("the checkpoint moved to %d/%x after a critical finding; it was %d/%x",
+					after.Size, after.RootHash, believed.Size, believed.RootHash)
+			}
+
+			// The property that matters, rather than the state that implements
+			// it: the next run still refuses. An auditor that recorded the bad
+			// head would compare against it and find nothing wrong.
+			again, err := a.Audit(ctx())
+			if err != nil {
+				t.Fatalf("second audit: %v", err)
+			}
+			if len(critical(again)) == 0 {
+				t.Fatalf("the run after a critical finding reported nothing: %+v", again)
+			}
+		})
+	}
+}
+
+// TestAForgedRootDoesNotBecomeTheCheckpoint covers the last of those returns.
+//
+// It needs a log the auditor has attested to nothing about, because on a log it
+// has seen before a forged root fails the consistency proof first and never
+// reaches the re-derivation. That ordering is why the case above could not
+// carry it: breaking this branch left every one of those subtests green, which
+// is what a control is for.
+func TestAForgedRootDoesNotBecomeTheCheckpoint(t *testing.T) {
+	log := newFakeLog(t)
+	a := auditor.New(log)
+	log.append("user0", "ACCOUNT", 0)
+	log.append("user1", "ACCOUNT", 1)
+
+	forged := make([]byte, 32)
+	for i := range forged {
+		forged[i] = 0x7F
+	}
+	log.forgeRoot = forged
+
+	findings, err := a.Audit(ctx())
+	if err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	if !hasKind(findings, auditor.KindRootMismatch) {
+		t.Fatalf("a forged root was not reported: %+v", findings)
+	}
+
+	if got := a.Checkpoint(); got.Size != 0 || len(got.RootHash) != 0 {
+		t.Fatalf("the auditor recorded a head whose entries it could not reproduce: %d/%x",
+			got.Size, got.RootHash)
+	}
+
+	// And it goes on refusing, rather than having accepted the forgery as its
+	// baseline and finding the log consistent with it from here on.
+	again, err := a.Audit(ctx())
+	if err != nil {
+		t.Fatalf("second audit: %v", err)
+	}
+	if len(critical(again)) == 0 {
+		t.Fatalf("the run after a forged root reported nothing: %+v", again)
+	}
+}
+
 func TestReportsRebindingsWithoutCallingThemAttacks(t *testing.T) {
 	// A handle bound to a new key is what a reinstall looks like *and* what a
 	// substitution looks like. The auditor cannot tell them apart, so it
