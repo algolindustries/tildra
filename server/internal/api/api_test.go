@@ -678,6 +678,46 @@ func TestHandleClaimAndResolve(t *testing.T) {
 	}
 }
 
+// TestDeviceNamesAreNotHandedToOtherAccounts is the same rule as the test
+// below, on the field next to it.
+//
+// A device name is a string a person typed at onboarding — "Ayşe's work
+// phone". It was served to every account that asked, which in practice is
+// every contact on every fanout and every member of every group, and anyone
+// who registers an account and asks. No client has ever read it: fanout uses
+// the device id and the identity key, and there is no screen anywhere that
+// lists devices. It stayed because the handler stripped LastSeen three lines
+// above and nobody asked the same question about the field beside it.
+func TestDeviceNamesAreNotHandedToOtherAccounts(t *testing.T) {
+	h := newHarness(t)
+	bob := h.register("Ayse work phone")
+	alice := h.register("Alice")
+
+	resp, body := h.do(http.MethodGet, "/v1/devices/"+bob.accountID, alice.token, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list devices: status %d body %s", resp.StatusCode, body)
+	}
+	if bytes.Contains(body, []byte("Ayse work phone")) || bytes.Contains(body, []byte("name")) {
+		t.Errorf("another account's device list carries the name its owner typed: %s", body)
+	}
+
+	// The owner still gets their own, which is what the onboarding screen says
+	// the field is for.
+	resp, body = h.do(http.MethodGet, "/v1/devices/"+bob.accountID, bob.token, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list own devices: status %d body %s", resp.StatusCode, body)
+	}
+	if !bytes.Contains(body, []byte("Ayse work phone")) {
+		t.Errorf("an account cannot see the name it gave its own device: %s", body)
+	}
+
+	// And what the fanout actually needs is still there for everyone.
+	resp, body = h.do(http.MethodGet, "/v1/devices/"+bob.accountID, alice.token, nil)
+	if !bytes.Contains(body, []byte("deviceId")) || !bytes.Contains(body, []byte("identityKey")) {
+		t.Errorf("the device list stopped carrying what a fanout needs: %s", body)
+	}
+}
+
 func TestDeviceListOmitsLastSeen(t *testing.T) {
 	h := newHarness(t)
 	a := h.register("Watched")

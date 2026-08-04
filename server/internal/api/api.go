@@ -328,20 +328,36 @@ func (s *Server) getBundle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
-	devs, err := s.store.ListDevices(r.Context(), r.PathValue("accountId"))
+	accountID := r.PathValue("accountId")
+	devs, err := s.store.ListDevices(r.Context(), accountID)
 	if err != nil {
 		s.fail500(w, "list devices", err)
 		return
 	}
+
 	// Strip LastSeen: when a contact was last online is metadata that no one
 	// needs and that leaks a behavioural pattern.
+	//
+	// The name goes the same way, unless the caller is asking about their own
+	// account. It is a string a person typed — "Ayşe's work phone" — and it was
+	// handed to every account that asked, which is every contact on every
+	// fanout and anyone who registers. No client has ever read it: the fanout
+	// needs the device id and the identity key, and there is no screen that
+	// lists devices at all. It is kept for its owner because that is what the
+	// onboarding screen says it is for.
+	p, _ := auth.FromContext(r.Context())
+	own := p.AccountID == accountID
+
 	out := make([]map[string]any, 0, len(devs))
 	for _, d := range devs {
-		out = append(out, map[string]any{
+		entry := map[string]any{
 			"deviceId":    d.DeviceID,
-			"name":        d.Name,
 			"identityKey": d.IdentityKey,
-		})
+		}
+		if own {
+			entry["name"] = d.Name
+		}
+		out = append(out, entry)
 	}
 	respond(w, http.StatusOK, out)
 }

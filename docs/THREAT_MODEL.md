@@ -237,6 +237,12 @@ The threat model above is why certain conveniences are absent:
   server cannot re-key you into your own history.
 - **No "last seen" on other people's devices.** It is a behavioural fingerprint
   and a stalking aid, and we do not expose it in the API.
+- **No device names for other people's devices either.** The handler that
+  strips `lastSeen` handed out the name beside it — a string somebody typed,
+  often a person's name or a workplace — to every account that asked, which is
+  every contact on every fanout. Nothing had ever read it: what a fanout needs
+  is the device id and the identity key. Owners still get their own, which is
+  what the field is for.
 - **No read receipts by default.** They confirm a device is awake and attended at
   a specific moment.
 - **No phone-number contact discovery.** Every implementation of it leaks the

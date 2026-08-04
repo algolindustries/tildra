@@ -847,7 +847,7 @@ the log it signs can be used to rewrite the whole thing.
 | Handle→key bindings | **yes, on purpose** | public append-only log; that is the point |
 | Who uploaded an attachment | **no** | no owner column, by design |
 | Who asked for whose keys | not stored, observable | `GET /v1/keys/{account}/{device}` is authenticated, so the request names both parties; nothing writes it down, and nothing stops an operator from doing so |
-| **Device name** | **yes, in the clear** | the label you type into "name this device"; it is for your own device list and the operator can read it |
+| **Device name** | **yes, in the clear** | the label you type into "name this device"; the operator can read it, and `GET /v1/devices/{account}` returns it only to the account that owns it — it went to every account that asked until 2026-08-05, which is every contact on every fanout |
 | Push token | yes | opaque routing token for the push provider, one per device |
 | Which account a recovery blob belongs to | **yes** | `recovery_blobs.account_id`, so the first account to claim an id keeps it — see §1.1 |
 | Which device drains a mailbox | **yes** | a mailbox is registered by the device that reads it; who *wrote* to it is what sealed sender hides |

@@ -222,8 +222,14 @@ export class TildraClient {
     };
   }
 
-  async listDevices(accountId: string): Promise<{ deviceId: string; name: string; identityKey: Uint8Array }[]> {
-    const raw = await this.request<{ deviceId: string; name: string; identityKey: string }[]>(
+  /**
+   * The devices an account has, for fanout.
+   *
+   * `name` comes back only for your own account: it is a string its owner
+   * typed and no peer has ever read it. See the handler.
+   */
+  async listDevices(accountId: string): Promise<{ deviceId: string; name?: string; identityKey: Uint8Array }[]> {
+    const raw = await this.request<{ deviceId: string; name?: string; identityKey: string }[]>(
       'GET',
       `/v1/devices/${encodeURIComponent(accountId)}`,
     );
