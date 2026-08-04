@@ -507,6 +507,60 @@ func TestSealedSenderRoundTrip(t *testing.T) {
 	}
 }
 
+// TestTheOperatorHasBothEndsOfADelivery is docs/THREAT_MODEL.md A1 written as
+// a test, because that table used to overstate the answer in two rows and the
+// only thing that had ever corrected it was somebody reading the code.
+//
+// The envelope carries no sender: that part is real, and TestSealedSenderRoundTrip
+// covers it. What this covers is the rest of the request. `POST /v1/messages`
+// is authenticated, so the delivery names the sender; and the mailbox it names
+// resolves, in the server's own table, to the device that registered it. Both
+// ends, durably, from data the server needs in order to route at all.
+//
+// A1 says so now. If a future change makes it untrue — a blinded registration,
+// a delivery token — this test is where that shows up, and the row can be
+// rewritten with it.
+func TestTheOperatorHasBothEndsOfADelivery(t *testing.T) {
+	h := newHarness(t)
+	bob := h.register("Bob")
+	alice := h.register("Alice")
+
+	const mailbox = "mb_fedcba9876543210fedcba9876543210"
+	if resp, body := h.do(http.MethodPost, "/v1/mailboxes", bob.token, map[string]any{
+		"mailboxes": []string{mailbox}, "ttlHours": 48,
+	}); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("register mailbox: status %d body %s", resp.StatusCode, body)
+	}
+
+	resp, body := h.do(http.MethodPost, "/v1/messages", alice.token, map[string]any{
+		"mailbox": mailbox, "ciphertext": []byte("sealed"),
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("send: status %d body %s", resp.StatusCode, body)
+	}
+
+	// The receiving end: the mailbox is not an opaque address to the server.
+	owner, err := h.store.ResolveMailbox(context.Background(), mailbox)
+	if err != nil {
+		t.Fatalf("resolve mailbox: %v", err)
+	}
+	if owner.AccountID != bob.accountID || owner.DeviceID != bob.deviceID {
+		t.Fatalf("mailbox resolves to %s/%s, want %s/%s",
+			owner.AccountID, owner.DeviceID, bob.accountID, bob.deviceID)
+	}
+
+	// The sending end: the route is behind the auth middleware, so the same
+	// request that named Bob's mailbox also named Alice. Without a token it is
+	// refused outright, which is what makes the sender known rather than
+	// guessable.
+	if resp, _ := h.do(http.MethodPost, "/v1/messages", "", map[string]any{
+		"mailbox": mailbox, "ciphertext": []byte("sealed"),
+	}); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated send: status %d, want 401 — if this route stops "+
+			"requiring a token, A1's \"who sent a message\" row changes", resp.StatusCode)
+	}
+}
+
 func TestSendToUnknownMailboxIsRejected(t *testing.T) {
 	h := newHarness(t)
 	alice := h.register("Alice")

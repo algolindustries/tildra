@@ -392,9 +392,19 @@ mailbox        = "mb_" ‖ hex(HKDF(mailbox_secret,
 ```
 
 Both parties can derive both directions, so the sender knows where to deliver
-and the recipient knows where to listen. These addresses are unlinkable across
-days and across contacts — two conversations of the same user share nothing the
-server can correlate.
+and the recipient knows where to listen. The *values* are unlinkable across days
+and across contacts: nothing in one mailbox id relates it to another, so an
+observer holding a list of them learns nothing about how many people they
+belong to.
+
+That is a claim about the addresses, not about the server. A device has to tell
+the server which addresses to deliver to it, over an authenticated request, so
+the `mailboxes` table maps every one of them to an account and a device. The
+operator does not have to correlate them — it registered them. Until
+2026-08-04 this paragraph read "two conversations of the same user share nothing
+the server can correlate", which is true of the derivation and false of the
+deployment. `docs/THREAT_MODEL.md` A1 carries the honest version, and §8 carries
+the row.
 
 Devices publish yesterday's, today's and tomorrow's mailbox. Clocks drift, and
 a message sent at 23:59:58 must not land somewhere nobody is watching.
@@ -1018,8 +1028,12 @@ marketing:
 - Sender keys give weaker post-compromise security in large groups than MLS.
 - Sealed sender hides the sender from the *envelope*, not from the *request*.
   Delivery is authenticated with the sender's own bearer token, so the server
-  can link a sender to the mailbox they deliver to. §5 described a blind-signed
-  delivery token that would remove that link; it is designed and not built.
+  can link a sender to the mailbox they deliver to — and a mailbox to an
+  account, because the device that reads it had to register it over an
+  authenticated request. Both ends, which is the social graph. §5 described a
+  blind-signed delivery token that would remove the first link; it is designed
+  and not built, and the second would need a blinded registration that is not
+  even designed.
 - Sealed sender does not hide traffic *timing* either. A global passive
   adversary correlating timing across the network can still infer who talks to
   whom.

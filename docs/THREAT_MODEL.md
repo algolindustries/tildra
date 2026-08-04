@@ -14,8 +14,8 @@ the one every centralised messenger asks you to ignore.
 |---|---|
 | Message content | Nothing. No key material capable of decryption exists server-side. |
 | Who sent a message | The account that delivered it. The envelope carries no sender — that is inside the ciphertext — but `POST /v1/messages` is authenticated, so the *request* identifies the sender even though the payload does not. This row used to say "Nothing", which was true only of a blind-signed delivery token that was never built. See `docs/PROTOCOL.md` §5 and §11. |
-| Who received a message | A mailbox ID, which rotates daily and is not linkable to an account without the recipient's cooperation. |
-| The social graph | Nothing durable. Contact lists live on the client; the backup blob is opaque. |
+| Who received a message | **The account.** A mailbox rotates daily and its *value* reveals nothing, but a device has to tell the server which addresses to deliver to it, and `POST /v1/mailboxes` is authenticated — so `mailboxes` maps every one of them to an account and a device. This row said "not linkable to an account without the recipient's cooperation" until 2026-08-04; the registration *is* that cooperation, and it is a table, not a moment. |
+| The social graph | **Who talks to whom, durably, if the operator writes it down.** Contact lists do live on the client and the backup blob is opaque, but the two rows above combine: the delivery names the sender because it is authenticated, and the mailbox names the recipient because they registered it. This row said "Nothing durable" while the row above it already conceded the sending half. `internal/api/api_test.go` holds both ends as a test. |
 | Group membership | Group size (fanout count) and nothing else. |
 | Message timing | **Yes.** See "What we don't defend against". |
 | Message size | Bucketed. Padding hides exact length, not order of magnitude. |
@@ -110,7 +110,6 @@ different tool, and we would rather say so than imply protection we don't provid
 ## What we defend against
 
 - Server-side reading of messages — **structurally impossible**, not policy.
-- Server-side reconstruction of the social graph.
 - Retroactive decryption of recorded traffic, including by a future quantum
   adversary (hybrid X25519 + ML-KEM-768).
 - Compromise of past messages after a device is stolen (forward secrecy).
@@ -129,6 +128,14 @@ different tool, and we would rather say so than imply protection we don't provid
 Stated plainly, because the alternative is letting users infer protection that
 isn't there:
 
+- **The operator learning who talks to whom.** This was listed as a defence
+  until 2026-08-04, and it is not one. Delivery is authenticated, so the request
+  names the sender; a mailbox is registered by the device that reads it, so the
+  table names the recipient. The server needs both to route at all. What it does
+  not get is the *content*, the contact list, or group membership — and what it
+  would take to get the graph back is a blinded registration and a delivery
+  token, neither of which exists. `docs/PROTOCOL.md` §5 and §11 carry the same
+  correction; the sending half was fixed there first and this half was left.
 - **Traffic analysis by a global passive adversary.** See A6.
 - **A compromised endpoint.** Malware with your device's key material reads your
   messages. Nothing in a protocol fixes this.

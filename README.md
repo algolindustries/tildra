@@ -60,8 +60,11 @@ These are different things, and conflating them makes for a worse messenger.
 You have a name and a photo, and the people you talk to see them. What is
 different is where they live: your profile is sent to each contact over their
 own encrypted session, exactly like a message. The server has no profile
-endpoint, stores no name, no photo, and no contact list — it cannot tell you
-who anyone is or who knows whom. Your account is a key; your name is something
+endpoint, stores no name, no photo, and no contact list, so it cannot tell you
+who anyone is. It *can* see who talks to whom: delivery is authenticated and a
+mailbox is registered by the device that reads it, which is what routing costs.
+That is written up in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) rather
+than smoothed over here. Your account is a key; your name is something
 you hand to specific people rather than something you publish.
 
 ## Security design in one paragraph
@@ -72,10 +75,13 @@ encapsulation keys. Sessions are established with a hybrid PQXDH-style handshake
 so an attacker who records traffic today and owns a quantum computer tomorrow
 still gets nothing. Messages then flow through a Double Ratchet with encrypted
 headers, giving forward secrecy and post-compromise security. Group messages use
-per-sender ratchets with server-blind fanout. The server never sees plaintext, and
-with sealed sender it doesn't see who sent a message either — only which mailbox
-to drop the envelope into. It stores that envelope until the recipient picks it
-up, then deletes it.
+per-sender ratchets with server-blind fanout. The server never sees plaintext. Sealed sender keeps the
+sender out of the *envelope* — but not out of the request that delivers it,
+which is authenticated, so the operator can still link a sender to a mailbox and
+a mailbox to the device that registered it. This paragraph claimed otherwise
+until 2026-08-04; the correction had been made in the protocol document and the
+threat model and never reached the file most people read. The envelope is stored
+until the recipient picks it up, then deleted.
 
 Full details: [`docs/PROTOCOL.md`](docs/PROTOCOL.md) ·
 Threat model and explicit non-goals: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)
