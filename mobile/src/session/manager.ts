@@ -20,7 +20,9 @@ import {
   fromBase64,
   fromUtf8,
   hash,
+  readU32,
   toBase64,
+  u32,
   utf8,
   wipe,
 } from '../crypto/primitives';
@@ -142,7 +144,7 @@ export interface SessionStore {
   loadSenderKey(groupId: string): Promise<SenderKeyState | null>;
   saveReceiverKey(groupId: string, memberId: string, state: ReceiverKeyState): Promise<void>;
   loadReceiverKey(groupId: string, memberId: string): Promise<ReceiverKeyState | null>;
-  deleteGroupKeys(groupId: string): Promise<void>;
+  deleteReceiverKey(groupId: string, memberId: string): Promise<void>;
 }
 
 /** A group as this device knows it. Membership is client-side; see §4. */
@@ -151,6 +153,17 @@ export interface StoredGroup {
   name?: string;
   members: GroupMember[];
   createdAt: number;
+  /**
+   * Bumped by whoever removes somebody — see §4.
+   *
+   * Membership is client-side, so a removal is a claim one device makes to the
+   * others rather than a fact the server enforces. The epoch is what lets the
+   * others tell "this list is newer than mine, act on it" from "this list is
+   * as old as mine, merge it": without it the merge has to be a union, a
+   * removal never propagates, and the removed member stays on everyone else's
+   * fanout list holding everyone else's chain key.
+   */
+  epoch?: number;
 }
 
 export interface GroupMember {
@@ -173,6 +186,8 @@ interface GroupInvite {
   distribution: Uint8Array;
   members: GroupMember[];
   name?: string;
+  /** The membership epoch this list belongs to. See StoredGroup.epoch. */
+  epoch: number;
 }
 
 function encodeGroupInvite(invite: GroupInvite): Uint8Array {
@@ -180,11 +195,12 @@ function encodeGroupInvite(invite: GroupInvite): Uint8Array {
     invite.distribution,
     utf8(JSON.stringify(invite.members)),
     utf8(invite.name ?? ''),
+    u32(invite.epoch),
   );
 }
 
 function decodeGroupInvite(data: Uint8Array): GroupInvite {
-  const [distribution, membersJson, name] = unframe(data, 3);
+  const [distribution, membersJson, name, epoch] = unframe(data, 4);
   const parsed: unknown = JSON.parse(fromUtf8(membersJson));
   if (!Array.isArray(parsed)) throw new Error('Tildra: malformed group member list');
 
@@ -202,7 +218,12 @@ function decodeGroupInvite(data: Uint8Array): GroupInvite {
       });
     }
   }
-  return { distribution, members, name: fromUtf8(name) || undefined };
+  return {
+    distribution,
+    members,
+    name: fromUtf8(name) || undefined,
+    epoch: readU32(epoch, 0),
+  };
 }
 
 /**
@@ -1260,7 +1281,7 @@ export class SessionManager {
    * why encrypted groups are practical at all.
    */
   async createGroup(groupId: string, members: GroupMember[], name?: string): Promise<StoredGroup> {
-    const group: StoredGroup = { groupId, name, members, createdAt: this.now() };
+    const group: StoredGroup = { groupId, name, members, createdAt: this.now(), epoch: 0 };
     await this.store.saveGroup(group);
 
     const senderKey = createSenderKey(groupId);
@@ -1290,6 +1311,7 @@ export class SessionManager {
       distribution: encodeDistribution(senderKey),
       members: group?.members ?? members,
       name: group?.name,
+      epoch: group?.epoch ?? 0,
     });
 
     for (const m of members) {
@@ -1321,26 +1343,58 @@ export class SessionManager {
     }
     await this.store.saveReceiverKey(groupId, memberKey(from), receiver);
 
-    // Merge the membership the sender told us about with what we already knew.
-    // We take the union rather than trusting their list wholesale: a member
-    // should not be able to silently drop someone from everyone else's view of
-    // the group.
+    // Merge the membership the sender told us about with what we already knew,
+    // and how depends on the epoch.
+    //
+    // At the same epoch it is a union: a member must not be able to drop
+    // somebody from everyone else's view of the group just by leaving them out
+    // of a routine distribution. A *newer* epoch is a declared membership
+    // change, and there the sender's list is the answer — otherwise a removal
+    // never reaches anyone but the person who performed it, and the removed
+    // member keeps both a place on every fanout list and everybody's chain
+    // key. An older epoch is a device that has not caught up; its list is
+    // ignored so it cannot resurrect somebody who was removed while it was
+    // offline.
     const existing = await this.store.loadGroup(groupId);
+    const ourEpoch = existing?.epoch ?? 0;
     const members = new Map<string, GroupMember>();
-    for (const m of existing?.members ?? []) members.set(memberKey(m), m);
-    for (const m of invite.members) members.set(memberKey(m), m);
+    let removed: GroupMember[] = [];
+
+    if (invite.epoch > ourEpoch) {
+      for (const m of invite.members) members.set(memberKey(m), m);
+      removed = (existing?.members ?? []).filter((m) => !members.has(memberKey(m)));
+    } else {
+      for (const m of existing?.members ?? []) members.set(memberKey(m), m);
+      if (invite.epoch === ourEpoch) {
+        for (const m of invite.members) members.set(memberKey(m), m);
+      }
+    }
     members.set(memberKey(from), from);
     members.set(`${this.accountId}/${this.deviceId}`, {
       accountId: this.accountId,
       deviceId: this.deviceId,
     });
+    // Whoever sent this, and we ourselves, are in the group by construction —
+    // so neither can be on the list of people it removed.
+    removed = removed.filter((m) => members.get(memberKey(m)) === undefined);
 
-    await this.store.saveGroup({
+    const group: StoredGroup = {
       groupId,
       name: existing?.name ?? invite.name,
       members: [...members.values()],
       createdAt: existing?.createdAt ?? this.now(),
-    });
+      epoch: Math.max(ourEpoch, invite.epoch),
+    };
+    await this.store.saveGroup(group);
+
+    if (removed.length > 0) {
+      // §4: every remaining member generates a fresh sender chain. This is the
+      // remaining members' half of that, and it is why the epoch exists. It
+      // does not loop: the distribution it sends carries the epoch we just
+      // adopted, so the next device to see it removes nobody and stops.
+      await this.rotateAfterRemoval(group, removed);
+      return;
+    }
 
     this.events.onGroupChange?.(groupId);
   }
@@ -1476,16 +1530,10 @@ export class SessionManager {
     const group = await this.store.loadGroup(groupId);
     if (!group) throw new Error(`Tildra: unknown group ${groupId}`);
 
+    const removed = group.members.filter((m) => memberKey(m) === memberKey(member));
+    if (removed.length === 0) return group;
     group.members = group.members.filter((m) => memberKey(m) !== memberKey(member));
-    await this.store.saveGroup(group);
-
-    // Drop everything tied to the old epoch, ours and theirs, before the new
-    // chain exists — so there is no window where the old key is still live.
-    await this.store.deleteGroupKeys(groupId);
-    await this.store.saveSenderKey(groupId, createSenderKey(groupId));
-    await this.distributeSenderKey(groupId, group.members);
-
-    this.events.onGroupChange?.(groupId);
+    await this.rotateAfterRemoval(group, removed);
     return group;
   }
 
@@ -1517,19 +1565,42 @@ export class SessionManager {
     const group = await this.store.loadGroup(groupId);
     if (!group) throw new Error(`Tildra: unknown group ${groupId}`);
 
-    const remaining = group.members.filter((m) => m.accountId !== accountId);
-    if (remaining.length === group.members.length) return group;
-    group.members = remaining;
+    const removed = group.members.filter((m) => m.accountId === accountId);
+    if (removed.length === 0) return group;
+    group.members = group.members.filter((m) => m.accountId !== accountId);
+    await this.rotateAfterRemoval(group, removed);
+    return group;
+  }
+
+  /**
+   * The half of a removal that is the same whoever triggered it.
+   *
+   * Three things have to happen together, and each of them was wrong on its
+   * own before:
+   *
+   * - Our chain rotates. Without it the removed member holds a key that
+   *   derives every message we send from here on.
+   * - Only *their* receiver keys go. Dropping every receiver key for the group
+   *   takes the staying members' chains with it, and they have no reason to
+   *   send another distribution, so the group falls permanently silent for us
+   *   — and every one of their messages becomes an envelope we cannot decrypt
+   *   and therefore never acknowledge, which the server redelivers forever.
+   * - The epoch advances, and the new list rides out with the new key. That is
+   *   what tells the remaining members this is a removal rather than a
+   *   routine rekey, so they rotate too. §4's claim is that *every* remaining
+   *   member gets a fresh chain, not just the one who pressed the button.
+   */
+  private async rotateAfterRemoval(group: StoredGroup, removed: GroupMember[]): Promise<void> {
+    group.epoch = (group.epoch ?? 0) + 1;
     await this.store.saveGroup(group);
 
-    // Everything tied to the old epoch goes before the new chain exists, so
-    // there is no window in which the old key is still live.
-    await this.store.deleteGroupKeys(groupId);
-    await this.store.saveSenderKey(groupId, createSenderKey(groupId));
-    await this.distributeSenderKey(groupId, group.members);
+    for (const m of removed) {
+      await this.store.deleteReceiverKey(group.groupId, memberKey(m));
+    }
+    await this.store.saveSenderKey(group.groupId, createSenderKey(group.groupId));
+    await this.distributeSenderKey(group.groupId, group.members);
 
-    this.events.onGroupChange?.(groupId);
-    return group;
+    this.events.onGroupChange?.(group.groupId);
   }
 
   /**

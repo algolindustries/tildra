@@ -589,17 +589,16 @@ export class Database {
   }
 
   /**
-   * Destroy every key for a group.
+   * Forget one member's chain.
    *
-   * Called when a member is removed, before the replacement chain is created,
-   * so there is no window in which the old key is still usable.
+   * What a removal actually needs. Dropping *every* receiver key instead —
+   * which is what this used to do — throws away the chains of the members who
+   * are staying, and they have no reason to send another distribution, so the
+   * group goes permanently silent for whoever did the removing.
    */
-  async deleteGroupKeys(groupId: string): Promise<void> {
-    await this.db.runAsync('DELETE FROM group_sender_keys WHERE id = ?', [
-      this.vault.blindIndex('session', `sender:${groupId}`),
-    ]);
-    await this.db.runAsync('DELETE FROM group_receiver_keys WHERE group_ref = ?', [
-      this.groupKey(groupId),
+  async deleteReceiverKey(groupId: string, memberId: string): Promise<void> {
+    await this.db.runAsync('DELETE FROM group_receiver_keys WHERE id = ?', [
+      this.vault.blindIndex('session', `receiver:${groupId}/${memberId}`),
     ]);
   }
 

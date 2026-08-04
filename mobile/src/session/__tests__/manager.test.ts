@@ -838,6 +838,45 @@ describeIntegration('encrypted groups', () => {
     g.close();
   }, 120_000);
 
+  it('locks a removed member out of what the other members send, not only the remover', async () => {
+    // §4: "every remaining member generates a fresh sender chain. A removed
+    // member cannot read anything sent after their removal." The test above
+    // only drives the remover's own messages, which is the half that works.
+    //
+    // Carol holds Bob's chain key too — that is what sender keys are. If
+    // Bob's chain is not rotated, and if Carol is still on Bob's member list,
+    // then Bob is still fanning out to her and she still decrypts it.
+    const g = await group('grp-remove-all');
+
+    // Bob sends first, so Carol has his chain and not just Alice's.
+    await g.bob.manager.sendGroupMessage('grp-remove-all', 'bob while carol is here');
+    await waitFor(() => g.carol.groupReceived.length > 0, 15_000);
+
+    const bobKeyBefore = g.bob.store.receiverKeys.get(
+      `grp-remove-all/${g.alice.accountId}/${g.alice.deviceId}`,
+    );
+    await g.alice.manager.removeGroupAccount('grp-remove-all', g.carol.accountId);
+    await waitFor(
+      () =>
+        g.bob.store.receiverKeys.get(
+          `grp-remove-all/${g.alice.accountId}/${g.alice.deviceId}`,
+        ) !== bobKeyBefore,
+      15_000,
+    );
+
+    const carolBefore = g.carol.groupReceived.length;
+    await g.bob.manager.sendGroupMessage('grp-remove-all', 'carol must not read this either');
+    await waitFor(() => g.alice.groupReceived.length > 0, 15_000);
+
+    expect(g.alice.groupReceived.map((m) => m.text)).toContain('carol must not read this either');
+    expect(g.carol.groupReceived).toHaveLength(carolBefore);
+    // And she is no longer on the list Bob fans out to, so the envelope is not
+    // even addressed to her.
+    const bobGroup = await g.bob.store.loadGroup('grp-remove-all');
+    expect(bobGroup?.members.map((m) => m.accountId)).not.toContain(g.carol.accountId);
+    g.close();
+  }, 120_000);
+
   it('does not let a newly added member read the backlog', async () => {
     const alice = await bringUp('Alice');
     const bob = await bringUp('Bob');

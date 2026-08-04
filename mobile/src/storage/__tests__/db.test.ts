@@ -722,22 +722,25 @@ describe('group keys', () => {
     expect(await db.loadReceiverKey('GROUP-ONE', 'MEMBER-THREE')).toBeNull();
   });
 
-  it('destroys every key for a group and leaves other groups alone', async () => {
-    // Called when a member is removed, before the replacement chain exists,
-    // so there must be no window where the old key still opens anything.
+  it('forgets one member\'s chain and nobody else\'s', async () => {
+    // What a removal needs. Dropping every key for the group instead takes the
+    // staying members' chains with it, and they have no reason to send another
+    // distribution — so the group falls silent for whoever did the removing.
     const one = createSenderKey('GROUP-ONE');
     const two = createSenderKey('GROUP-TWO');
     await db.saveSenderKey('GROUP-ONE', one);
     await db.saveReceiverKey('GROUP-ONE', 'MEMBER-ONE', decodeDistribution('MEMBER-ONE', encodeDistribution(one)));
+    await db.saveReceiverKey('GROUP-ONE', 'MEMBER-TWO', decodeDistribution('MEMBER-TWO', encodeDistribution(one)));
     await db.saveSenderKey('GROUP-TWO', two);
     await db.saveReceiverKey('GROUP-TWO', 'MEMBER-ONE', decodeDistribution('MEMBER-ONE', encodeDistribution(two)));
 
-    await db.deleteGroupKeys('GROUP-ONE');
+    await db.deleteReceiverKey('GROUP-ONE', 'MEMBER-ONE');
 
-    expect(await db.loadSenderKey('GROUP-ONE')).toBeNull();
     expect(await db.loadReceiverKey('GROUP-ONE', 'MEMBER-ONE')).toBeNull();
-    expect(await db.loadSenderKey('GROUP-TWO')).not.toBeNull();
+    expect(await db.loadReceiverKey('GROUP-ONE', 'MEMBER-TWO')).not.toBeNull();
+    // The same member id in another group is a different chain.
     expect(await db.loadReceiverKey('GROUP-TWO', 'MEMBER-ONE')).not.toBeNull();
+    expect(await db.loadSenderKey('GROUP-ONE')).not.toBeNull();
   });
 
   it('names no group and no member in the rows it writes', async () => {

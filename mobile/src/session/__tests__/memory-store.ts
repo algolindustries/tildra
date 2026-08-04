@@ -110,10 +110,7 @@ export class MemorySessionStore implements SessionStore {
     return this.receiverKeys.get(`${groupId}/${memberId}`) ?? null;
   }
 
-  async deleteGroupKeys(groupId: string): Promise<void> {
-    this.senderKeys.delete(groupId);
-    for (const key of [...this.receiverKeys.keys()]) {
-      if (key.startsWith(`${groupId}/`)) this.receiverKeys.delete(key);
-    }
+  async deleteReceiverKey(groupId: string, memberId: string): Promise<void> {
+    this.receiverKeys.delete(`${groupId}/${memberId}`);
   }
 }

@@ -259,6 +259,35 @@ Tildra groups use **sender keys over pairwise sessions**:
    every remaining member generates a fresh sender chain. A removed member cannot
    read anything sent after their removal.
 
+Point 4 is the one with a moving part, because membership is client-side: a
+removal is a claim one device makes to the others, not a fact the server
+enforces. So the group carries an **epoch**, and a removal bumps it. A
+distribution arrives with the sender's list and the epoch it belongs to:
+
+| Their epoch | What the receiver does |
+|---|---|
+| Newer than ours | Their list is the answer. Anyone it drops is removed here too: forget their chain, rotate ours, redistribute at the new epoch. |
+| Equal to ours | Union. A member must not be able to drop somebody from everyone else's view of the group inside a routine rekey. |
+| Older than ours | Ignore the list. A device that was offline for the removal cannot put the removed member back. |
+
+That is what makes "every remaining member" true rather than "whoever pressed
+the button". Without it a removal reaches only the remover: everyone else keeps
+the removed member on the list they fan out to, and keeps the sender chain that
+member already holds — so the removed member goes on reading everything except
+the remover's own messages.
+
+The cost, stated plainly: any member can remove any member. That is the same
+authority every member already has to *add* one, and it is what client-side
+membership means. Server-enforced admin roles would need the server to know the
+member list, which is the thing §4 exists to avoid.
+
+Removing somebody forgets **their** chain, not the whole group's. Forgetting
+every chain takes the staying members' with it, and nothing prompts them to
+send another distribution, so the group falls silent for whoever did the
+removal — and each of their later messages becomes an envelope that cannot be
+decrypted and so is never acknowledged, which the server then redelivers
+forever.
+
 A group message key is expanded exactly as a pairwise one is, under its own
 label, and every message carries a signature over a domain-separated
 transcript so one member cannot forge another's:
