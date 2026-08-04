@@ -238,3 +238,81 @@ describe('the padding buckets in §6', () => {
     expect(bucketSize(last + increment + 1)).toBe(last + 2 * increment);
   });
 });
+
+/**
+ * Signature contexts, the same way and for the same reason.
+ *
+ * The KDF-label check above exists because a name in the document with nothing
+ * behind it became a guarantee in the threat model. Signature contexts are the
+ * other half of domain separation — "a signature made for one purpose must
+ * never verify for another", as primitives.ts puts it — and they are wire
+ * format between two implementations rather than one client's internals: the
+ * Go server verifies two of them.
+ *
+ * They were not checked. Six existed in the client and the document named
+ * three; the two missing ones were the registration proof and the challenge
+ * response, which is everything a second implementation has to do before it can
+ * do anything at all.
+ */
+describe('the signature contexts', () => {
+  const CONTEXT = /tildra-[a-z0-9-]+-v1/g;
+
+  function contextsIn(text: string): Set<string> {
+    return new Set(text.match(CONTEXT) ?? []);
+  }
+
+  function serverSource(): string {
+    const dir = join(REPO, 'server/internal');
+    const out: string[] = [];
+    const walk = (path: string) => {
+      for (const entry of readdirSync(path, { withFileTypes: true })) {
+        const full = join(path, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith('.go') && !entry.name.endsWith('_test.go')) {
+          out.push(readFileSync(full, 'utf8'));
+        }
+      }
+    };
+    walk(dir);
+    return out.join('\n');
+  }
+
+  it('found contexts on every side, so the comparison means something', () => {
+    expect(contextsIn(cryptoSource()).size).toBeGreaterThanOrEqual(6);
+    expect(contextsIn(serverSource()).size).toBeGreaterThanOrEqual(3);
+    expect(contextsIn(protocolDoc()).size).toBeGreaterThanOrEqual(6);
+  });
+
+  it('are every one of them documented', () => {
+    const documented = contextsIn(protocolDoc());
+    const undocumented = [...contextsIn(cryptoSource())].filter((c) => !documented.has(c));
+    expect(
+      undocumented.sort(),
+      'these signature contexts exist in the client and nowhere in PROTOCOL.md',
+    ).toEqual([]);
+  });
+
+  it('are documented on the server side too, since it verifies them', () => {
+    const documented = contextsIn(protocolDoc());
+    const undocumented = [...contextsIn(serverSource())].filter((c) => !documented.has(c));
+    expect(
+      undocumented.sort(),
+      'the server checks a signature the document does not describe',
+    ).toEqual([]);
+  });
+
+  it('are not named by the document unless something signs or verifies them', () => {
+    const implemented = new Set([...contextsIn(cryptoSource()), ...contextsIn(serverSource())]);
+    const invented = [...contextsIn(protocolDoc())].filter((c) => !implemented.has(c));
+    expect(invented.sort(), 'the document names a signature nobody makes').toEqual([]);
+  });
+
+  it('are distinct, which is the whole point of having them', () => {
+    const all = [...contextsIn(cryptoSource()), ...contextsIn(serverSource())];
+    const seen = new Map<string, number>();
+    for (const c of all) seen.set(c, (seen.get(c) ?? 0) + 1);
+    // Every context is a different string; two purposes sharing one would mean
+    // a signature for either verifies for both.
+    expect(new Set(all).size).toBe(new Set(all.map((c) => c.toLowerCase())).size);
+  });
+});

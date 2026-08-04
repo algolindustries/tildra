@@ -54,6 +54,23 @@ Registration produces:
    public directory. Handles are convenience, never authority — the identity key
    is the identity.
 
+**Two signatures every client makes before it can do anything**, both verified
+by the server and neither described here until 2026-08-05 — which meant a
+second implementation could not register an account or log in from this
+document alone:
+
+```
+registration proof = Sig(IK, "tildra-account-create-v1:" ‖ proof_ts)
+challenge response = Sig(IK, "tildra-auth-challenge-v1:" ‖ challenge)
+```
+
+`proof_ts` is RFC 3339 at second precision, no milliseconds, and the server
+reconstructs that exact string to verify — so the two have to agree byte for
+byte. `challenge` is the random bytes `GET /v1/auth/challenge` issued, used
+once. Both are the general form: a signature is over its context string
+followed by the message, and a signature made for one context must never verify
+under another.
+
 The server stores: account ID, public identity keys, prekey bundles, an opaque
 push token, and the **device name** — the label typed into "name this device",
 which is for the user's own device list and is stored in the clear. It does not
@@ -546,7 +563,20 @@ HKDF(ikm = DH(sealer ephemeral secret, new device ephemeral public),
 
 3. The existing device registers the new one and seals an approval to the
    ephemeral key: `{accountId, deviceId, approvedBy, signature}` over a
-   transcript binding all three.
+   transcript binding all three:
+
+   ```
+   signature = Sig(IK_approver,
+                   "tildra-provisioning-approval-v1:" ‖ account_id ‖ ":"
+                                                     ‖ device_id  ‖ ":"
+                                                     ‖ new_identity_key)
+   ```
+
+   Delimiter-joined rather than length-framed, unlike §10's call transcript and
+   §7.1's log entries. Account and device ids come from a fixed alphabet that
+   excludes `:`, so no two transcripts collide today — but the framing rule this
+   document states twice elsewhere exists so that stays true without depending
+   on an alphabet, and this transcript does not follow it.
 4. Both devices derive a six-digit pairing code:
 
    ```
