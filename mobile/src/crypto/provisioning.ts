@@ -195,6 +195,24 @@ export function verifyIdentityCommitment(
   }
 }
 
+/**
+ * Check the ephemeral key the server handed over against the scanned one.
+ *
+ * The QR carries this key, so the approving device already has it from the
+ * camera and never has to ask the network for it. Taking the server's copy
+ * instead leaves the swap available and demotes the defence to the pairing
+ * code — a step that only works if a person actually compares six digits.
+ * Checking it here refuses the swap outright, and the comparison goes back to
+ * being the backstop it was meant to be.
+ */
+export function verifyEphemeralKey(offer: LinkOffer, ephemeralKey: Uint8Array): void {
+  if (!equal(ephemeralKey, offer.ephemeralPublicKey)) {
+    throw new ProvisioningError(
+      'the ephemeral key the server offered is not the one that was scanned',
+    );
+  }
+}
+
 /** Seal the approval to the new device's ephemeral key. */
 export function sealApproval(
   offer: LinkOffer,

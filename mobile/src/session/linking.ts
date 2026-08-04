@@ -19,6 +19,7 @@ import {
   encodeLinkOffer,
   openApproval,
   sealApproval,
+  verifyEphemeralKey,
   verifyIdentityCommitment,
 } from '../crypto/provisioning';
 
@@ -98,15 +99,18 @@ export async function approveDeviceLink(
   // The step that makes the camera the root of trust: the key the server
   // offered must be the key the other screen committed to.
   verifyIdentityCommitment(offer, channel.identityKey);
+  // And the same for the ephemeral key the approval is sealed to. The QR
+  // carries it, so this device already has it from the camera; it used to take
+  // the server's copy instead and seal to that, which left a server free to
+  // insert its own key and read the channel with nothing but the pairing-code
+  // comparison to stop it.
+  verifyEphemeralKey(offer, channel.ephemeralKey);
 
   const { deviceId } = await client.addDevice(channel.identityKey, deviceName);
-  const sealed = sealApproval(
-    { ...offer, ephemeralPublicKey: channel.ephemeralKey },
-    approver,
-    accountId,
-    deviceId,
-    channel.identityKey,
-  );
+  // Sealed to the scanned key, not the fetched one. They are equal by the check
+  // above; using the scanned one is what makes that check load-bearing rather
+  // than advisory.
+  const sealed = sealApproval(offer, approver, accountId, deviceId, channel.identityKey);
   await client.approveProvisioning(offer.provisioningId, sealed.payload);
 
   return { code: sealed.code, deviceId };

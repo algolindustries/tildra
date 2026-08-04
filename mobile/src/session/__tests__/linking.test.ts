@@ -20,7 +20,9 @@ import {
   ProvisioningError,
   decodeLinkOffer,
   encodeLinkOffer,
+  generateProvisioningKey,
   pairingCode,
+  verifyEphemeralKey,
   verifyIdentityCommitment,
 } from '../../crypto/provisioning';
 import { approveDeviceLink, beginDeviceLink } from '../linking';
@@ -172,6 +174,41 @@ describeIntegration('device linking', () => {
     ).rejects.toBeInstanceOf(ProvisioningError);
   }, 60_000);
 
+  it('refuses an ephemeral key the server substituted', async () => {
+    // The QR carries the ephemeral key, so this device has it from the camera
+    // and never needs to ask the network. It used to ask anyway and seal to
+    // whatever came back, which left the swap available: a server that inserts
+    // its own key reads the channel, and the only thing standing in the way is
+    // a person actually comparing six digits.
+    //
+    // Everything here is the real server except the one field being lied about.
+    const primary = await primaryDevice();
+    const newIdentity = generateIdentity();
+    const newClient = new TildraClient({ baseUrl: BASE_URL });
+    const pending = await beginDeviceLink(newClient, BASE_URL, newIdentity);
+
+    const hostile = Object.create(primary.client) as TildraClient;
+    hostile.getProvisioning = async (id: string) => ({
+      ...(await primary.client.getProvisioning(id)),
+      ephemeralKey: generateProvisioningKey().publicKey,
+    });
+
+    await expect(
+      approveDeviceLink(hostile, pending.payload, primary.identity, primary.accountId),
+    ).rejects.toBeInstanceOf(ProvisioningError);
+
+    // And the honest server still links, so the check is not simply refusing
+    // everything.
+    const { code } = await approveDeviceLink(
+      primary.client,
+      pending.payload,
+      primary.identity,
+      primary.accountId,
+    );
+    const opened = await pending.await({ timeoutMs: 15_000, pollMs: 100 });
+    expect(opened.code).toBe(code);
+  }, 60_000);
+
   it('gives a different pairing code when the transcript changes', async () => {
     // A server that swapped the ephemeral key to read the channel changes the
     // shared secret, so the two screens disagree and the user stops.
@@ -264,5 +301,23 @@ describeIntegration('device linking', () => {
     expect(() =>
       verifyIdentityCommitment(offer, generateIdentity().publicKey),
     ).toThrow(ProvisioningError);
+  });
+
+  it('checks the ephemeral key against the scanned one, not the fetched one', async () => {
+    const scanned = generateProvisioningKey();
+    const offer = {
+      provisioningId: 'X',
+      ephemeralPublicKey: scanned.publicKey,
+      identityCommitment: hash(generateIdentity().publicKey),
+    };
+    expect(() => verifyEphemeralKey(offer, scanned.publicKey)).not.toThrow();
+    expect(() => verifyEphemeralKey(offer, generateProvisioningKey().publicKey)).toThrow(
+      ProvisioningError,
+    );
+    // A truncated or empty key must not compare equal to anything either.
+    expect(() => verifyEphemeralKey(offer, scanned.publicKey.slice(0, 16))).toThrow(
+      ProvisioningError,
+    );
+    expect(() => verifyEphemeralKey(offer, new Uint8Array(32))).toThrow(ProvisioningError);
   });
 });

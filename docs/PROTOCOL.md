@@ -442,9 +442,12 @@ the provisioning channel *is* the server.
 1. The new device generates its identity key and an ephemeral X25519 key, opens
    a channel, and displays `tildra://link?id=…&key=…&commit=…&server=…` where
    `commit = SHA-256(new identity public key)`.
-2. An existing, signed-in device reads the channel, and checks the identity key
-   the server handed over against `commit`. **The commitment travelled over a
-   camera, not the network**, so a substituted key fails here.
+2. An existing, signed-in device reads the channel, and checks **both** keys the
+   server hands over against what it scanned: the identity key against `commit`,
+   and the ephemeral key against `key`. **Both travelled over a camera, not the
+   network**, so a substituted key fails here rather than later. The approval is
+   sealed to the scanned ephemeral key, not the fetched one — otherwise the
+   check is advisory and the server's copy is still the one in use.
 The approval is sealed under its own label, with both ephemeral public keys
 bound into the salt in the order the sealer computes them:
 
@@ -464,9 +467,13 @@ HKDF(ikm = DH(sealer ephemeral secret, new device ephemeral public),
                info = "Tildra_PairingCode_v1") mod 10^6
    ```
 
-   The user compares them. A server that swapped the ephemeral key to read the
-   channel, or aimed the device at a different account, changes the transcript —
-   so the two screens disagree.
+   The user compares them. A server that aimed the device at a different
+   account changes the transcript, so the two screens disagree.
+
+   The code is the backstop, not the first line. An ephemeral key the server
+   swapped is refused at step 2 without anyone having to compare anything; that
+   swap used to reach this step, which meant a cryptographic guarantee was
+   resting on whether a person actually reads six digits off two screens.
 
 Channels expire in 5 minutes and accept exactly one approval: a second would
 let a server that captured the first replace it after the codes had already been
