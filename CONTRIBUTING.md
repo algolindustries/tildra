@@ -32,12 +32,26 @@ and says so loudly at startup.
 ## Before you open a PR
 
 ```bash
-cd server && make fmt lint test
-cd ../mobile && npm run typecheck && npm run lint
+./scripts/check.sh
 ```
 
-CI runs the same commands. It is not trying to be clever; if it passes locally it
-passes there.
+That is the gate CI applies — gofmt, vet, staticcheck, `go test -race -count=1`,
+`go build -trimpath`, typecheck, the reachability check, the whole client suite,
+and the Metro bundle — in the same order, from one command. `--full` adds the
+reproducible-build and native-config jobs, which need toolchains and minutes.
+
+This section used to say `cd server && make fmt lint test` and
+`cd ../mobile && npm run typecheck && npm run lint`, followed by "CI runs the
+same commands ... if it passes locally it passes there". Neither part was true.
+`make lint` skipped staticcheck whenever it was not installed, which is the
+check CI fails on; `npm run lint` is not a script that exists, and there is no
+linter configured for the client — typecheck and the reachability check are what
+stands in for one. Main went red twice in one week on exactly that gap, which is
+what `scripts/check.sh` exists to close.
+
+Keep the script in step with `.github/workflows/ci.yml`. A check that has
+drifted from the thing it mirrors is worse than no check, because it is
+believed.
 
 ## Commit messages
 
@@ -61,12 +75,23 @@ the why isn't obvious from the diff.
 
 ## Where help is most useful right now
 
-- The Postgres store (`server/internal/store/` has the interface; only the
-  in-memory implementation exists).
-- Key transparency — an auditable append-only log for the handle directory.
+- **Running the media half of a call.** The signalling is built and tested and
+  no media has ever flowed: there is no TURN deployment and nothing has run on a
+  device. See `docs/STATUS.md`.
+- **Operating an auditor** that is not the server operator. The mechanism runs
+  end to end and catches nothing while nobody is on the other end — see
+  `docs/PROTOCOL.md` §7.3.
 - Migrating groups from sender keys to MLS (RFC 9420).
-- Reproducible builds for the Android APK.
+- Reproducible compilation of the `.ipa` and `.aab`. The bundle, the native
+  project generation and both binaries already reproduce; running Xcode and
+  Gradle over them does not.
 - Accessibility review of the client.
+
+The first two items here were "the Postgres store, only the in-memory
+implementation exists" and "key transparency — an auditable append-only log"
+until 2026-08-05. Both have been built for weeks, with a conformance suite
+across both stores and a standalone auditor; a help-wanted list that asks for
+finished work is how a contributor's first afternoon gets spent.
 
 ## Code of conduct
 

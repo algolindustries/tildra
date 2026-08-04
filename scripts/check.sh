@@ -56,6 +56,7 @@ if [ -z "${TILDRA_TEST_DATABASE_URL:-}" ]; then
   note "TILDRA_TEST_DATABASE_URL is unset, so the Postgres half of the store"
   note "conformance suite will skip. CI sets it and fails if it is missing —"
   note "the two store implementations are only held together where it runs."
+  note "\`make test-postgres\` in server/ brings up a throwaway one and closes it."
 fi
 go test -race -count=1 ./...
 

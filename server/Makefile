@@ -48,11 +48,13 @@ postgres-down:
 test-postgres: postgres-up
 	TILDRA_TEST_DATABASE_URL='$(PG_URL)' go test -count=1 ./internal/store/...
 
-# The crypto-adjacent packages get the vet treatment plus staticcheck when it
-# is installed; CI installs it, local dev doesn't have to.
+# vet plus staticcheck, always. This used to skip staticcheck when it was not
+# installed — "CI installs it, local dev doesn't have to" — which made the
+# documented pre-PR command pass locally while skipping the exact check CI
+# fails on. That happened twice in one week. `go run` needs nothing installed.
 lint:
 	go vet ./...
-	@command -v staticcheck >/dev/null 2>&1 && staticcheck ./... || echo "staticcheck not installed, skipping"
+	go run honnef.co/go/tools/cmd/staticcheck@latest ./...
 
 fmt:
 	gofmt -l -w .
