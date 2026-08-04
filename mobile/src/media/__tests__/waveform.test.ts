@@ -111,12 +111,24 @@ describe('bar rendering', () => {
     expect(heights[1]).toBeCloseTo(1);
   });
 
-  it('stays within 0 and 1', () => {
-    const heights = barHeights(new Uint8Array([0, 3, 7, 11, 15]));
-    heights.forEach((h) => {
-      expect(h).toBeGreaterThan(0);
-      expect(h).toBeLessThanOrEqual(1);
+  it('stays within 0 and 1 for every byte a sender can send, not just the documented ones', () => {
+    // A bar is four bits, but it arrives in a whole byte from the other end.
+    // This used to be checked over 0, 3, 7, 11 and 15 — the values the encoder
+    // produces — which is every input except the ones that matter. A 255 maps
+    // to 15.08, and the bubble turns that into `height: '1508%'` on a 30px row
+    // with nothing clipping it.
+    const every = new Uint8Array(256);
+    every.forEach((_, i) => (every[i] = i));
+
+    barHeights(every).forEach((h, value) => {
+      expect(h, `bar value ${value}`).toBeGreaterThan(0);
+      expect(h, `bar value ${value}`).toBeLessThanOrEqual(1);
     });
+  });
+
+  it('draws anything at or above full loudness at exactly full height', () => {
+    expect(barHeights(new Uint8Array([WAVEFORM_MAX]))[0]).toBeCloseTo(1);
+    expect(barHeights(new Uint8Array([255]))[0]).toBeCloseTo(1);
   });
 });
 

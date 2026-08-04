@@ -56,8 +56,16 @@ export interface AttachmentRef extends AttachmentKey {
   waveform?: Uint8Array;
 }
 
-/** Bounds on the waveform, checked on the way in as well as out. */
+/**
+ * Bounds on the waveform, checked on the way in as well as out.
+ *
+ * One bar per byte, and a bar is four bits of loudness — docs/PROTOCOL.md §5.4.
+ * The value bound matters as much as the length one: a bar is drawn as a
+ * fraction of the bubble's height, so a byte above the documented range is a
+ * bar taller than the bubble, painted by whoever sent the message.
+ */
 const MAX_WAVEFORM_BYTES = 128;
+const MAX_WAVEFORM_VALUE = 15;
 const MAX_DURATION_MS = 60 * 60 * 1000;
 
 /** Nonce is 24 bytes for XChaCha20; random is safe at that width. */
@@ -178,6 +186,9 @@ export function deserializeAttachmentRef(data: SerializedAttachmentRef): Attachm
   // million bars or a duration of a century is not a voice note.
   if (ref.waveform && ref.waveform.length > MAX_WAVEFORM_BYTES) {
     throw new AttachmentError('attachment reference has an oversized waveform');
+  }
+  if (ref.waveform?.some((bar) => bar > MAX_WAVEFORM_VALUE)) {
+    throw new AttachmentError('attachment reference has a waveform bar out of range');
   }
   if (
     ref.durationMs !== undefined &&

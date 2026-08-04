@@ -81,9 +81,19 @@ export function formatDuration(ms: number): string {
  *
  * A floor of 0.12 keeps silence visible as a thin line rather than a gap —
  * a waveform with holes in it reads as a corrupted file.
+ *
+ * The ceiling is not decoration either. A bar is four bits, but it arrives in a
+ * whole byte from whoever sent the message, and the caller turns this number
+ * straight into a percentage of a fixed-height row that does not clip. An
+ * unclamped 255 is a bar fifteen times the bubble, drawn over the conversation
+ * around it. The reference is already rejected on receipt for the same reason;
+ * this is the half that does not depend on that check having run.
  */
 export function barHeights(waveform: Uint8Array, minimum = 0.12): number[] {
-  return Array.from(waveform, (v) => minimum + (v / WAVEFORM_MAX) * (1 - minimum));
+  return Array.from(waveform, (v) => {
+    const level = Math.min(Math.max(v, 0), WAVEFORM_MAX) / WAVEFORM_MAX;
+    return minimum + level * (1 - minimum);
+  });
 }
 
 /** How much of the waveform has played, for the progress fill. */

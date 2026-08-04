@@ -9,6 +9,9 @@ import {
 } from '../attachment';
 import { equal, randomBytes, toBase64, utf8 } from '../primitives';
 import { bucketSize } from '../wire';
+// The encoder lives outside crypto/ and the bound that has to match it lives
+// inside. Importing both here is what stops them drifting apart again.
+import { WAVEFORM_BUCKETS, WAVEFORM_MAX, buildWaveform } from '../../media/waveform';
 
 describe('attachment encryption', () => {
   it('round-trips a file', () => {
@@ -152,5 +155,35 @@ describe('voice metadata', () => {
     ).toThrow(/waveform/);
     expect(() => deserializeAttachmentRef({ ...good, durationMs: -1 })).toThrow(/duration/);
     expect(() => deserializeAttachmentRef({ ...good, durationMs: 1e12 })).toThrow(/duration/);
+  });
+
+  it('rejects a bar louder than a bar can be', () => {
+    // The length was bounded and the values were not, and the value is the one
+    // that is rendered: each bar becomes a fraction of the bubble's height, so
+    // a byte above the documented four bits is a bar taller than the bubble,
+    // drawn over the conversation by whoever sent the message.
+    const { key } = encryptAttachment(randomBytes(10));
+    const good = serializeAttachmentRef({ ...key, id: 'V', mimeType: 'audio/m4a' });
+
+    expect(() =>
+      deserializeAttachmentRef({ ...good, waveform: toBase64(new Uint8Array([0, 8, 16])) }),
+    ).toThrow(/waveform bar/);
+    expect(() =>
+      deserializeAttachmentRef({ ...good, waveform: toBase64(new Uint8Array([255])) }),
+    ).toThrow(/waveform bar/);
+  });
+
+  it('accepts exactly what the encoder produces', () => {
+    // The bound and the encoder are declared in different modules, which is how
+    // the last one drifted. This fails if either moves without the other.
+    const { key } = encryptAttachment(randomBytes(10));
+    const good = serializeAttachmentRef({ ...key, id: 'V', mimeType: 'audio/m4a' });
+
+    const loudest = buildWaveform(new Array(WAVEFORM_BUCKETS * 4).fill(1));
+    expect(loudest).toHaveLength(WAVEFORM_BUCKETS);
+    expect(Math.max(...loudest)).toBe(WAVEFORM_MAX);
+
+    const revived = deserializeAttachmentRef({ ...good, waveform: toBase64(loudest) });
+    expect(equal(revived.waveform!, loudest)).toBe(true);
   });
 });

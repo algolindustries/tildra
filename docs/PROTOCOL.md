@@ -420,12 +420,18 @@ nothing.
   nobody is going to.
 
 **Voice notes** are attachments with two extra fields in the reference: a
-duration and a 48-byte waveform, 4 bits of loudness per bar. Both ride in the
-message rather than inside the blob, so a bubble shows its shape and length
-the moment it arrives — needing a download to learn whether a note is three
-seconds or three minutes makes the feature feel broken. Both are bounded on
-receipt as well as on send, because they come from the sender and are rendered
-directly.
+duration and a 48-byte waveform, one bar per byte, 4 bits of loudness each — a
+bar is 0–15. Both ride in the message rather than inside the blob, so a bubble
+shows its shape and length the moment it arrives — needing a download to learn
+whether a note is three seconds or three minutes makes the feature feel broken.
+
+Both are bounded on receipt as well as on send, because they come from the
+sender and are rendered directly. That means the waveform's **values** as well
+as its length: a bar becomes a fraction of the bubble's height, so a byte above
+15 is a bar taller than the bubble, drawn by whoever sent the message. The
+renderer clamps too. Either check alone would do; a rule about untrusted input
+that is enforced in exactly one place is one refactor from not being enforced
+at all.
 
 ### 5.5 Linking a device
 
