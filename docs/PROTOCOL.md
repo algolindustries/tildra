@@ -511,6 +511,19 @@ If a contact's identity key changes, the conversation is **blocked from sending*
 until the user acknowledges the change. Silent key changes are how server-side
 MITM attacks succeed; we refuse to make that quiet.
 
+Everything the user originates is covered, calls included: placing one and
+answering one both sign something under an identity key and open a channel to
+whoever holds the other end. An incoming call still rings — knowing somebody
+tried to reach you is not the dangerous part — and the call screen labels the
+peer as *changed*, but answering is refused until the change is acknowledged.
+
+Note what does the blocking. Flagging a change **adopts** the new key: it is
+written into the conversation so the safety number the user is asked to compare
+is the one that is actually in use. From that moment the key comparison made on
+every send passes, because it is comparing the new key against itself. The flag
+is the only thing that still refuses, so a path that originates traffic and
+does not read it is not blocked at all, however many key checks it runs.
+
 ### 7.1 Key transparency
 
 Safety numbers only work if two people actually compare them. Key transparency

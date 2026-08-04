@@ -487,10 +487,7 @@ export class SessionManager {
    * can't read secret chats" caveat.
    */
   async sendMessage(accountId: string, text: string): Promise<Message> {
-    const existing = await this.store.getConversation(accountId);
-    if (existing?.identityChanged) {
-      throw new IdentityChangedError(accountId, existing.identityKey, existing.identityKey);
-    }
+    await this.assertNotFlagged(accountId);
 
     // Fetch the device list before recording anything. The conversation row
     // needs a real identity key: creating it with a placeholder and filling it
@@ -686,6 +683,25 @@ export class SessionManager {
    * trust on first use. That gap is exactly what safety numbers close, which
    * is why the UI surfaces them rather than hiding them in a submenu.
    */
+  /**
+   * Refuse to originate anything into a conversation whose key changed and has
+   * not been acknowledged — docs/PROTOCOL.md §7.
+   *
+   * This cannot be left to `assertIdentityUnchanged`, and that is the trap:
+   * flagging *adopts* the new key. `flagIdentityChange` writes it into the
+   * conversation row, so from the next attempt onwards that comparison is
+   * new-against-new and passes. The flag is the only thing still saying no,
+   * which means every path that originates traffic has to read it — it was
+   * read by `sendMessage` and `sendAttachment` and by neither call path, so a
+   * conversation too dangerous to send "hi" into could still be called.
+   */
+  private async assertNotFlagged(accountId: string): Promise<void> {
+    const conversation = await this.store.getConversation(accountId);
+    if (conversation?.identityChanged) {
+      throw new IdentityChangedError(accountId, conversation.identityKey, conversation.identityKey);
+    }
+  }
+
   private async assertIdentityUnchanged(accountId: string, identityKey: Uint8Array): Promise<void> {
     const conversation = await this.store.getConversation(accountId);
     if (!conversation) return;
@@ -928,10 +944,7 @@ export class SessionManager {
     },
     caption = '',
   ): Promise<Message> {
-    const conversation = await this.store.getConversation(accountId);
-    if (conversation?.identityChanged) {
-      throw new IdentityChangedError(accountId, conversation.identityKey, conversation.identityKey);
-    }
+    await this.assertNotFlagged(accountId);
 
     const devices = await this.client.listDevices(accountId);
     if (devices.length === 0) {
@@ -1630,6 +1643,11 @@ export class SessionManager {
     if (this.currentCall()) {
       throw new CallError('already in a call');
     }
+    // Before anything is signed or a call session exists. A call is the moment
+    // a user is most likely to act on believing they know who is on the other
+    // end — callTrust says so itself — so it is the last place to let an
+    // unacknowledged key change through.
+    await this.assertNotFlagged(accountId);
 
     const devices = await this.client.listDevices(accountId);
     if (devices.length === 0) {
@@ -1695,6 +1713,10 @@ export class SessionManager {
     if (!call.peerDeviceId) {
       throw new CallError('the call has no device to answer to');
     }
+    // The ring is allowed through — knowing someone tried to reach you is not
+    // the dangerous part — but answering signs and sends an SDP answer and
+    // opens media, and that is originating traffic like any other.
+    await this.assertNotFlagged(call.peerAccountId);
 
     // Validate the transition before sending anything: `advanceCall` throws on
     // an illegal one, and an answer that goes out for a call that is already

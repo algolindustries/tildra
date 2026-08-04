@@ -970,6 +970,46 @@ describeIntegration('calls', () => {
     bob.socket.close();
   }, 60_000);
 
+  it('refuses to place or answer a call into a conversation flagged as changed', async () => {
+    // §7 blocks a conversation from sending once a contact's key changes, and
+    // the two message paths honoured it while neither call path did — which is
+    // backwards, because a call is where a user is most likely to act on
+    // believing they know who is on the other end.
+    //
+    // The state below is exactly what flagIdentityChange leaves behind: the
+    // *new* key in the row, and the flag set. assertIdentityUnchanged compares
+    // new against new and passes, so the flag is the only thing left saying no.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.sendMessage(bob.accountId, 'merhaba');
+    await waitFor(() => bob.received.length > 0);
+
+    const conversation = await alice.store.getConversation(bob.accountId);
+    await alice.store.upsertConversation({ ...conversation!, identityChanged: true });
+
+    await expect(
+      alice.manager.placeCall(bob.accountId, { sdp: callSdp(1) }),
+    ).rejects.toBeInstanceOf(IdentityChangedError);
+    // Nothing was started: no call session, and the other side never rang.
+    expect(alice.manager.currentCall()).toBeNull();
+    expect(bob.incomingCalls).toHaveLength(0);
+
+    // The answering side is the same rule from the other end. Bob's phone rings
+    // before he learns Alice's key changed, and the answer is what would sign
+    // his fingerprint and open media to whoever holds the new key.
+    const placed = await bob.manager.placeCall(alice.accountId, { sdp: callSdp(2) });
+    await waitFor(() => alice.incomingCalls.length > 0);
+
+    await expect(alice.manager.answerCall(placed.callId, callSdp(3))).rejects.toBeInstanceOf(
+      IdentityChangedError,
+    );
+    expect(bob.answers).toHaveLength(0);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
+
   it('completes an offer and answer between two real devices', async () => {
     const alice = await bringUp('Alice');
     const bob = await bringUp('Bob');
