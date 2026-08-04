@@ -2116,6 +2116,53 @@ describeIntegration('signed prekey rotation', () => {
     );
   }, 60_000);
 
+  it('keeps the one-time secrets it already published across a rotation', async () => {
+    // `rotateSignedPreKeys` builds the new bundle with `count: 0` and then
+    // carries the existing pools over, with a comment saying the upload "must
+    // not claim to replace them". Two halves to that, and only one is on the
+    // server: the store accumulates one-time keys, so an empty list adds
+    // nothing and destroys nothing, and the conformance suite covers it.
+    //
+    // The half here is the device's own. If a rotation dropped the pools, the
+    // server would go on handing out public halves whose secrets this device
+    // had forgotten, and every sender who drew one would get a first message
+    // nobody can read — the same failure as publishing keys that never reached
+    // disk.
+    //
+    // The control says this was already caught, by "still accepts a handshake
+    // from somebody holding the old bundle": that test fetches a bundle, which
+    // draws a one-time prekey, so dropping the pools fails it too — with an
+    // error about a key its name says nothing about. Incidental coverage that
+    // would go away the moment that fixture stopped drawing one. This asserts
+    // the thing itself: the secret is still on disk under the id that was
+    // handed out, both pools survived, and the handshake built before the
+    // rotation completes after it.
+    const alice = await bringUp('Alice');
+    const bob = await deviceWithPersistence('Bob');
+
+    // Alice draws a one-time prekey from the pool as it stands now.
+    const bundle = await alice.client.fetchBundle(bob.accountId, bob.deviceId);
+    expect(bundle.oneTimePreKey, 'the pool should have handed one out').toBeDefined();
+    const drawn = bundle.oneTimePreKey!.id;
+
+    // Bob rotates his signed prekeys before her first message lands.
+    await bob.store.setMeta(
+      SIGNED_PREKEY_META_KEY,
+      String(Date.now() - SIGNED_PREKEY_ROTATION_MS - 1000),
+    );
+    expect(await bob.manager.rotateSignedPreKeysIfStale()).toBe(true);
+
+    // The secret behind the key she drew is still on disk, under its own id.
+    expect(bob.persisted().oneTimePreKeys.has(drawn)).toBe(true);
+    expect(bob.persisted().oneTimePqPreKeys.size).toBe(3);
+
+    // And the handshake she built against the pre-rotation bundle completes,
+    // which is the property rather than the bookkeeping.
+    const init = initiateSession(alice.identity, bundle);
+    expect(() => acceptSession(bob.persisted(), init.init)).not.toThrow();
+    expect(bob.errors).toEqual([]);
+  }, 60_000);
+
   it('writes down the one-time secrets it publishes', async () => {
     // The bug this callback exists for: the top-up generated a hundred new
     // one-time secrets, published their public halves, and nothing stored
