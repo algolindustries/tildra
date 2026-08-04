@@ -40,7 +40,7 @@ import {
   sdpFingerprint,
   signCallSdp,
 } from '../../crypto/calling';
-import { callSignalContent, encodeContent, textContent } from '../../crypto/content';
+import { ContentType, callSignalContent, encodeContent, textContent } from '../../crypto/content';
 import { createSenderKey, encodeGroupMessage, encryptGroupMessage } from '../../crypto/group';
 import { readSafetyCode } from '../../crypto/scan';
 import {
@@ -491,6 +491,56 @@ describeIntegration('session manager', () => {
     ).rejects.toThrow();
     alice.socket.close();
   }, 30_000);
+});
+
+describeIntegration('a message this build cannot read', () => {
+  it('drops it instead of leaving the server retrying it forever', async () => {
+    // The ordinary case, not a hostile one: a newer client sends a content type
+    // this build does not have. decodeContent refuses it on purpose — rendering
+    // something we cannot read is worse than not rendering it — and the refusal
+    // used to throw out of receiveEnvelope, which leaves the envelope unacked.
+    // The server then retries it for the whole of its lifetime, on every
+    // reconnect, for every peer who has not upgraded yet.
+    //
+    // A decrypt failure can be transient. A decode failure cannot: the AEAD
+    // verified, so these are the bytes the sender meant to send.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.manager.sendMessage(bob.accountId, 'once, so there is a session');
+    await waitFor(() => bob.received.length > 0, 15_000);
+
+    const session = await alice.store.loadSession(bob.accountId, bob.deviceId);
+    if (!session) throw new Error('no session to send over');
+    const fromTheFuture = encodeContent({ type: 99 as ContentType, payload: utf8('later') });
+    const message = encrypt(session.ratchet, fromTheFuture, session.associatedData);
+    await alice.store.saveSession(session);
+
+    const envelope = {
+      id: toBase64(randomBytes(12)),
+      mailbox: 'direct',
+      ciphertext: sealEnvelope(bob.identity.publicKey, {
+        senderAccountId: alice.accountId,
+        senderDeviceId: alice.deviceId,
+        senderIdentityKey: alice.identity.publicKey,
+        message,
+      }),
+      serverTs: new Date().toISOString(),
+    };
+
+    // Acked and dropped, and said out loud rather than swallowed.
+    await expect(bob.manager.receiveEnvelope(envelope)).resolves.toBeNull();
+    expect(bob.errors.map((e) => e.message).join(' ')).toMatch(/unsupported content type 99/);
+
+    // And the conversation still works: the message after it arrives.
+    const before = bob.received.length;
+    await alice.manager.sendMessage(bob.accountId, 'and the next one still arrives');
+    await waitFor(() => bob.received.length > before, 15_000);
+    expect(bob.received).toContain('and the next one still arrives');
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 60_000);
 });
 
 describeIntegration('attachments', () => {

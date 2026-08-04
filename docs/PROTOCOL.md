@@ -317,6 +317,15 @@ authority every member already has to *add* one, and it is what client-side
 membership means. Server-enforced admin roles would need the server to know the
 member list, which is the thing §4 exists to avoid.
 
+**A message this build cannot decode is dropped, not retried.** An unknown
+content type — a newer client sending something this one does not have — is
+refused rather than rendered, which is right. But the AEAD verified before the
+decode was attempted, so those are the bytes the sender meant to send and no
+redelivery will change them. Throwing leaves the envelope unacknowledged and
+the server retrying it for its whole lifetime, on every reconnect, on every
+peer that has not upgraded yet: an ordinary rollout turned into a redelivery
+loop. Decrypt failures keep their retry, because those can be transient.
+
 **A removed member is not told.** There is no "you are out" signal, because
 there is none that somebody else could not also send — the same reason the
 member list is not something the server can vouch for. So they go on writing

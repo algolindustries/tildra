@@ -37,6 +37,7 @@ import { RatchetState, decrypt, encrypt } from '../crypto/ratchet';
 import { openEnvelope, sealEnvelope } from '../crypto/sealed';
 import {
   Content,
+  ContentError,
   ContentType,
   MAX_DISPLAY_NAME_LENGTH,
   Profile,
@@ -854,7 +855,29 @@ export class SessionManager {
       return null;
     }
 
-    const decoded = decodeContent(decrypt(ratchet, content.message, associatedData));
+    // Decode failures are permanent in a way decrypt failures are not.
+    //
+    // The AEAD verified, so these are the bytes the sender meant to send: no
+    // redelivery will make them decodable, and throwing here leaves the
+    // envelope unacked and the server retrying it for the whole of its
+    // lifetime. Every reconnect, one AEAD open, for one message that will
+    // never be readable.
+    //
+    // The case that makes this ordinary rather than hostile is a newer client
+    // sending a content type this build does not have. `decodeContent` refuses
+    // it deliberately — rendering something we cannot read is worse — and the
+    // refusal used to turn an upgrade into a redelivery loop on every peer who
+    // had not upgraded yet.
+    let decoded: Content;
+    try {
+      decoded = decodeContent(decrypt(ratchet, content.message, associatedData));
+    } catch (err) {
+      if (err instanceof ContentError) {
+        this.events.onError?.(err);
+        return null;
+      }
+      throw err;
+    }
 
     await this.assertIdentityUnchanged(content.senderAccountId, content.senderIdentityKey);
     const conversation = await this.ensureConversation(
