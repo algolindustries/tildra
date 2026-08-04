@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { bucketSize } from '../wire';
 import {
   ARGON2_ITERATIONS,
   ARGON2_MEMORY_KIB,
@@ -176,5 +177,64 @@ describe('the KDF labels', () => {
       (label) => !labelsIn(cryptoSource()).has(label),
     );
     expect(invented.sort(), 'the document names a derivation the code does not do').toEqual([]);
+  });
+});
+
+/**
+ * §6's padding buckets, checked against the code that pads.
+ *
+ * The section states five sizes and an increment. They are the observable
+ * shape of every envelope on the wire, so an implementer reads them as
+ * normative and a reader of a packet capture uses them to decide whether the
+ * padding is working. Nothing checked that the two agree, and §6 was the
+ * section where three other claims had drifted away from the code entirely.
+ */
+describe('the padding buckets in §6', () => {
+  /** "256 B", "1 KiB", "64 KiB" — the units the document actually writes. */
+  function documentedBuckets(): { sizes: number[]; increment: number } {
+    const doc = protocolDoc();
+    const match = doc.match(/padded to bucketed sizes \(([^)]*)\)/);
+    if (!match) throw new Error('§6 no longer states its bucket sizes in a form this can read');
+
+    const bytes = (value: string): number => {
+      const m = value.trim().match(/^(\d+)\s*(B|KiB|MiB)$/);
+      if (!m) throw new Error(`cannot read a size out of "${value}"`);
+      return Number(m[1]) * { B: 1, KiB: 1024, MiB: 1024 * 1024 }[m[2] as 'B' | 'KiB' | 'MiB'];
+    };
+
+    const parts = match[1].split(',').map((p) => p.trim());
+    const incrementPart = parts.pop()!;
+    const increment = incrementPart.match(/then\s+(.*?)\s+increments/);
+    if (!increment) throw new Error('§6 no longer states its increment in a form this can read');
+
+    return { sizes: parts.map(bytes), increment: bytes(increment[1]) };
+  }
+
+  it('states sizes this can read, so the comparison means something', () => {
+    const { sizes, increment } = documentedBuckets();
+    expect(sizes).toEqual([256, 1024, 4096, 16384, 65536]);
+    expect(increment).toBe(65536);
+  });
+
+  it('are the boundaries the code actually rounds to', () => {
+    const { sizes } = documentedBuckets();
+    for (const size of sizes) {
+      // Exactly on the boundary stays there, one byte under lands on it, and
+      // one byte over does not — which is what makes it a boundary rather than
+      // a number that happens to appear in a list.
+      expect(bucketSize(size), `${size} exactly`).toBe(size);
+      expect(bucketSize(size - 1), `${size} - 1`).toBe(size);
+      if (size !== sizes.at(-1)) {
+        expect(bucketSize(size + 1), `${size} + 1`).toBeGreaterThan(size);
+      }
+    }
+  });
+
+  it('grow by the documented increment past the last bucket', () => {
+    const { sizes, increment } = documentedBuckets();
+    const last = sizes.at(-1)!;
+    expect(bucketSize(last + 1)).toBe(last + increment);
+    expect(bucketSize(last + increment)).toBe(last + increment);
+    expect(bucketSize(last + increment + 1)).toBe(last + 2 * increment);
   });
 });

@@ -574,10 +574,23 @@ key that would let it re-key anyone into their own history.
 
 ## 6. Transport
 
-- TLS 1.3 only. No downgrade, no TLS 1.2.
-- Certificate pinning in the mobile client, with a documented rotation procedure.
-- WebSocket for real-time delivery; the socket carries an authenticated, but
-  identity-blinded, session.
+- **TLS, terminated by something this repository does not ship.** `tildrad`
+  calls `ListenAndServe`, not `ListenAndServeTLS`: it serves plain HTTP and
+  expects a reverse proxy in front of it. So "TLS 1.3 only, no downgrade, no
+  TLS 1.2" — which this bullet asserted until 2026-08-05 — is a property of a
+  proxy configuration that does not exist here, stated as though it were a
+  property of the code. What the code does enforce is the client end: a server
+  address that is not `https` is refused unless it is loopback.
+- **No certificate pinning.** This bullet claimed pinning "with a documented
+  rotation procedure"; there is neither, and there never has been. See
+  `docs/THREAT_MODEL.md` A2 for what its absence costs and why it is not built
+  yet. The same claim was corrected in the threat model a day earlier and this
+  copy was missed, which is the third time in this document set that a
+  correction landed in one place and not in its twin.
+- WebSocket for real-time delivery. The socket authenticates with the device's
+  own bearer token, which names the account and the device — it is not
+  "identity-blinded", as this said. The server knows whose socket it is, and
+  §8 and A1 say so.
 - **Padding:** all envelopes are padded to bucketed sizes (256 B, 1 KiB, 4 KiB,
   16 KiB, 64 KiB, then 64 KiB increments) so ciphertext length leaks little.
 
@@ -587,6 +600,10 @@ key that would let it re-key anyone into their own history.
   observable sizes, and the gap between any two of them is a bucket boundary
   rather than a byte of message. Worth knowing before reading a packet
   capture and concluding the padding is missing.
+
+  The sizes above are pinned to `crypto/wire.ts` by
+  `crypto/__tests__/protocol-doc.test.ts`, so a bucket cannot be changed in one
+  of the two places.
 
 ## 7. Key verification
 
