@@ -19,6 +19,7 @@ export interface Strings {
   creatingAccount: string;
   deviceNameLabel: string;
   deviceNamePlaceholder: string;
+  deviceNameHelp: string;
   yourNameLabel: string;
   yourNamePlaceholder: string;
   yourNameHelp: string;
@@ -171,6 +172,8 @@ const en: Strings = {
   creatingAccount: 'Generating keys…',
   deviceNameLabel: 'Name this device',
   deviceNamePlaceholder: 'e.g. My phone',
+  deviceNameHelp:
+    'This one is stored on the server, so it can list your devices back to you. Name the phone, not yourself.',
   yourNameLabel: 'Your name',
   yourNamePlaceholder: 'What people should call you',
   yourNameHelp:
@@ -337,6 +340,8 @@ const tr: Strings = {
   creatingAccount: 'Anahtarlar üretiliyor…',
   deviceNameLabel: 'Bu cihaza bir ad verin',
   deviceNamePlaceholder: 'örn. Telefonum',
+  deviceNameHelp:
+    'Bu ad sunucuda saklanır; cihazlarınızı size listeleyebilmek için. Kendinizi değil, telefonu adlandırın.',
   yourNameLabel: 'Adınız',
   yourNamePlaceholder: 'İnsanlar size nasıl seslensin',
   yourNameHelp:

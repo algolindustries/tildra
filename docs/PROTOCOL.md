@@ -54,8 +54,10 @@ Registration produces:
    public directory. Handles are convenience, never authority — the identity key
    is the identity.
 
-The server stores: account ID, public identity keys, prekey bundles, and an opaque
-push token. It does not require or store a phone number or an email address.
+The server stores: account ID, public identity keys, prekey bundles, an opaque
+push token, and the **device name** — the label typed into "name this device",
+which is for the user's own device list and is stored in the clear. It does not
+require or store a phone number or an email address. §8 is the full accounting.
 
 ### 1.1 Account recovery
 
@@ -129,7 +131,14 @@ the obvious thing to do and makes recovery impossible: the account id is
 exactly what the recovering device does not have, so it cannot supply it in
 order to decrypt the thing that would tell it. The account and device ids are
 *inside* the ciphertext instead — not beside it, so guessing a lookup id
-teaches nobody an account id. What stands in for the binding is the key: a blob
+teaches nobody an account id.
+
+That is about a *reader*. The operator is in a different position: the blob is
+stored with the account that published it, because "the first account to claim
+an id keeps it" needs an owner to compare against. So the server can link an
+unauthenticated recovery fetch to an account. The alternative is losing the
+ownership check, which closes a real attack, and pretending otherwise is worse
+than saying it — §8 carries the row. What stands in for the binding is the key: a blob
 that opens under this phrase's backup key was written by somebody holding this
 phrase.
 
@@ -810,8 +819,18 @@ the log it signs can be used to rewrite the whole thing.
 | Attachment contents | **no** | per-file key, held only in the message |
 | Handle→key bindings | **yes, on purpose** | public append-only log; that is the point |
 | Who uploaded an attachment | **no** | no owner column, by design |
+| **Device name** | **yes, in the clear** | the label you type into "name this device"; it is for your own device list and the operator can read it |
+| Push token | yes | opaque routing token for the push provider, one per device |
+| Which account a recovery blob belongs to | **yes** | `recovery_blobs.account_id`, so the first account to claim an id keeps it — see §1.1 |
+| Which device drains a mailbox | **yes** | a mailbox is registered by the device that reads it; who *wrote* to it is what sealed sender hides |
 | IP addresses | in memory only | never written to disk or logs |
 | Request URLs | not logged | the log records a route label — `/v1/keys/{}/{}` — never the identifiers in the path |
+
+This table is **enforced**, by `internal/store/postgres/schema_test.go`: it holds
+the column list this schema is allowed to have, and a migration that adds one
+fails until the row above it is written. A table that says what used to be true
+is worse than no table, and this one had drifted — the device name has been
+stored in the clear since registration existed and had no row here.
 
 ## 9. Cryptographic primitives
 

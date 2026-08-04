@@ -73,6 +73,11 @@ export function OnboardingScreen({
           editable={!busy}
           maxLength={64}
         />
+        {/* The field above says the server never stores your name. This one is
+            stored, in the clear, and two adjacent name fields where only one
+            of them is private is exactly how somebody types the wrong thing
+            into the wrong box. */}
+        <Text style={styles.help}>{t.deviceNameHelp}</Text>
 
         {error ? <Banner tone="warning" title={t.errorGeneric} body={error} /> : null}
 
