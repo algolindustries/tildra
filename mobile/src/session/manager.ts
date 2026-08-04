@@ -1495,8 +1495,23 @@ export class SessionManager {
 
     const receiver = await this.store.loadReceiverKey(groupMessage.groupId, from);
     if (!receiver) {
-      // Their distribution has not arrived yet, or arrived after this message.
-      // Throwing leaves the envelope unacked so the server redelivers it.
+      const group = await this.store.loadGroup(groupMessage.groupId);
+      if (group && !group.members.some((m) => memberKey(m) === from)) {
+        // Somebody who is not in a group we do know. They were removed, and
+        // the rotation took their chain with it — so this will never become
+        // decryptable and the retry below would run until the envelope
+        // expires. For every message they send, because a removed member is
+        // not told and goes on writing.
+        //
+        // The cost is a message of theirs that was genuinely sent before the
+        // removal and is only now being redelivered. Losing that is better
+        // than a queue that never drains.
+        return null;
+      }
+      // Their distribution has not arrived yet, or arrived after this message
+      // — group messages ride outside the pairwise ratchet, so the two can
+      // land in either order. Throwing leaves the envelope unacked so the
+      // server redelivers it, and next time we will have the chain.
       throw new Error(`Tildra: no sender key from ${from} for group ${groupMessage.groupId}`);
     }
 

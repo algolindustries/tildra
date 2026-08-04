@@ -40,7 +40,8 @@ import {
   sdpFingerprint,
   signCallSdp,
 } from '../../crypto/calling';
-import { callSignalContent, encodeContent } from '../../crypto/content';
+import { callSignalContent, encodeContent, textContent } from '../../crypto/content';
+import { createSenderKey, encodeGroupMessage, encryptGroupMessage } from '../../crypto/group';
 import { readSafetyCode } from '../../crypto/scan';
 import {
   generateRecoveryPhrase,
@@ -866,7 +867,15 @@ describeIntegration('encrypted groups', () => {
 
     const carolBefore = g.carol.groupReceived.length;
     await g.bob.manager.sendGroupMessage('grp-remove-all', 'carol must not read this either');
-    await waitFor(() => g.alice.groupReceived.length > 0, 15_000);
+    // Wait for the message itself, not for the count to be non-zero: Alice
+    // already holds Bob's first one, so `length > 0` is true before Bob has
+    // sent anything and the wait returns immediately. That passed here and
+    // went red in CI, which is what a wait on an already-satisfied condition
+    // looks like.
+    await waitFor(
+      () => g.alice.groupReceived.some((m) => m.text === 'carol must not read this either'),
+      15_000,
+    );
 
     expect(g.alice.groupReceived.map((m) => m.text)).toContain('carol must not read this either');
     expect(g.carol.groupReceived).toHaveLength(carolBefore);
@@ -874,6 +883,47 @@ describeIntegration('encrypted groups', () => {
     // even addressed to her.
     const bobGroup = await g.bob.store.loadGroup('grp-remove-all');
     expect(bobGroup?.members.map((m) => m.accountId)).not.toContain(g.carol.accountId);
+    g.close();
+  }, 120_000);
+
+  it('drops a removed member\'s messages instead of retrying them forever', async () => {
+    // A removed member is not told, and cannot be: there is no signal that
+    // says "you are out" which somebody else could not also send. So they keep
+    // writing to a group that has rotated away from them.
+    //
+    // Every one of those messages arrives at a device with no chain for them.
+    // That case is answered by throwing, which is right when a distribution is
+    // merely late — the envelope stays unacked and the server tries again. It
+    // is wrong here: nothing will ever make it decryptable, so the retry is
+    // for as long as the envelope lives.
+    const g = await group('grp-dropped');
+    // Carol writes once while she is still in, which is what gives her a chain
+    // of her own to keep writing with afterwards.
+    await g.carol.manager.sendGroupMessage('grp-dropped', 'buradayken');
+    await waitFor(() => g.alice.groupReceived.length > 0, 15_000);
+
+    await g.alice.manager.removeGroupAccount('grp-dropped', g.carol.accountId);
+
+    const before = g.alice.store.messages.length;
+    await expect(
+      injectGroupMessage(g.carol, g.alice, 'grp-dropped', 'hâlâ buradayım'),
+    ).resolves.toBeUndefined();
+    expect(g.alice.store.messages).toHaveLength(before);
+
+    // And the distinction the drop rests on: a member whose distribution has
+    // not landed yet still gets the retry, because for them it will land.
+    const dave = await bringUp('Dave');
+    await g.alice.manager.addGroupAccount('grp-dropped', dave.accountId);
+    await waitFor(() => dave.store.receiverKeys.size > 0, 15_000);
+
+    // Dave is on Alice's member list and Alice has never seen his chain — he
+    // has one only because he is about to write, and it has gone nowhere yet.
+    dave.store.senderKeys.set('grp-dropped', createSenderKey('grp-dropped'));
+    await expect(
+      injectGroupMessage(dave, g.alice, 'grp-dropped', 'ben yeniyim'),
+    ).rejects.toThrow(/no sender key/);
+
+    dave.socket.close();
     g.close();
   }, 120_000);
 
@@ -975,6 +1025,40 @@ async function injectSignal(from: Device, to: Device, signal: CallSignal): Promi
     senderIdentityKey: from.identity.publicKey,
     sessionInit: session.confirmed ? undefined : session.pendingInit,
     message,
+  });
+
+  await to.manager.receiveEnvelope({
+    id: toBase64(randomBytes(12)),
+    mailbox: 'direct',
+    ciphertext,
+    serverTs: new Date().toISOString(),
+  });
+}
+
+/**
+ * Hand a device a group message directly, the way the socket would.
+ *
+ * Used where the point is what the *receiver* does with it, and waiting on a
+ * socket would turn "was it dropped" into "has it not arrived yet". The
+ * crypto is real: the sender's own chain, a real sealed envelope.
+ */
+async function injectGroupMessage(
+  from: Device,
+  to: Device,
+  groupId: string,
+  text: string,
+): Promise<void> {
+  const senderKey = from.store.senderKeys.get(groupId);
+  if (!senderKey) throw new Error('sender has no group chain to send with');
+
+  const groupMessage = encodeGroupMessage(
+    encryptGroupMessage(senderKey, encodeContent(textContent(text))),
+  );
+  const ciphertext = sealEnvelope(to.identity.publicKey, {
+    senderAccountId: from.accountId,
+    senderDeviceId: from.deviceId,
+    senderIdentityKey: from.identity.publicKey,
+    groupMessage,
   });
 
   await to.manager.receiveEnvelope({

@@ -281,6 +281,21 @@ authority every member already has to *add* one, and it is what client-side
 membership means. Server-enforced admin roles would need the server to know the
 member list, which is the thing §4 exists to avoid.
 
+**A removed member is not told.** There is no "you are out" signal, because
+there is none that somebody else could not also send — the same reason the
+member list is not something the server can vouch for. So they go on writing
+into a group that has rotated away from them, and every device still in it
+receives a message it has no chain for.
+
+That case is answered by dropping it. An undecryptable group message is
+normally worth retrying, because a distribution can arrive after a message it
+was needed for — the two ride different paths, one inside the pairwise ratchet
+and one outside it, so either order is possible. But a sender who is not on the
+member list of a group we do know is not late, they are gone, and retrying
+means holding the envelope for its full lifetime and trying again on every
+reconnect, for every message they send. The cost of dropping is a message they
+genuinely sent before the removal that is only now being redelivered.
+
 Removing somebody forgets **their** chain, not the whole group's. Forgetting
 every chain takes the staying members' with it, and nothing prompts them to
 send another distribution, so the group falls silent for whoever did the
