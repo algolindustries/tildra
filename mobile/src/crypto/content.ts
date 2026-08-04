@@ -199,19 +199,33 @@ export function decodeProfile(data: Uint8Array): Profile {
  * A display name is rendered next to messages from someone you may not know
  * well. Newlines and bidirectional overrides in that position are a spoofing
  * tool, not a formatting preference.
+ *
+ * Exported because a group's name is the same kind of text from the same kind
+ * of sender, and the reason that one went unsanitised is that this rule lived
+ * here and nowhere it could be reached from.
  */
-function sanitize(value: string): string {
+export function sanitizeDisplayText(value: string): string {
   return (
     value
       // C0 and C1 control characters become a space, not nothing: a newline
       // separated two words, and deleting it would run them together into a
       // different name than the one that was sent.
       .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
-      // Zero-width and bidirectional formatting characters. These let a name
-      // render as something other than what it is, which next to a stranger's
-      // messages is impersonation rather than styling.
-      .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g, '')
+      // Every Unicode format character, rather than a hand-written list of
+      // them. These let a name render as something other than what it is,
+      // which next to a stranger's messages is impersonation rather than
+      // styling — and the list this replaces had holes: U+061C, the Arabic
+      // letter mark, which is a bidi control; U+2060 word joiner; U+FFF9-FFFB;
+      // and the whole U+E0000 tag block, which is the standard way to carry
+      // hidden text inside a name. `Ali<U+2060>ce` renders as `Alice`, which
+      // is the impersonation this exists to stop.
+      //
+      // Cf includes U+200D, so an emoji joined sequence in a name decomposes
+      // into its parts. That was already true of the list this replaces.
+      .replace(/\p{Cf}/gu, '')
       .replace(/\s+/g, ' ')
       .trim()
   );
 }
+
+const sanitize = sanitizeDisplayText;

@@ -927,6 +927,32 @@ describeIntegration('encrypted groups', () => {
     g.close();
   }, 120_000);
 
+  it('sanitizes and bounds a group name the way it does a display name', async () => {
+    // The name rides in the invite and lands in the chat list, from a member
+    // rather than from us — the same text from the same kind of sender as a
+    // profile display name, and it was neither sanitized nor bounded because
+    // the rule lived in content.ts where this file could not reach it.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    await alice.manager.sendMessage(bob.accountId, 'merhaba');
+    await waitFor(() => bob.received.length > 0, 15_000);
+
+    await alice.manager.createGroup(
+      'grp-name',
+      [alice.member(), bob.member()],
+      `Kitap‮qilc⁠hars ${'x'.repeat(80)}`,
+    );
+    await waitFor(() => bob.store.groups.has('grp-name'), 15_000);
+
+    const name = (await bob.store.loadGroup('grp-name'))!.name!;
+    expect(name).not.toMatch(/\p{Cf}/u);
+    expect(name).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
+    expect(name.length).toBeLessThanOrEqual(48);
+    expect(name.startsWith('Kitapqilchars')).toBe(true);
+
+    [alice, bob].forEach((d) => d.socket.close());
+  }, 60_000);
+
   it('does not let a newly added member read the backlog', async () => {
     const alice = await bringUp('Alice');
     const bob = await bringUp('Bob');

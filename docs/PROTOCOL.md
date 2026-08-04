@@ -437,9 +437,23 @@ Consequences that are the point of doing it this way:
   introduction is mutual without a round trip the user has to think about.
 - `updated_at` lets a receiver ignore a stale profile. Multi-device fanout plus
   redelivery means an older update can arrive after a newer one.
-- Received names are sanitized: C0/C1 controls become spaces, and zero-width
-  and bidirectional formatting characters are stripped. A display name renders
-  next to a stranger's messages, so an RTL override there is impersonation.
+- Received names are sanitized: C0/C1 controls become spaces (a newline
+  separated two words, and deleting it would join them into a different name),
+  and **every Unicode format character** — the `Cf` category, not a list of the
+  ones that come to mind — is stripped. A display name renders next to a
+  stranger's messages, so an RTL override there is impersonation, and so is a
+  word joiner: `Ali<U+2060>ce` renders as `Alice`. The list this rule used to
+  be written as missed U+061C, U+2060, U+FFF9-FFFB and the U+E0000 tag block,
+  which is the ordinary way to hide text inside a name. `Cf` includes U+200D,
+  so an emoji joined sequence in a name decomposes into its parts.
+
+  **A group's name goes through the same rule**, and is bounded to the same
+  length. It arrives from a member rather than from us and lands in the chat
+  list, which makes it the same text from the same kind of sender — it was
+  neither sanitized nor bounded until 2026-08-04, because the rule lived where
+  the group code could not reach it. It is truncated rather than refused:
+  there the name is a label on a payload that matters, and dropping a sender
+  key over a long label turns a cosmetic problem into a group nobody can read.
 - Avatars are capped at 96 KiB and bounded again on receipt, because the bytes
   came from someone else.
 

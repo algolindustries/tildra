@@ -38,6 +38,7 @@ import { openEnvelope, sealEnvelope } from '../crypto/sealed';
 import {
   Content,
   ContentType,
+  MAX_DISPLAY_NAME_LENGTH,
   Profile,
   attachmentContent,
   callSignalContent,
@@ -46,6 +47,7 @@ import {
   decodeProfile,
   encodeContent,
   profileContent,
+  sanitizeDisplayText,
   senderKeyContent,
   textContent,
 } from '../crypto/content';
@@ -218,10 +220,22 @@ function decodeGroupInvite(data: Uint8Array): GroupInvite {
       });
     }
   }
+  // A group name is rendered in the chat list, and it arrives from a member
+  // rather than from us — the same text from the same kind of sender as a
+  // profile display name, which has been sanitised and bounded since it was
+  // written. This one was neither, because the rule lived in content.ts and
+  // this file could not reach it.
+  //
+  // Truncated rather than refused, unlike a profile: there the name *is* the
+  // payload, and here the payload is a sender key. Dropping a distribution
+  // over a long label turns a cosmetic problem into a group that cannot be
+  // read.
+  const label = sanitizeDisplayText(fromUtf8(name)).slice(0, MAX_DISPLAY_NAME_LENGTH);
+
   return {
     distribution,
     members,
-    name: fromUtf8(name) || undefined,
+    name: label || undefined,
     epoch: readU32(epoch, 0),
   };
 }

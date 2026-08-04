@@ -121,6 +121,27 @@ describe('profiles', () => {
     expect(decoded.displayName).toBe('Ayseevil name');
   });
 
+  it('strips every format character, not the ones somebody remembered', () => {
+    // The rule was a hand-written list of ranges and it had holes. Each of
+    // these is invisible or reorders what is displayed, and each one lets a
+    // name render as somebody else's — which is the whole point of sanitising
+    // it. The test above passes against the version with the holes.
+    for (const [label, hidden] of [
+      ['word joiner U+2060', '⁠'],
+      ['Arabic letter mark U+061C', '؜'],
+      ['soft hyphen U+00AD', '­'],
+      ['invisible separator U+2063', '⁣'],
+      ['interlinear annotation U+FFF9', '￹'],
+      ['tag character U+E0061', '\u{E0061}'],
+      ['Mongolian vowel separator U+180E', '᠎'],
+    ] as const) {
+      const decoded = decodeProfile(
+        encodeProfile({ displayName: `Ali${hidden}ce`, updatedAt: at }),
+      );
+      expect(decoded.displayName, label).toBe('Alice');
+    }
+  });
+
   it('falls back rather than rendering an empty name', () => {
     // A name that is entirely control characters sanitizes to nothing, and a
     // blank row in the chat list is worse than a placeholder.
