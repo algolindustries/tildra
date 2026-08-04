@@ -86,8 +86,20 @@ describe('the phrase', () => {
   it('rejects a phrase that fails its checksum', () => {
     // BIP-39's checksum is what turns a typo into an immediate no rather than
     // a silent wrong account.
-    const words = PHRASE.split(' ');
+    //
+    // On the fixed phrase, not a generated one. This swapped the last two words
+    // of a phrase drawn fresh every run, which is a corruption that sometimes
+    // is not one: the two words can be the same word, and even when they are
+    // not, the checksum is eight bits and a swap has about one chance in 256 of
+    // landing on a valid one anyway. Measured over 20,000 generated phrases:
+    // 5 no-ops and 76 checksum collisions, so 0.40% of runs. CI found it on
+    // 2026-08-04 after the test had passed hundreds of times.
+    //
+    // Pinning the input makes the assertions below true forever rather than
+    // almost always.
+    const words = RECORDED_PHRASE.split(' ');
     const swapped = [...words.slice(0, 22), words[23], words[22]].join(' ');
+    expect(swapped, 'the corruption has to change the phrase').not.toBe(RECORDED_PHRASE);
     expect(isValidRecoveryPhrase(swapped)).toBe(false);
     expect(() => recoverySeed(swapped)).toThrow(RecoveryError);
   });

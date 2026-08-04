@@ -106,8 +106,9 @@ if [ "$FULL" -eq 1 ]; then
   ./scripts/check-native-config.sh
 else
   printf '\n\033[2mSkipped (--full): reproducible builds, native project generation,\n'
-  printf 'native config. Those need toolchains and minutes; CI runs them on\n'
-  printf 'every push.\033[0m\n'
+  printf 'native config. They need Go and npm and nothing else — measured at a few\n'
+  printf 'minutes on macOS — so run them before anything that touches the build.\n'
+  printf 'CI runs them on every push.\033[0m\n'
 fi
 
 printf '\n\033[1;32m✓ the gate CI applies is green here\033[0m\n'

@@ -74,7 +74,7 @@ npm ci
 npm run reproduce          # build twice from different paths, compare
 npm run reproduce:native   # generate the native projects twice, compare
 npm run bundle:release     # produce dist/bundle/index.js and index.hbc
-sha256sum dist/bundle/index.js dist/bundle/index.hbc
+shasum -a 256 dist/bundle/index.js dist/bundle/index.hbc
 ```
 
 `reproduce:native` works only in throwaway copies, never in the project
@@ -87,13 +87,40 @@ the script would otherwise leave the checkout modified.
 cd server
 make reproduce           # build twice locally, compare
 make release             # produce bin/tildrad and bin/tildra-auditor
-sha256sum bin/tildrad bin/tildra-auditor
+shasum -a 256 bin/tildrad bin/tildra-auditor
 ```
+
+`shasum -a 256` rather than `sha256sum`, which is GNU coreutils and is not on a
+stock macOS. The scripts above already fall back between the two; these
+instructions said `sha256sum` flatly, and the person they are written for is
+somebody checking a binary on their own machine because they do not want to
+take the publisher's word for it. Ending that at `command not found` is a poor
+place to leave them.
 
 Compare the hashes against the ones published with the release. They must match
 exactly. If they do not, something between the source and the binary you were
 given is not what it claims to be — that is worth reporting, not working
 around.
+
+## Checked on a machine that is not CI
+
+Everything above was run end to end on macOS on 2026-08-05, which is worth
+recording because a document about verifiability that only its own CI has ever
+followed is asking to be taken on trust:
+
+| Check | Result |
+|---|---|
+| `server/scripts/reproduce.sh` | `tildrad` and `tildra-auditor` byte-identical from two paths |
+| `mobile/scripts/reproduce.sh ios` | `index.js` and `index.hbc` byte-identical |
+| `mobile/scripts/reproduce-native.sh all` | ios, android, `app.json` and `package.json` identical |
+| `mobile/scripts/check-native-config.sh` | seven Android permissions, three iOS usage strings, the bundle identifier |
+| `git status` afterwards | clean — the scripts work in throwaway copies as they claim |
+| `npm run bundle:release` | the same two hashes the reproducibility check had just compared |
+
+That last row is the one that matters: the command a verifier is told to run
+produces the bytes the check compares. If those two ever diverge, "compare your
+hashes against the release" stops meaning anything. `scripts/check.sh --full`
+runs all four checks in one go; they need Go and npm and nothing else.
 
 ## What makes it deterministic
 

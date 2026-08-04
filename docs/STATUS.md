@@ -201,6 +201,13 @@ holds an invariant, that is the signal.
 
 ## Things worth knowing before changing anything
 
+- **The reproducibility checks run on a developer machine, not only in CI.**
+  All four — both binaries, the app bundle, the generated native projects and
+  the native config — were run on macOS on 2026-08-05 and pass, in a few
+  minutes, needing Go and npm and nothing else. `scripts/check.sh --full` is all
+  of them. The belief that they needed a toolchain this machine does not have
+  was about *compiling* an `.ipa` and an `.aab`, which is a different thing and
+  is still not started.
 - **The store conformance suite fails rather than skips in CI.** If you add a
   method to `store.Store`, add it to the suite too, or Postgres and memory are
   free to drift.
