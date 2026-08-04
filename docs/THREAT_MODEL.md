@@ -69,7 +69,26 @@ looking.
 ### A2 — A network observer (ISP, coffee-shop Wi-Fi, national firewall)
 
 Sees: that you connect to a Tildra server, when, and roughly how much data
-moves. TLS 1.3 with certificate pinning protects everything else.
+moves. TLS protects everything else — and only TLS: **there is no certificate
+pinning.** This said "TLS 1.3 with certificate pinning" until 2026-08-05, and
+nothing in the client has ever pinned anything; the only pinning in the
+repository is of auditor signing keys, which is a different mechanism for a
+different problem. An adversary holding a certificate the platform trusts — an
+enterprise root, a compromised or compelled CA — terminates the connection and
+reads the transport.
+
+What that costs is bounded and worth stating: message content stays sealed,
+because the transport is not what protects it. What it exposes is the bearer
+token, the mailbox registrations, and which handles are looked up — enough to
+impersonate the device to the server.
+
+Pinning is not implemented because there is no deployment to pin to; the app
+defaults to a hostname that does not resolve. It belongs in the same list as
+the missing rate limiter: designed for, not built.
+
+The client does at least refuse to talk over plaintext at all. That rule
+existed for the server address inside a scanned QR code and was not applied to
+the address the app is configured with, which is the one every install uses.
 
 Does not see: content, recipients, or which conversation traffic belongs to
 (header encryption prevents correlating messages by ratchet key).
@@ -136,6 +155,10 @@ isn't there:
   would take to get the graph back is a blinded registration and a delivery
   token, neither of which exists. `docs/PROTOCOL.md` §5 and §11 carry the same
   correction; the sending half was fixed there first and this half was left.
+- **A certificate authority the platform trusts.** There is no certificate
+  pinning, so an adversary with a trusted certificate reads the transport —
+  not the messages, which are sealed underneath it, but the token and the
+  routing. See A2.
 - **Traffic analysis by a global passive adversary.** See A6.
 - **A compromised endpoint.** Malware with your device's key material reads your
   messages. Nothing in a protocol fixes this.

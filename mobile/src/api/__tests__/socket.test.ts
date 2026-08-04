@@ -99,7 +99,7 @@ function connectSocket(
   const received: IncomingEnvelope[] = [];
   const errors: Error[] = [];
   const states: SocketState[] = [];
-  const socket = new TildraSocket('http://server.test', TOKEN, {
+  const socket = new TildraSocket('https://server.test', TOKEN, {
     onEnvelope: async (envelope) => {
       received.push(envelope);
       await handlers.onEnvelope?.(envelope);
@@ -132,7 +132,8 @@ afterEach(() => {
 describe('connecting', () => {
   it('carries the version and the credential as subprotocols', () => {
     const { ws } = connectSocket();
-    expect(ws().url).toBe('ws://server.test/v1/ws');
+    // https becomes wss, which is the point of deriving it rather than configuring it.
+    expect(ws().url).toBe('wss://server.test/v1/ws');
     expect(ws().protocols).toEqual(['tildra.v1', `bearer.${TOKEN}`]);
   });
 

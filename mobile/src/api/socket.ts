@@ -7,6 +7,7 @@
  */
 
 import { fromBase64 } from '../crypto/primitives';
+import { assertUsableServerUrl } from '../crypto/scan';
 
 export interface IncomingEnvelope {
   id: string;
@@ -61,7 +62,12 @@ export class TildraSocket {
     private readonly baseUrl: string,
     private readonly token: string,
     private readonly handlers: SocketHandlers,
-  ) {}
+  ) {
+    // The socket derives ws:// from http:// and wss:// from https://, so an
+    // unchecked base URL here is the same hole as an unchecked one in the
+    // client — and it is the connection that carries every delivered envelope.
+    assertUsableServerUrl(baseUrl, 'the server address');
+  }
 
   connect(): void {
     this.closedByUs = false;

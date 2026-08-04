@@ -15,6 +15,10 @@ import {
 import { KeyUploadPayload, registrationProof, signAuthChallenge } from '../crypto/identity';
 import { PreKeyBundle } from '../crypto/pqxdh';
 import { HandleProof, SignedTreeHead } from '../crypto/transparency';
+// The same rule a scanned code goes through. It was written for the URL that
+// arrives in a QR and applied only there, while the URL the app actually talks
+// to — configuration, EXPO_PUBLIC_TILDRA_SERVER — went unchecked.
+import { assertUsableServerUrl } from '../crypto/scan';
 
 export interface Credentials {
   accountId: string;
@@ -51,7 +55,7 @@ export class TildraClient {
   private credentials: Credentials | null = null;
 
   constructor(options: ClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, '');
+    this.baseUrl = assertUsableServerUrl(options.baseUrl, 'the server address').replace(/\/+$/, '');
     this.doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.timeoutMs = options.timeoutMs ?? 15_000;
   }

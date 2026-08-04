@@ -151,7 +151,7 @@ describe('a device with no account yet', () => {
     // and would otherwise have to build them again, at the point where a
     // failure is least recoverable.
     return freshApp().then(async ({ useApp, currentRuntime }) => {
-      await useApp.getState().bootstrap({ serverUrl: 'http://server.test' });
+      await useApp.getState().bootstrap({ serverUrl: 'https://server.test' });
 
       expect(useApp.getState().phase).toBe('onboarding');
       expect(useApp.getState().error).toBeNull();
@@ -168,7 +168,7 @@ describe('a device with no account yet', () => {
       const runtime = currentRuntime();
       expect(typeof runtime?.vault.decrypt).toBe('function');
       expect(typeof runtime?.db.getMeta).toBe('function');
-      expect(runtime?.serverUrl).toBe('http://server.test');
+      expect(runtime?.serverUrl).toBe('https://server.test');
     });
   });
 
@@ -178,7 +178,7 @@ describe('a device with no account yet', () => {
     const { useApp } = await freshApp();
     secureStore.items.set('tildra.credentials.v1', JSON.stringify({ accountId: 'a', deviceId: 'd', token: 't' }));
 
-    await useApp.getState().bootstrap({ serverUrl: 'http://server.test' });
+    await useApp.getState().bootstrap({ serverUrl: 'https://server.test' });
     expect(useApp.getState().phase).toBe('onboarding');
   });
 });
@@ -196,7 +196,7 @@ describe('a device whose storage is damaged', () => {
     const vault = new Vault(masterKey);
     meta.set(IDENTITY_META_KEY, vault.encrypt('identity', IDENTITY_META_KEY, randomBytes(32)));
 
-    await useApp.getState().bootstrap({ serverUrl: 'http://server.test' });
+    await useApp.getState().bootstrap({ serverUrl: 'https://server.test' });
     expect(useApp.getState().phase).toBe('error');
     expect(useApp.getState().error).toMatch(/is 32 bytes, expected 64/);
   });
@@ -210,7 +210,7 @@ describe('a device whose storage is damaged', () => {
     secureStore.items.set('tildra.credentials.v1', JSON.stringify({ accountId: 'a', deviceId: 'd', token: 't' }));
     storedDevice(masterKey);
 
-    await useApp.getState().bootstrap({ serverUrl: 'http://server.test' });
+    await useApp.getState().bootstrap({ serverUrl: 'https://server.test' });
     expect(useApp.getState().phase).toBe('error');
     expect(useApp.getState().error).toMatch(/prekey material is missing/);
   });
@@ -224,7 +224,7 @@ describe('a device whose storage is damaged', () => {
     secureStore.items.set('tildra.credentials.v1', JSON.stringify({ accountId: 'a', deviceId: 'd', token: 't' }));
     storedDevice(randomBytes(32));
 
-    await useApp.getState().bootstrap({ serverUrl: 'http://server.test' });
+    await useApp.getState().bootstrap({ serverUrl: 'https://server.test' });
     expect(useApp.getState().phase).toBe('error');
     expect(useApp.getState().error).toMatch(/failed to decrypt identity/);
   });
@@ -237,7 +237,7 @@ describe('when the keystore itself will not answer', () => {
     const { useApp } = await freshApp();
     secureStore.failWith = new Error('keychain unavailable');
 
-    await useApp.getState().bootstrap({ serverUrl: 'http://server.test' });
+    await useApp.getState().bootstrap({ serverUrl: 'https://server.test' });
     expect(useApp.getState().phase).toBe('error');
     expect(useApp.getState().error).toBeTruthy();
   });
@@ -249,7 +249,7 @@ describe('when the keystore itself will not answer', () => {
     const { useApp } = await freshApp();
     secureStore.available = false;
 
-    await useApp.getState().bootstrap({ serverUrl: 'http://server.test' });
+    await useApp.getState().bootstrap({ serverUrl: 'https://server.test' });
     expect(useApp.getState().phase).toBe('error');
     expect(useApp.getState().error).toBeTruthy();
   });
@@ -258,7 +258,7 @@ describe('when the keystore itself will not answer', () => {
     const { useApp, currentRuntime } = await freshApp();
     secureStore.failWith = new Error('keychain unavailable');
 
-    await useApp.getState().bootstrap({ serverUrl: 'http://server.test' });
+    await useApp.getState().bootstrap({ serverUrl: 'https://server.test' });
     expect(currentRuntime()).toBeNull();
   });
 });
@@ -271,14 +271,14 @@ describe('language', () => {
     const { useApp } = await freshApp();
     secureStore.failWith = new Error('keychain unavailable');
 
-    await useApp.getState().bootstrap({ localeTag: 'tr-TR', serverUrl: 'http://server.test' });
+    await useApp.getState().bootstrap({ localeTag: 'tr-TR', serverUrl: 'https://server.test' });
     expect(useApp.getState().locale).toBe('tr');
     expect(useApp.getState().phase).toBe('error');
   });
 
   it('falls back to English for a language we do not ship', async () => {
     const { useApp } = await freshApp();
-    await useApp.getState().bootstrap({ localeTag: 'de-DE', serverUrl: 'http://server.test' });
+    await useApp.getState().bootstrap({ localeTag: 'de-DE', serverUrl: 'https://server.test' });
     expect(useApp.getState().locale).toBe('en');
     expect(useApp.getState().t.appName).toBe(strings('en').appName);
   });
@@ -288,7 +288,7 @@ describe('language', () => {
     const phases: string[] = [];
     const stop = useApp.subscribe((s) => phases.push(s.phase));
 
-    await useApp.getState().bootstrap({ serverUrl: 'http://server.test' });
+    await useApp.getState().bootstrap({ serverUrl: 'https://server.test' });
     stop();
     expect(phases[0]).toBe('starting');
     expect(phases.at(-1)).toBe('onboarding');
@@ -299,7 +299,7 @@ describe('signing out', () => {
   /** A device far enough along that signOut has a runtime to work with. */
   async function signedIn() {
     const app = await freshApp();
-    await app.useApp.getState().bootstrap({ serverUrl: 'http://server.test' });
+    await app.useApp.getState().bootstrap({ serverUrl: 'https://server.test' });
     return app;
   }
 
@@ -337,7 +337,7 @@ describe('signing out', () => {
     // guarding the call on the client is how they used to survive.
     secureStore.failWith = new Error('keychain unavailable');
     const { useApp, currentRuntime } = await freshApp();
-    await useApp.getState().bootstrap({ serverUrl: 'http://server.test' });
+    await useApp.getState().bootstrap({ serverUrl: 'https://server.test' });
     expect(currentRuntime()).toBeNull();
 
     await useApp.getState().signOut();
