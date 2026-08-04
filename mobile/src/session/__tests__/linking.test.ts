@@ -129,7 +129,15 @@ describeIntegration('device linking', () => {
     expect(devices.map((d) => d.deviceId).sort()).toEqual(
       [primary.deviceId, approval.deviceId].sort(),
     );
-    expect(devices.map((d) => d.name)).toContain('Tablet');
+    // What the contact needs and no more. This asserted that 'Tablet' came
+    // back — the name its owner typed, handed to everyone who fans out to
+    // them — until the server stopped sending it on 2026-08-05.
+    expect(devices.map((d) => d.name)).toEqual([undefined, undefined]);
+    expect(devices.every((d) => d.identityKey.length === 32)).toBe(true);
+
+    // The owner still gets it, which is what the field is for.
+    const own = await primary.client.listDevices(primary.accountId);
+    expect(own.map((d) => d.name)).toContain('Tablet');
   }, 90_000);
 
   it('a message reaches both devices of an account', async () => {
