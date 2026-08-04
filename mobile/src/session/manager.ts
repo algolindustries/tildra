@@ -384,6 +384,9 @@ export interface ManagerEvents {
 const OWN_PROFILE_META_KEY = 'profile.v1';
 /** Shared with the app state, which writes it after verifying a lookup. */
 export const CHECKPOINT_META_KEY = 'transparency.checkpoint.v1';
+
+/** Per-device record of the tree size we last gossiped, so a quiet log is quiet. */
+const GOSSIPED_META_PREFIX = 'transparency.gossiped.v1:';
 /** When the current signed prekey was generated, for the rotation clock. */
 export const SIGNED_PREKEY_META_KEY = 'prekeys.signedAt.v1';
 
@@ -564,10 +567,15 @@ export class SessionManager {
               profileContent(profile),
             );
           }
-          // Gossip on first contact: the earliest point at which comparing
-          // logs with this person is possible.
-          await this.gossipTo(accountId, device.deviceId, device.identityKey);
         }
+        // Not only on first contact. A fork is something the operator has to
+        // keep up, and it appears when it appears — usually long after two
+        // people started talking. Gossiping once, at the moment they first
+        // spoke, compares two views before there is anything to disagree
+        // about and never looks again. `gossipTo` sends only when our view of
+        // the log has moved since we last told this device, so on quiet logs
+        // this costs nothing.
+        await this.gossipTo(accountId, device.deviceId, device.identityKey);
         await this.sendToDevice(accountId, device.deviceId, device.identityKey, textContent(text));
         delivered += 1;
       } catch (err) {
@@ -1059,6 +1067,18 @@ export class SessionManager {
    * Sent opportunistically rather than on a schedule: piggybacking on traffic
    * that was happening anyway costs nothing and leaks no new timing. A device
    * that has never verified a log has nothing to gossip and stays quiet.
+   *
+   * Sent again whenever our view of the log has moved. This used to run only
+   * on the first message to a contact, which compares two views at the one
+   * moment there is least to disagree about and then never again — and a
+   * device that had not yet looked anything up had no head to send, so for
+   * most pairs it never ran at all. §7.2 is a claim about catching a fork
+   * between two people who message each other, and a fork appears when the
+   * operator decides to run one.
+   *
+   * Re-sending an unchanged head teaches the other side nothing it has
+   * already checked, so the size we last sent is remembered per device and a
+   * quiet log produces no traffic.
    */
   private async gossipTo(
     accountId: string,
@@ -1069,12 +1089,18 @@ export class SessionManager {
     const head = checkpoint?.head;
     if (!head) return;
 
+    const key = `${GOSSIPED_META_PREFIX}${accountId}/${deviceId}`;
+    if ((await this.store.getMeta(key)) === String(head.size)) return;
+
     await this.sendToDevice(
       accountId,
       deviceId,
       identityKey,
       gossipContent(utf8(JSON.stringify(serializeTreeHead(head)))),
     );
+    // After the send, so a failure is retried on the next message rather than
+    // recorded as done.
+    await this.store.setMeta(key, String(head.size));
   }
 
   /**

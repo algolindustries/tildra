@@ -31,7 +31,7 @@ import {
 import { acceptSession, initiateSession } from '../../crypto/pqxdh';
 import { SerializedPreKeys, decodePreKeys, encodePreKeys } from '../../storage/prekeys';
 import { equal, fromBase64, fromUtf8, randomBytes, toBase64, utf8 } from '../../crypto/primitives';
-import { SplitViewError, verifyHandleProof } from '../../crypto/transparency';
+import { SplitViewError, serializeTreeHead, verifyHandleProof } from '../../crypto/transparency';
 import {
   CallSession,
   CallSignal,
@@ -1625,6 +1625,66 @@ function runRealAuditor(serverUrl: string): { published: string; publicKey: Uint
   );
   return { published: readFileSync(join(dir, 'checkpoint.json'), 'utf8'), publicKey };
 }
+
+describeIntegration('gossip', () => {
+  /** Give a device the verified view it needs before it can gossip anything. */
+  async function storeCheckpoint(
+    device: Device,
+    proof: { head: { size: number; rootHash: Uint8Array; logKey: Uint8Array } },
+  ): Promise<void> {
+    await device.store.setMeta(
+      CHECKPOINT_META_KEY,
+      JSON.stringify({
+        size: proof.head.size,
+        rootHash: toBase64(proof.head.rootHash),
+        logKey: toBase64(proof.head.logKey),
+        head: serializeTreeHead(proof.head as never),
+      }),
+    );
+  }
+
+  it('keeps gossiping as the log moves, not only on first contact', async () => {
+    // §7.2 is a claim about catching a server that shows two people two
+    // different logs. Gossip ran once, inside the first-contact branch, which
+    // compares two views at the moment there is least to disagree about and
+    // then never again — and a fork is something an operator starts when they
+    // decide to, which is normally long after two people began talking.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+
+    await alice.client.claimHandle('gossipone');
+    const first = (await alice.client.resolveHandle('gossipone')).proof!;
+    const firstView = verifyHandleProof(first, 'gossipone', null);
+    await storeCheckpoint(alice, first);
+
+    const key = `transparency.gossiped.v1:${bob.accountId}/${bob.deviceId}`;
+    await alice.manager.sendMessage(bob.accountId, 'ilk');
+    await waitFor(() => bob.received.length > 0, 15_000);
+    expect(alice.store.meta.get(key)).toBe(String(first.head.size));
+
+    // The log moves and Alice verifies the new view.
+    await bob.client.claimHandle('gossiptwo');
+    const second = (await alice.client.resolveHandle('gossiptwo', firstView.size)).proof!;
+    verifyHandleProof(second, 'gossiptwo', firstView);
+    expect(second.head.size).toBeGreaterThan(first.head.size);
+    await storeCheckpoint(alice, second);
+
+    await alice.manager.sendMessage(bob.accountId, 'ikinci');
+    await waitFor(() => bob.received.length > 1, 15_000);
+    expect(alice.store.meta.get(key)).toBe(String(second.head.size));
+
+    // And a quiet log stays quiet: nothing new to say, nothing sent.
+    await alice.manager.sendMessage(bob.accountId, 'ucuncu');
+    await waitFor(() => bob.received.length > 2, 15_000);
+    expect(alice.store.meta.get(key)).toBe(String(second.head.size));
+
+    expect(alice.errors).toEqual([]);
+    expect(bob.splitViews).toEqual([]);
+
+    alice.socket.close();
+    bob.socket.close();
+  }, 90_000);
+});
 
 describeIntegration('auditors', () => {
   it('checks the log against a real auditor over the network', async () => {

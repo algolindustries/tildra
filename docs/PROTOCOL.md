@@ -665,6 +665,16 @@ are on the same log:
 GET /v1/transparency/consistency?first=<smaller size>&second=<larger size>
 ```
 
+**Whenever our view of the log has moved**, not once per contact. A fork is a
+state the operator has to keep up, and it starts when they decide it starts —
+normally long after two people began talking. Gossiping only on the first
+message compares two views at the moment there is least to disagree about and
+then never looks again; it did that until 2026-08-04, and for a pair whose
+first message predated either device verifying anything it never ran at all.
+Re-sending an unchanged head teaches the recipient nothing it has already
+checked, so the last size sent is remembered per device and a quiet log
+produces no traffic.
+
 Whichever head is smaller must be a prefix of the larger. Three outcomes are
 treated as evidence of a split view:
 
