@@ -512,9 +512,36 @@ STH = (size, root_hash, timestamp,
        Sig(log_key, "tildra-sth-v1:" ‖ size ‖ root_hash ‖ timestamp))
 ```
 
+Both sides re-derive these bytes from what the other sends, so the encodings
+are part of the protocol and not an implementation detail:
+
+```
+leaf = SHA-256(0x00 ‖ u32(len(handle))       ‖ handle
+                    ‖ u32(len(account_id))   ‖ account_id
+                    ‖ u32(len(identity_key)) ‖ identity_key
+                    ‖ u64(recorded_at))
+node = SHA-256(0x01 ‖ left ‖ right)
+
+size, recorded_at, timestamp: 64-bit big-endian; times in whole seconds.
+Field lengths: 32-bit big-endian.
+```
+
+Length-prefixed rather than delimited, so that no two different bindings can
+encode identically. The leaf does not commit to the entry's index: the index is
+its position in the tree, which the inclusion proof already establishes, and
+committing to it would mean a client could not re-derive the leaf from what a
+lookup returns.
+
 A handle lookup returns the binding, an **inclusion proof** against the current
 head, and a **consistency proof** from the last head the client verified. The
 client checks all three and stores the new head.
+
+The binding, both proofs and the head must describe **one** snapshot of the
+tree. A server that reads its head separately from the proofs it sends beside
+it will, whenever a registration lands in between, hand a client a proof that
+does not reproduce the signed root — indistinguishable, from the client's side,
+from the log having been rewritten. Routine traffic must not be able to raise
+this alarm, or nobody will believe it when it is real.
 
 That leaves a server two options if it wants to substitute a key:
 

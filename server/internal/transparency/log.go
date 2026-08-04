@@ -191,24 +191,29 @@ func (l *Log) Lookup(ctx context.Context, handle string, since int64) (*Entry, [
 		return nil, nil, nil, SignedTreeHead{}, err
 	}
 
-	head := l.Head()
-
+	// The head and both proofs come from one snapshot of the tree. Reading the
+	// head separately leaves a window — registrations and lookups are ordinary
+	// concurrent requests — in which an append lands between the two, and the
+	// inclusion proof then describes a tree the signed head does not. A client
+	// cannot tell that apart from the log having been rewritten, so it reads a
+	// routine registration as the attack this whole mechanism exists to find.
 	l.mu.RLock()
-	defer l.mu.RUnlock()
-
-	inclusion, err := InclusionProof(l.hashes, int(entry.Index))
-	if err != nil {
-		return nil, nil, nil, SignedTreeHead{}, err
-	}
-
+	size := len(l.hashes)
+	root := RootHash(l.hashes)
+	inclusion, incErr := InclusionProof(l.hashes, int(entry.Index))
 	// `since` is the size the client last saw. Proving the log grew from there
 	// rather than being rebuilt is what makes a silent key swap impossible.
-	consistency, err := ConsistencyProof(l.hashes, int(since), int(head.Size))
-	if err != nil {
-		return nil, nil, nil, SignedTreeHead{}, err
+	consistency, conErr := ConsistencyProof(l.hashes, int(since), size)
+	l.mu.RUnlock()
+
+	if incErr != nil {
+		return nil, nil, nil, SignedTreeHead{}, incErr
+	}
+	if conErr != nil {
+		return nil, nil, nil, SignedTreeHead{}, conErr
 	}
 
-	return entry, inclusion, consistency, head, nil
+	return entry, inclusion, consistency, SignTreeHead(l.signKey, int64(size), root, time.Now()), nil
 }
 
 // Consistency proves that a tree of size first is a prefix of one of size
