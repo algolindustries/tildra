@@ -7,6 +7,12 @@ Please **do not** open a public issue for a security bug.
 Use GitHub's private reporting: **Security → Report a vulnerability** on
 [github.com/tildra/tildra](https://github.com/tildra/tildra/security/advisories/new).
 
+The repository has been private since 2026-08-05, so that form is reachable only
+with access to it. Nothing else here changes: the scope below, the bar for what
+counts as a vulnerability, and the response times are what they were. Going
+private narrows who can report, which is a reason to take the reports that do
+arrive more seriously rather than fewer.
+
 What helps most, in order:
 
 1. What breaks, and what an attacker gains.

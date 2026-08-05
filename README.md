@@ -4,7 +4,7 @@
 
 **Encrypted messaging that doesn't ask who you are.**
 
-Open-source, end-to-end encrypted by default — every chat, every group.
+End-to-end encrypted by default — every chat, every group.
 Post-quantum key agreement. No phone number. Fully self-hostable server.
 
 [![CI](https://github.com/tildra/tildra/actions/workflows/ci.yml/badge.svg)](https://github.com/tildra/tildra/actions/workflows/ci.yml)
@@ -173,14 +173,21 @@ implementations must pass, and it fails rather than skips in CI.
 
 ## Contributing
 
-Cryptographic changes need a written rationale in the PR and a matching update to
-`docs/PROTOCOL.md`. Everything else: normal PRs welcome. See
-[CONTRIBUTING.md](CONTRIBUTING.md).
+**This repository is private as of 2026-08-05.** It was public until then, and
+the working practices are written for contributors rather than for one person
+because that is what they were and what they are expected to become again —
+[CONTRIBUTING.md](CONTRIBUTING.md) still applies to anyone with access, and
+cryptographic changes still need a written rationale and a matching update to
+`docs/PROTOCOL.md`.
 
-Found a vulnerability? Please don't open a public issue —
-[SECURITY.md](SECURITY.md) has the disclosure process.
+Found a vulnerability? [SECURITY.md](SECURITY.md) has the disclosure process.
 
 ## License
+
+The licences are unchanged and are not affected by the repository being private:
+distributing the source is what a licence governs, and going private is a
+decision not to distribute rather than a change to the terms for anyone who
+already has it.
 
 Server: [AGPL-3.0](LICENSE) — if you run a modified Tildra server for others, they
 get the source. Client: GPL-3.0. The protocol spec is CC BY 4.0, so anyone can

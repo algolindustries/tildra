@@ -9,8 +9,16 @@ you must update [`docs/PROTOCOL.md`](docs/PROTOCOL.md) in the same PR. A PR that
 changes crypto behaviour without changing the spec will be asked to do so before
 review, no matter how small the diff.
 
-Everything else is a normal open-source project. Bug fixes, UI work, docs,
-translations, tests — open a PR.
+Everything else works the way it did when this repository was public. Bug
+fixes, UI work, docs, translations, tests — open a PR.
+
+**The repository has been private since 2026-08-05.** That changes who can open
+one and nothing about what is expected of it. Every rule below was written for
+contributors who are not the author, and they are kept in that form
+deliberately: they exist because they caught real defects, not because there was
+an audience for them. The gate in particular — `./scripts/check.sh` before every
+push — was added after main went red three times in one session, and a smaller
+number of people makes that more likely to happen again, not less.
 
 ## Getting set up
 
