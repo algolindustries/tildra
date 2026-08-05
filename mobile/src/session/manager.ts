@@ -404,6 +404,30 @@ export interface ManagerEvents {
 }
 
 const OWN_PROFILE_META_KEY = 'profile.v1';
+const PRIVACY_META_KEY = 'privacy.v1';
+
+/**
+ * What this device tells a contact about itself beyond the message.
+ *
+ * Both default to on, because a messenger where nobody can tell whether they
+ * were read is worse for most people most of the time. Both are reciprocal:
+ * turning one off also stops this device *displaying* the other end's, because
+ * a setting that let you read without saying so while still seeing when they
+ * read is the asymmetry the norm exists to prevent, and shipping it would be
+ * choosing the dishonest half.
+ *
+ * Delivery receipts are not here and cannot be turned off. "It reached their
+ * phone" is a fact about the network rather than about the reader's attention,
+ * and without it the tick beside a sent message means nothing at all.
+ */
+export interface PrivacySettings {
+  /** Send, and display, "read". */
+  readReceipts: boolean;
+  /** Send, and display, "typing…". */
+  typingIndicators: boolean;
+}
+
+export const DEFAULT_PRIVACY: PrivacySettings = { readReceipts: true, typingIndicators: true };
 /** Shared with the app state, which writes it after verifying a lookup. */
 export const CHECKPOINT_META_KEY = 'transparency.checkpoint.v1';
 
@@ -1035,7 +1059,13 @@ export class SessionManager {
       // Nothing is stored and nothing is answered. A typing signal that
       // produced a reply would double the traffic it costs, and the whole
       // reason this is bounded is that it is traffic the server can count.
-      this.events.onTyping?.(content.senderAccountId, decodeTyping(decoded.payload!));
+      //
+      // Decoded before the settings check so a malformed payload from a peer
+      // is still refused on a device that has the indicator turned off.
+      const typing = decodeTyping(decoded.payload!);
+      if ((await this.getPrivacy()).typingIndicators) {
+        this.events.onTyping?.(content.senderAccountId, typing);
+      }
       return null;
     }
     if (decoded.type === ContentType.GroupRotation) {
@@ -1103,6 +1133,11 @@ export class SessionManager {
    */
   private async acceptReceipt(accountId: string, payload: Uint8Array): Promise<void> {
     const receipt = decodeReceipt(payload);
+    // The reciprocal half. A device that does not send "read" does not show
+    // it either — see `PrivacySettings`. `delivered` is unaffected, because it
+    // is not a claim about anybody's attention.
+    if (receipt.kind === 'read' && !(await this.getPrivacy()).readReceipts) return;
+
     for (const id of receipt.messageIds) {
       await this.store.advanceMessageState(id, receipt.kind);
     }
@@ -1137,6 +1172,8 @@ export class SessionManager {
    * a hundred.
    */
   async sendReadReceipts(accountId: string): Promise<void> {
+    if (!(await this.getPrivacy()).readReceipts) return;
+
     const conversation = await this.store.getConversation(accountId);
     if (!conversation) return;
 
@@ -1165,6 +1202,7 @@ export class SessionManager {
    * traffic pattern that describes typing speed.
    */
   async sendTyping(accountId: string, typing: boolean): Promise<void> {
+    if (!(await this.getPrivacy()).typingIndicators) return;
     // Never to a contact whose key is in question: the identity-change block
     // covers what a user sends, and "is typing" is something they are sending.
     if (await this.isFlagged(accountId)) return;
@@ -1466,6 +1504,29 @@ export class SessionManager {
   async getProfile(): Promise<Profile | null> {
     const raw = await this.store.getMeta(OWN_PROFILE_META_KEY);
     return raw ? deserializeProfile(JSON.parse(raw)) : null;
+  }
+
+  /**
+   * Read from the store on every use rather than cached on the instance.
+   *
+   * A cached copy is a second place for the same fact to be wrong, and the
+   * failure mode is the one that matters here: a user turns receipts off, the
+   * copy in memory is stale, and the app goes on telling their contacts when
+   * they opened a conversation. The reads are on paths already doing IO, and
+   * typing is throttled to once per five seconds.
+   */
+  async getPrivacy(): Promise<PrivacySettings> {
+    const raw = await this.store.getMeta(PRIVACY_META_KEY);
+    if (!raw) return DEFAULT_PRIVACY;
+    const parsed = JSON.parse(raw) as Partial<PrivacySettings>;
+    return {
+      readReceipts: parsed.readReceipts ?? DEFAULT_PRIVACY.readReceipts,
+      typingIndicators: parsed.typingIndicators ?? DEFAULT_PRIVACY.typingIndicators,
+    };
+  }
+
+  async setPrivacy(settings: PrivacySettings): Promise<void> {
+    await this.store.setMeta(PRIVACY_META_KEY, JSON.stringify(settings));
   }
 
   /**

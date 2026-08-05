@@ -588,6 +588,11 @@ Rules that are not decoration:
 - **Groups get neither.** A read receipt in a group tells every member when
   each of the others opened it, and §4's fanout makes it one envelope per
   member per open.
+- **Either can be turned off, and off is reciprocal.** A device that does not
+  send read receipts ignores incoming ones rather than displaying them, and the
+  same for typing. Delivery receipts have no switch. The settings are local:
+  nothing on the wire says which a device has enabled, so a peer cannot tell
+  the difference between "off" and "not read yet".
 - **Typing is throttled to one signal per 5 seconds and expires after 8.** The
   throttle is a privacy budget rather than a UI preference — see
   `docs/THREAT_MODEL.md`. The expiry is on the receiver's clock because

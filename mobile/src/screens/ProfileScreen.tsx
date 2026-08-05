@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 
@@ -33,6 +33,8 @@ export function ProfileScreen({
   const setProfile = useApp((s) => s.setProfile);
   const claimHandle = useApp((s) => s.claimHandle);
   const signOut = useApp((s) => s.signOut);
+  const privacy = useApp((s) => s.privacy);
+  const setPrivacy = useApp((s) => s.setPrivacy);
 
   const [displayName, setDisplayName] = useState(storedName ?? '');
   const [about, setAbout] = useState(storedAbout ?? '');
@@ -167,6 +169,22 @@ export function ProfileScreen({
 
         <View style={styles.divider} />
 
+        <Text style={styles.sectionHeading}>{t.privacyHeading}</Text>
+        <PrivacyToggle
+          label={t.readReceiptsLabel}
+          help={t.readReceiptsHelp}
+          value={privacy.readReceipts}
+          onChange={(readReceipts) => void setPrivacy({ ...privacy, readReceipts })}
+        />
+        <PrivacyToggle
+          label={t.typingIndicatorsLabel}
+          help={t.typingIndicatorsHelp}
+          value={privacy.typingIndicators}
+          onChange={(typingIndicators) => void setPrivacy({ ...privacy, typingIndicators })}
+        />
+
+        <View style={styles.divider} />
+
         <Button label={t.linkDevice} variant="secondary" onPress={onLinkDevice} />
 
         <View style={styles.divider} />
@@ -178,7 +196,50 @@ export function ProfileScreen({
   );
 }
 
+/**
+ * A setting whose explanation is as prominent as its switch.
+ *
+ * Both of these turn off something the user may not know they are sending,
+ * and both are reciprocal, which is the part people get wrong. The help text
+ * is not a footnote — a toggle labelled "Read receipts" with no further words
+ * leaves the reader guessing whether it stops them sending, stops them
+ * seeing, or both.
+ */
+function PrivacyToggle({
+  label,
+  help,
+  value,
+  onChange,
+}: {
+  label: string;
+  help: string;
+  value: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <View style={styles.toggleRow}>
+      <View style={styles.toggleText}>
+        <Text style={styles.toggleLabel}>{label}</Text>
+        <Text style={styles.toggleHelp}>{help}</Text>
+      </View>
+      <Switch
+        value={value}
+        onValueChange={onChange}
+        accessibilityLabel={label}
+        trackColor={{ false: palette.border, true: palette.accentDim }}
+        thumbColor={value ? palette.accent : palette.textFaint}
+        ios_backgroundColor={palette.border}
+      />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  sectionHeading: { ...typography.bodyStrong, color: palette.text },
+  toggleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.lg },
+  toggleText: { flex: 1, gap: 2 },
+  toggleLabel: { ...typography.body, color: palette.text },
+  toggleHelp: { ...typography.small, color: palette.textFaint, lineHeight: 18 },
   screen: { flex: 1, backgroundColor: palette.bg },
   content: { padding: spacing.xl, gap: spacing.lg, paddingBottom: spacing.xxl },
   closeRow: { alignSelf: 'flex-start' },

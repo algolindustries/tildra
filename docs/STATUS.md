@@ -75,6 +75,8 @@ tested by running the real Go server and pushing real traffic through it.
 | Delivery and read receipts: ticks on the bubble, monotonic in the store, refused for a message we never sent | done |
 | Typing indicators: throttled, expiring on the receiver's clock, and blocked for a contact whose key changed | done |
 | The icon set: SVG rather than emoji, so a disabled button actually dims and the palette is ours | done |
+| Read receipts and typing indicators can each be turned off, reciprocally, with delivery unaffected | done |
+| The `meta` table is encrypted, key and value — it held a plaintext list of every contact | done |
 
 Counts at time of writing: **756 client tests across 33 files**, twelve Go
 packages clean under `-race`, both store implementations passing the same
@@ -90,14 +92,6 @@ own something that matters is to move it out rather than to shrug: `state/errors
 `storage/prekeys.ts` and now `media/playback.ts` all exist because logic that
 could not be tested inside a screen could be tested a file away. If a component
 holds an invariant, that is the signal.
-
-- **Receipts and typing have no off switch.** Both landed on 2026-08-05 and
-  both are on for everyone. `docs/THREAT_MODEL.md` now lists them under what we
-  do not defend against, because the disclosure is to the *contact* rather than
-  to the server: a read receipt says when you opened a conversation and a
-  typing indicator says when you were at the keyboard. Somebody who wants to
-  read a message without saying so cannot. The setting is the obvious next
-  thing to build, and until it exists this row is the honest description.
 
 ## Not done
 
@@ -231,6 +225,26 @@ holds an invariant, that is the signal.
   of them. The belief that they needed a toolchain this machine does not have
   was about *compiling* an `.ipa` and an `.aab`, which is a different thing and
   is still not started.
+- **The `meta` table named every contact in the clear.** `db.ts` opens by
+  claiming that every column which would tell a reader who this device talks to
+  is encrypted, and `meta` was neither encrypted nor thought about:
+  `activeAccounts` held a JSON array of every account this device had messaged,
+  and the gossip rows put `<accountId>/<deviceId>` in the **key** column, where
+  it is legible without reading a single value.
+
+  The forensic test — the one whose comment says it checks "every row of every
+  table rather than the columns someone thought to look at" — missed both,
+  because it wrote `setMeta('some.key', 'some value')`. A value nothing in the
+  app produces cannot fail a search for values the app produces. It now drives
+  the real writers, and the negative control turns it red.
+
+  Both halves are protected at the `Database` layer rather than at the call
+  sites: the key is a blind index and the value is sealed under a new
+  `Tildra_Vault_Meta_v1` domain, with the plaintext key authenticated in so a
+  row cannot be moved and still decrypt. Doing it in one place is the point —
+  the two callers that already encrypted now double-wrap, which costs a few
+  bytes against the certainty that the next thing stored in meta is safe
+  without anybody remembering.
 - **A send is read-modify-write on the ratchet, and nothing enforced that.**
   Load the session, derive the next message key, save the advanced chain. Every
   caller happened to `await` its send, so the invariant held by accident for as

@@ -2645,6 +2645,94 @@ describeIntegration('receipts and typing', () => {
     }
   }, 60_000);
 
+  it('sends no read receipt when the setting is off, and still sends delivered', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    try {
+      await bob.manager.setPrivacy({ readReceipts: false, typingIndicators: true });
+
+      const sent = await alice.manager.sendMessage(bob.accountId, 'okuma bildirme');
+      await waitFor(() => bob.received.length > 0);
+
+      // Delivered is unaffected: it is a fact about the network rather than
+      // about anybody's attention, and without it the tick means nothing.
+      await waitFor(() => alice.receipts.some((r) => r.kind === 'delivered'), 15_000);
+
+      await bob.manager.sendReadReceipts(alice.accountId);
+      await new Promise((r) => setTimeout(r, 1_000));
+      expect(alice.receipts.some((r) => r.kind === 'read')).toBe(false);
+      expect(alice.store.messages.find((m) => m.id === sent.id)!.state).toBe('delivered');
+    } finally {
+      alice.socket.close();
+      bob.socket.close();
+    }
+  }, 60_000);
+
+  it('does not display a read receipt it would not send', async () => {
+    // The reciprocal half, and the one that makes the setting honest rather
+    // than a way to take without giving.
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    try {
+      const sent = await alice.manager.sendMessage(bob.accountId, 'karşılıklı');
+      await waitFor(() => bob.received.length > 0);
+      await waitFor(() => alice.store.messages.find((m) => m.id === sent.id)!.state === 'delivered');
+
+      // Alice turns hers off *after* the exchange, so Bob still sends one.
+      await alice.manager.setPrivacy({ readReceipts: false, typingIndicators: true });
+      await bob.manager.sendReadReceipts(alice.accountId);
+
+      await new Promise((r) => setTimeout(r, 1_500));
+      expect(alice.receipts.some((r) => r.kind === 'read')).toBe(false);
+      expect(alice.store.messages.find((m) => m.id === sent.id)!.state).toBe('delivered');
+    } finally {
+      alice.socket.close();
+      bob.socket.close();
+    }
+  }, 60_000);
+
+  it('sends and shows nothing when typing indicators are off', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    try {
+      await alice.manager.sendMessage(bob.accountId, 'sessiz');
+      await waitFor(() => bob.received.length > 0);
+
+      await alice.manager.setPrivacy({ readReceipts: true, typingIndicators: false });
+      await alice.manager.sendTyping(bob.accountId, true);
+      await new Promise((r) => setTimeout(r, 1_000));
+      expect(bob.typing).toEqual([]);
+
+      // And the receiving half: Bob turns his off, Alice turns hers back on
+      // and composes — Bob is told nothing.
+      await alice.manager.setPrivacy({ readReceipts: true, typingIndicators: true });
+      await bob.manager.setPrivacy({ readReceipts: true, typingIndicators: false });
+      await alice.manager.sendTyping(bob.accountId, true);
+      await new Promise((r) => setTimeout(r, 1_500));
+      expect(bob.typing).toEqual([]);
+    } finally {
+      alice.socket.close();
+      bob.socket.close();
+    }
+  }, 60_000);
+
+  it('defaults to on and survives a reload of the settings', async () => {
+    const alice = await bringUp('Alice');
+    try {
+      expect(await alice.manager.getPrivacy()).toEqual({
+        readReceipts: true,
+        typingIndicators: true,
+      });
+      await alice.manager.setPrivacy({ readReceipts: false, typingIndicators: false });
+      expect(await alice.manager.getPrivacy()).toEqual({
+        readReceipts: false,
+        typingIndicators: false,
+      });
+    } finally {
+      alice.socket.close();
+    }
+  }, 40_000);
+
   it('does not tell a contact whose key changed that anybody is typing', async () => {
     const alice = await bringUp('Alice');
     const bob = await bringUp('Bob');

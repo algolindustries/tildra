@@ -95,6 +95,11 @@ export interface Strings {
   failed: string;
   /** Shown in place of the subtitle while the other end is composing. */
   typing: string;
+  privacyHeading: string;
+  readReceiptsLabel: string;
+  readReceiptsHelp: string;
+  typingIndicatorsLabel: string;
+  typingIndicatorsHelp: string;
   today: string;
   yesterday: string;
 
@@ -259,6 +264,13 @@ const en: Strings = {
   read: 'Read',
   failed: 'Not delivered',
   typing: 'typing…',
+  privacyHeading: 'What contacts are told',
+  readReceiptsLabel: 'Read receipts',
+  readReceiptsHelp:
+    'Tells the sender when you opened the conversation. Turning this off also hides theirs — you cannot see when they read without saying when you did.',
+  typingIndicatorsLabel: 'Typing indicators',
+  typingIndicatorsHelp:
+    'Tells the other end when you are at the keyboard. Off is also off in both directions. Delivery ticks are not affected: those say the message reached a phone, not that anyone looked at it.',
   today: 'Today',
   yesterday: 'Yesterday',
 
@@ -429,6 +441,13 @@ const tr: Strings = {
   read: 'Okundu',
   failed: 'İletilemedi',
   typing: 'yazıyor…',
+  privacyHeading: 'Kişilere ne söyleniyor',
+  readReceiptsLabel: 'Okundu bilgisi',
+  readReceiptsHelp:
+    'Sohbeti ne zaman açtığını gönderene söyler. Kapatınca karşı tarafınki de görünmez — kendi okuduğunu söylemeden onunkini göremezsin.',
+  typingIndicatorsLabel: 'Yazıyor göstergesi',
+  typingIndicatorsHelp:
+    'Klavyede olduğunu karşı tarafa söyler. Kapalıysa iki yönde de kapalıdır. İletim tikleri etkilenmez: onlar mesajın bir telefona ulaştığını söyler, birinin baktığını değil.',
   today: 'Bugün',
   yesterday: 'Dün',
 

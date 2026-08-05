@@ -35,7 +35,13 @@ import {
 import { PreKeySecrets } from '../crypto/pqxdh';
 import { SerializedPreKeys, decodePreKeys, encodePreKeys } from '../storage/prekeys';
 import { decodeIdentity, encodeIdentity } from '../storage/identity';
-import { IdentityChangedError, NoDevicesError, SessionManager } from '../session/manager';
+import {
+  DEFAULT_PRIVACY,
+  IdentityChangedError,
+  NoDevicesError,
+  PrivacySettings,
+  SessionManager,
+} from '../session/manager';
 import { Locale, Strings, resolveLocale, strings } from '../i18n';
 import { describeError } from './errors';
 import {
@@ -122,6 +128,8 @@ export interface AppState {
    * clock; nothing has to fire for it to lapse.
    */
   typingUntil: Map<string, number>;
+  /** What this device tells contacts beyond the message itself. */
+  privacy: PrivacySettings;
   safetyNumber: string | null;
   safetyQr: string | null;
 
@@ -175,6 +183,7 @@ export interface AppState {
   openConversation: (accountId: string) => Promise<void>;
   /** Repaint the open thread from the database — see the implementation. */
   refreshMessages: () => Promise<void>;
+  setPrivacy: (settings: PrivacySettings) => Promise<void>;
   closeConversation: () => void;
   send: (text: string) => Promise<void>;
   /**
@@ -374,6 +383,7 @@ export const useApp = create<AppState>((set, get) => ({
   activeAccountId: null,
   messages: [],
   typingUntil: new Map(),
+  privacy: DEFAULT_PRIVACY,
   safetyNumber: null,
   safetyQr: null,
   pendingLink: null,
@@ -428,12 +438,18 @@ export const useApp = create<AppState>((set, get) => ({
       client.setCredentials(credentials);
       await startSession({ vault, db, client, identity, preKeys, serverUrl, credentials }, set, get);
       const profile = await runtime?.manager.getProfile();
+      // Loaded here rather than defaulted, or a device that has receipts
+      // turned off would send them for the whole of the first session after
+      // every restart — the manager reads the store and would be correct
+      // while the screen showed the opposite.
+      const privacy = (await runtime?.manager.getPrivacy()) ?? DEFAULT_PRIVACY;
       set({
         phase: 'ready',
         accountId: credentials.accountId,
         displayName: profile?.displayName ?? null,
         about: profile?.about ?? null,
         avatar: profile?.avatar ?? null,
+        privacy,
       });
       await get().refreshConversations();
     } catch (err) {
@@ -523,6 +539,18 @@ export const useApp = create<AppState>((set, get) => ({
    * stopped being theoretical and left the message list a version behind until
    * something else happened to refresh it.
    */
+  async setPrivacy(settings) {
+    if (!runtime?.manager) return;
+    await runtime.manager.setPrivacy(settings);
+    set({ privacy: settings });
+    // Turning the indicator off does not retract one already sent, so take it
+    // back explicitly. Without this the contact keeps "typing…" on screen for
+    // the rest of the expiry, which is the app telling them something the user
+    // has just said they do not want told.
+    const accountId = get().activeAccountId;
+    if (!settings.typingIndicators && accountId) stopTyping(accountId);
+  },
+
   async refreshMessages() {
     const accountId = get().activeAccountId;
     if (!runtime?.db || !accountId) return;

@@ -159,13 +159,23 @@ isn't there:
   token, neither of which exists. `docs/PROTOCOL.md` §5 and §11 carry the same
   correction; the sending half was fixed there first and this half was left.
 - **Read receipts, and typing indicators, telling a contact about you.** Both
-  are new, both are on, and neither is a protocol weakness — the server sees a
+  are on by default, and neither is a protocol weakness — the server sees a
   sealed envelope like any other. What they cost is disclosure *to the person
-  you are talking to*, which is a real cost and one the user did not opt into:
-  a read receipt says when you opened the conversation, and a typing indicator
-  says when you were at the keyboard and when you stopped. Someone who wants to
-  read a message without saying so cannot, and there is no setting to turn
-  either off. That setting is the obvious next thing to build.
+  you are talking to*: a read receipt says when you opened the conversation,
+  and a typing indicator says when you were at the keyboard and when you
+  stopped.
+
+  Both can be turned off individually, in the profile, and **off is
+  reciprocal**: a device that does not send read receipts ignores incoming ones
+  rather than displaying them. A setting that let you read without saying so
+  while still seeing when they read is the asymmetry the norm exists to
+  prevent, and shipping that half would be choosing the dishonest one.
+  Delivery receipts have no switch and are not meant to — "it reached a phone"
+  is a fact about the network rather than about anybody's attention, and
+  without it a tick beside a sent message means nothing.
+
+  Nothing on the wire says which a device has enabled, so a peer cannot tell
+  "off" from "not read yet".
 
   There is a second cost, to the operator rather than the contact. Both are
   envelopes, so both are traffic the server can count and time. A receipt is
