@@ -78,7 +78,7 @@ tested by running the real Go server and pushing real traffic through it.
 | Read receipts and typing indicators can each be turned off, reciprocally, with delivery unaffected | done |
 | The `meta` table is encrypted, key and value — it held a plaintext list of every contact | done |
 
-Counts at time of writing: **756 client tests across 33 files**, twelve Go
+Counts at time of writing: **787 client tests across 33 files**, twelve Go
 packages clean under `-race`, both store implementations passing the same
 conformance suite, Metro bundle builds.
 
