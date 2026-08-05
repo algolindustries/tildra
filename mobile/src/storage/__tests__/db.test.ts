@@ -134,7 +134,17 @@ describe('what a forensic image would see', () => {
       members: [{ accountId: CONTACT, deviceId: 'DEVICE-ONE' }],
       createdAt: 3_000,
     } as never);
-    await db.setMeta('some.key', 'some value');
+    // Meta, written the way its real callers write it. This used to be
+    // `setMeta('some.key', 'some value')` — a value nothing in the app would
+    // ever produce — so the table was in the dump and nothing in it could
+    // fail. Two real writers named contacts: `activeAccounts` held a JSON
+    // array of every account this device had messaged, and the gossip rows put
+    // `<accountId>/<deviceId>` in the **key** column, legible without reading
+    // a value. A test that writes its own harmless row proves the dump
+    // contains a row, not that the row is safe.
+    await db.setMeta('activeAccounts', JSON.stringify([CONTACT]));
+    await db.setMeta(`gossiped:${CONTACT}/DEVICE-ONE`, '42');
+    await db.setMeta('profile.v1', JSON.stringify({ displayName: DISPLAY_NAME }));
 
     const serialized = JSON.stringify((sqlite as { dump(): unknown[] }).dump());
     for (const secret of [
@@ -149,6 +159,37 @@ describe('what a forensic image would see', () => {
     ]) {
       expect(serialized.includes(secret), `plaintext in a row: ${secret}`).toBe(false);
     }
+  });
+
+  it('round-trips meta through the encryption', async () => {
+    // The other half: protecting the table is worthless if it stops storing
+    // things. The key is a blind index, so this also proves the same key maps
+    // to the same row rather than accumulating one row per write.
+    await db.setMeta('activeAccounts', JSON.stringify([CONTACT]));
+    expect(await db.getMeta('activeAccounts')).toBe(JSON.stringify([CONTACT]));
+
+    await db.setMeta('activeAccounts', '[]');
+    expect(await db.getMeta('activeAccounts')).toBe('[]');
+    expect(await db.getMeta('never.written')).toBeNull();
+  });
+
+  it('will not read a meta value stored under a different key', async () => {
+    // The plaintext key is authenticated into the value, so a row moved to
+    // another key fails to decrypt rather than answering for it. Without this
+    // an attacker with write access to the file could swap the checkpoint for
+    // the profile and have both still open.
+    const raw = sqlite as {
+      getAllAsync(sql: string, params?: unknown[]): Promise<{ key: string; value: string }[]>;
+      runAsync(sql: string, params?: unknown[]): Promise<unknown>;
+    };
+
+    await db.setMeta('a.key', 'a value');
+    const [a] = await raw.getAllAsync('SELECT key, value FROM meta');
+    await db.setMeta('b.key', 'b value');
+
+    // Put a's ciphertext under b's row and ask for b.
+    await raw.runAsync('UPDATE meta SET value = ? WHERE key != ?', [a.value, a.key]);
+    await expect(db.getMeta('b.key')).rejects.toThrow();
   });
 
   it('does not use the account id as the row key', async () => {

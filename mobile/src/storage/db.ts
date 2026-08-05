@@ -15,7 +15,7 @@ import * as SQLite from 'expo-sqlite';
 
 import { Vault } from './vault';
 import { MESSAGE_STATE_ORDER, MessageState } from './message-state';
-import { fromBase64, toBase64 } from '../crypto/primitives';
+import { fromBase64, toBase64, utf8 } from '../crypto/primitives';
 import { SessionInit } from '../crypto/pqxdh';
 import {
   ReceiverKeyState,
@@ -555,19 +555,45 @@ export class Database {
   // Meta
   // -------------------------------------------------------------------------
 
+  /**
+   * Key/value storage for everything that is not a row of its own.
+   *
+   * **Both halves are protected, and the key half is the reason.** This table
+   * looked harmless — a checkpoint, a timestamp, a version — right up until
+   * two of its writers turned out to name contacts. `activeAccounts` held a
+   * JSON array of every account this device had messaged, and the gossip rows
+   * put `<accountId>/<deviceId>` in the *key* column, where it is legible
+   * without reading a single value. Both directly contradict the claim at the
+   * top of this file, and both were written by code that had no idea it was
+   * writing to an unencrypted table.
+   *
+   * So the protection is here rather than at the call sites. A caller cannot
+   * forget it, and the next thing somebody stores in meta is safe by default
+   * instead of safe if they thought about it. The two call sites that already
+   * encrypt — identity and prekeys — now double-wrap, which costs a few bytes
+   * and is the right trade against relying on every future caller.
+   *
+   * The plaintext key is authenticated into the value, so a row cannot be
+   * moved to a different key and still decrypt.
+   */
   async setMeta(key: string, value: string): Promise<void> {
     await this.db.runAsync(
       'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-      [key, value],
+      [this.metaKey(key), this.vault.encrypt('meta', key, utf8(value))],
     );
   }
 
   async getMeta(key: string): Promise<string | null> {
     const row = await this.db.getFirstAsync<{ value: string }>(
       'SELECT value FROM meta WHERE key = ?',
-      [key],
+      [this.metaKey(key)],
     );
-    return row?.value ?? null;
+    if (!row) return null;
+    return new TextDecoder().decode(this.vault.decrypt('meta', key, row.value));
+  }
+
+  private metaKey(key: string): string {
+    return this.vault.blindIndex('meta', key);
   }
 
   // -------------------------------------------------------------------------

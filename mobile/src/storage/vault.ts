@@ -34,7 +34,14 @@ export const MASTER_KEY_BYTES = 32;
  * Storage domains. Each gets its own subkey, so a bug that leaks a decryption
  * oracle for one kind of record cannot be turned on another.
  */
-export type VaultDomain = 'identity' | 'prekeys' | 'session' | 'message' | 'contact' | 'backup';
+export type VaultDomain =
+  | 'identity'
+  | 'prekeys'
+  | 'session'
+  | 'message'
+  | 'contact'
+  | 'backup'
+  | 'meta';
 
 const DOMAIN_INFO: Record<VaultDomain, string> = {
   identity: 'Tildra_Vault_Identity_v1',
@@ -43,6 +50,7 @@ const DOMAIN_INFO: Record<VaultDomain, string> = {
   message: 'Tildra_Vault_Message_v1',
   contact: 'Tildra_Vault_Contact_v1',
   backup: 'Tildra_Vault_Backup_v1',
+  meta: 'Tildra_Vault_Meta_v1',
 };
 
 export function generateMasterKey(): Uint8Array {
