@@ -347,6 +347,56 @@ describe('messages', () => {
     expect(message.text).toBe('gizli');
   });
 
+  it('advances a message state but never rewinds it', async () => {
+    await send({ id: 'm2', state: 'sent' });
+    await db.advanceMessageState('m2', 'delivered');
+    expect((await db.listMessages(id))[0].state).toBe('delivered');
+
+    await db.advanceMessageState('m2', 'read');
+    expect((await db.listMessages(id))[0].state).toBe('read');
+
+    // The one that matters. Receipts cross the network independently, so a
+    // `delivered` can land after the `read` it precedes — and taking it would
+    // flip a message that has been read back to two grey ticks, which reads to
+    // the user as the network having lost something.
+    await db.advanceMessageState('m2', 'delivered');
+    expect((await db.listMessages(id))[0].state).toBe('read');
+    await db.advanceMessageState('m2', 'sent');
+    expect((await db.listMessages(id))[0].state).toBe('read');
+  });
+
+  it('will not let a receipt mark a message failed', async () => {
+    // `failed` is this device's own observation that nothing went out, not a
+    // claim from the other end. A peer that could assert it would be able to
+    // tell somebody their sent messages had not gone anywhere.
+    await send({ id: 'm3', state: 'delivered' });
+    await db.advanceMessageState('m3', 'failed');
+    expect((await db.listMessages(id))[0].state).toBe('delivered');
+  });
+
+  it('ignores a receipt for a message it does not have', async () => {
+    // The ids in a receipt arrive over the network — they are somebody else's
+    // claim about this database. Naming a message that was never sent to them,
+    // or never existed, has to change nothing rather than create anything.
+    await send({ id: 'm4', state: 'sent' });
+    await db.advanceMessageState('bilinmeyen', 'read');
+    const messages = await db.listMessages(id);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].state).toBe('sent');
+  });
+
+  it('keeps the sender id of an incoming message so it can be acknowledged', async () => {
+    await send({ id: 'm5', outgoing: false, remoteId: 'their-id' });
+    const [message] = await db.listMessages(id);
+    expect(message.remoteId).toBe('their-id');
+
+    // And only messages carrying one are offered up for a receipt: without an
+    // id there is no name the sender would recognise.
+    await send({ id: 'm6', outgoing: false });
+    await send({ id: 'm7', outgoing: true, remoteId: 'ours' });
+    expect((await db.receiptableIncoming(id)).map((m) => m.id)).toEqual(['m5']);
+  });
+
   it('deletes messages older than a cutoff and says how many', async () => {
     await send({ id: 'a', createdAt: 1_000 });
     await send({ id: 'b', createdAt: 2_000 });

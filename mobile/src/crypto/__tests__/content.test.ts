@@ -5,16 +5,23 @@ import {
   ContentType,
   MAX_AVATAR_BYTES,
   MAX_DISPLAY_NAME_LENGTH,
+  MAX_RECEIPT_IDS,
+  attachmentContent,
   decodeContent,
   decodeProfile,
+  decodeReceipt,
+  decodeTyping,
   encodeContent,
   encodeProfile,
   profileContent,
+  receiptContent,
   rotationContent,
   senderKeyContent,
   textContent,
+  typingContent,
 } from '../content';
-import { equal, randomBytes, utf8 } from '../primitives';
+import { equal, randomBytes, u32, utf8 } from '../primitives';
+import { frame } from '../wire';
 import { groupConversationKey, groupIdFromConversationKey } from '../../session/manager';
 
 describe('content typing', () => {
@@ -36,6 +43,74 @@ describe('content typing', () => {
     const decoded = decodeContent(encodeContent(rotationContent('grp-2')));
     expect(decoded.type).toBe(ContentType.GroupRotation);
     expect(decoded.groupId).toBe('grp-2');
+  });
+
+  it('carries the sender-chosen message id on text and attachments', () => {
+    // Receipts name a message, and the two ends generate different ids for the
+    // same one. This is the only field that makes them agree.
+    const text = decodeContent(encodeContent(textContent('selam', 'mid-1')));
+    expect(text.messageId).toBe('mid-1');
+
+    const attachment = decodeContent(
+      encodeContent(attachmentContent(randomBytes(32), 'başlık', 'mid-2')),
+    );
+    expect(attachment.messageId).toBe('mid-2');
+    expect(attachment.text).toBe('başlık');
+  });
+
+  it('reports no message id rather than an empty one', () => {
+    // A peer that sends no id is not a peer claiming a message called "".
+    // `sendReceipt` is guarded on the field being absent, so an empty string
+    // reaching it would produce a receipt naming nothing.
+    const decoded = decodeContent(encodeContent(textContent('kimliksiz')));
+    expect(decoded.messageId).toBeUndefined();
+  });
+
+  it('round-trips a receipt in both kinds', () => {
+    for (const kind of ['delivered', 'read'] as const) {
+      const decoded = decodeContent(
+        encodeContent(receiptContent({ kind, messageIds: ['a', 'b/c+d=='] })),
+      );
+      expect(decoded.type).toBe(ContentType.Receipt);
+      expect(decodeReceipt(decoded.payload!)).toEqual({ kind, messageIds: ['a', 'b/c+d=='] });
+    }
+  });
+
+  it('refuses a receipt that names nothing, or too much', () => {
+    expect(() => receiptContent({ kind: 'read', messageIds: [] })).toThrow(ContentError);
+    expect(() =>
+      receiptContent({ kind: 'read', messageIds: new Array(MAX_RECEIPT_IDS + 1).fill('x') }),
+    ).toThrow(ContentError);
+
+    // And on the way in, because the bound that matters is the one applied to
+    // bytes somebody else produced.
+    const oversized = frame(u32(2), utf8(new Array(MAX_RECEIPT_IDS + 1).fill('x').join('\n')));
+    expect(() => decodeReceipt(oversized)).toThrow(ContentError);
+  });
+
+  it('refuses an unknown receipt kind', () => {
+    expect(() => decodeReceipt(frame(u32(99), utf8('a')))).toThrow(/unknown receipt kind/);
+  });
+
+  it('refuses an id that would not survive the round trip', () => {
+    // The ids are base64 and cannot contain a newline, but `randomId` is
+    // injectable — and an id carrying the separator would decode as two.
+    expect(() => receiptContent({ kind: 'read', messageIds: ['a\nb'] })).toThrow(ContentError);
+  });
+
+  it('round-trips typing in both directions', () => {
+    for (const typing of [true, false]) {
+      const decoded = decodeContent(encodeContent(typingContent(typing)));
+      expect(decoded.type).toBe(ContentType.Typing);
+      expect(decodeTyping(decoded.payload!)).toBe(typing);
+    }
+  });
+
+  it('refuses a typing payload that is not one word', () => {
+    // Anything else is a peer describing something this build does not have,
+    // and guessing is how a parser becomes attack surface.
+    expect(() => decodeTyping(randomBytes(8))).toThrow(ContentError);
+    expect(() => decodeTyping(new Uint8Array(0))).toThrow(ContentError);
   });
 
   it('refuses a content type it does not understand', () => {

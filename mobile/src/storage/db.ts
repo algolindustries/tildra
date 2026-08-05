@@ -14,6 +14,7 @@
 import * as SQLite from 'expo-sqlite';
 
 import { Vault } from './vault';
+import { MESSAGE_STATE_ORDER, MessageState } from './message-state';
 import { fromBase64, toBase64 } from '../crypto/primitives';
 import { SessionInit } from '../crypto/pqxdh';
 import {
@@ -40,7 +41,18 @@ import {
   serializeRatchet,
 } from '../crypto/ratchet';
 
-export type MessageState = 'pending' | 'sent' | 'delivered' | 'failed';
+// Re-exported so the many call sites that already import the message model
+// from here keep working; the definitions live one file away because the
+// session layer and its test double need the ordering as a *value*, and this
+// module reaches `expo-sqlite`.
+//
+// `export { X } from './x'` rather than re-exporting the imported binding.
+// Babel transforms this file without type information, so it cannot tell a
+// value being re-exported from a type being re-exported and elides the import
+// — `tsc` accepts the shorter form and Metro fails on it at runtime, which is
+// the worst place to find out.
+export { MESSAGE_STATE_ORDER } from './message-state';
+export type { MessageState } from './message-state';
 
 export interface Conversation {
   accountId: string;
@@ -77,6 +89,16 @@ export interface Message {
    * it would be a second place for the same fact to be wrong.
    */
   senderAccountId?: string;
+  /**
+   * For an incoming message, the id its *sender* gave it.
+   *
+   * Receipts name a message, and the two ends do not share an id — each
+   * generates its own on the way into its own database. This is the sender's,
+   * kept so a receipt going back can name something they will recognise.
+   * Absent on outgoing messages, where `id` is already the shared name, and
+   * absent on anything received from a peer too old to send one.
+   */
+  remoteId?: string;
 }
 
 export interface StoredSession {
@@ -356,6 +378,7 @@ export class Database {
               ? serializeAttachmentRef(message.attachment)
               : undefined,
             senderAccountId: message.senderAccountId,
+            remoteId: message.remoteId,
           }),
           message.outgoing ? 1 : 0,
           message.createdAt,
@@ -391,6 +414,7 @@ export class Database {
           text: string;
           attachment?: SerializedAttachmentRef;
           senderAccountId?: string;
+          remoteId?: string;
         }>('message', row.id, row.body_blob);
         return {
           id: row.id,
@@ -401,6 +425,7 @@ export class Database {
           createdAt: row.created_at,
           state: row.state,
           senderAccountId: body.senderAccountId,
+          remoteId: body.remoteId,
         };
       })
       .reverse();
@@ -408,6 +433,43 @@ export class Database {
 
   async setMessageState(id: string, state: MessageState): Promise<void> {
     await this.db.runAsync('UPDATE messages SET state = ? WHERE id = ?', [state, id]);
+  }
+
+  /**
+   * Move a message forward, never back.
+   *
+   * Receipts cross the network independently, and the ratchet delivers what
+   * arrives rather than what was sent first — so a `delivered` can land after
+   * the `read` it precedes. Taking the later one on trust would flip a message
+   * that has been read back to two grey ticks, which reads to the user as the
+   * network having lost something.
+   *
+   * `failed` is the exception and is applied unconditionally by the send path:
+   * it is this device's own observation that nothing went out, not a claim
+   * from the other end.
+   */
+  async advanceMessageState(id: string, state: MessageState): Promise<void> {
+    await this.db.runAsync(
+      `UPDATE messages SET state = ?
+        WHERE id = ?
+          AND CASE state
+                WHEN 'failed' THEN -1 WHEN 'pending' THEN 0 WHEN 'sent' THEN 1
+                WHEN 'delivered' THEN 2 WHEN 'read' THEN 3 ELSE 0
+              END < ?`,
+      [state, id, MESSAGE_STATE_ORDER[state]],
+    );
+  }
+
+  /**
+   * Incoming messages in a conversation that the sender named, newest last.
+   *
+   * Used to build a read receipt when a conversation is opened. Only messages
+   * carrying a `remoteId` can be acknowledged, because only those have a name
+   * the sender would recognise.
+   */
+  async receiptableIncoming(conversationId: string, limit = 256): Promise<Message[]> {
+    const messages = await this.listMessages(conversationId, limit);
+    return messages.filter((m) => !m.outgoing && m.remoteId);
   }
 
   async deleteMessagesOlderThan(cutoff: number): Promise<number> {

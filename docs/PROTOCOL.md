@@ -546,7 +546,55 @@ renderer clamps too. Either check alone would do; a rule about untrusted input
 that is enforced in exactly one place is one refactor from not being enforced
 at all.
 
-### 5.5 Linking a device
+### 5.5 Receipts and typing
+
+Both are typed messages on the pairwise ratchet, like everything else in §5 —
+the server carries two more sealed envelopes and learns from them exactly what
+it learns from a chat message, which is that an account delivered something.
+
+```
+content  = frame(type, group_id, payload, message_id)
+receipt  = frame(kind, message_ids joined by "\n")     kind: 1 delivered, 2 read
+typing   = u32(1 composing | 0 stopped)
+```
+
+The frame grew a fourth field for `message_id`, and it is the field that makes
+receipts possible at all: **the two ends do not share an id.** Each generates
+its own on the way into its own database, so a receipt naming the receiver's id
+would key nothing on the sender's side. The sender's id travels with the
+message; the receiver stores it alongside, and names it when acknowledging.
+An attachment carries one too — its caption already occupies the group-id slot,
+so there was no slot left to borrow.
+
+Rules that are not decoration:
+
+- **A receipt can only move a message forward.** `pending → sent → delivered →
+  read`. Receipts cross the network independently and the ratchet delivers what
+  arrives rather than what was sent first, so a `delivered` can land after the
+  `read` it precedes; taking the later one on trust would flip a read message
+  back to two grey ticks, which reads as the network having lost something.
+- **`failed` is below `pending` and unreachable by receipt.** It is the
+  sender's own observation that nothing went out. A peer able to assert it
+  could tell somebody their sent messages had not arrived.
+- **A receipt naming a message we never sent changes nothing.** The ids arrive
+  over the network; they are somebody else's claim about our database. The
+  update matches on id and creates nothing.
+- **Neither type is ever acknowledged.** A receipt for a receipt is an infinite
+  exchange, and typing is not stored, so there is nothing to acknowledge.
+- **Neither goes to a contact whose identity key changed.** Composing state is
+  something the user is sending, so §7's block covers it. The flag is what
+  stops it, not the key comparison — flagging *adopts* the new key, so
+  `assertIdentityUnchanged` compares a key against itself and passes.
+- **Groups get neither.** A read receipt in a group tells every member when
+  each of the others opened it, and §4's fanout makes it one envelope per
+  member per open.
+- **Typing is throttled to one signal per 5 seconds and expires after 8.** The
+  throttle is a privacy budget rather than a UI preference — see
+  `docs/THREAT_MODEL.md`. The expiry is on the receiver's clock because
+  "stopped" is a message that may never arrive: the peer can lose the network
+  or close the app mid-word.
+
+### 5.6 Linking a device
 
 An account may hold several devices, each with its own identity key and its own
 ratchet per contact. Adding one has to work without trusting the server, since

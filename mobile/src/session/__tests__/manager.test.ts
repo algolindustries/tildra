@@ -22,6 +22,7 @@ import {
   groupConversationKey,
 } from '../manager';
 import { MemorySessionStore } from './memory-store';
+import { ReceiptKind } from '../../crypto/content';
 import { freePort } from '../../__tests__/free-port';
 import {
   SIGNED_PREKEY_ROTATION_MS,
@@ -103,6 +104,8 @@ interface Device {
   renegotiationAnswers: { call: CallSession; sdp: string }[];
   splitViews: { source: string; error: SplitViewError }[];
   profileChanges: string[];
+  receipts: { accountId: string; kind: ReceiptKind; messageIds: string[] }[];
+  typing: { accountId: string; typing: boolean }[];
   member: () => { accountId: string; deviceId: string };
 }
 
@@ -128,6 +131,8 @@ async function bringUp(
   const callChanges: CallSession[] = [];
   const splitViews: { source: string; error: SplitViewError }[] = [];
   const profileChanges: string[] = [];
+  const receipts: { accountId: string; kind: ReceiptKind; messageIds: string[] }[] = [];
+  const typing: { accountId: string; typing: boolean }[] = [];
   const renegotiations: { call: CallSession; sdp: string }[] = [];
   const renegotiationAnswers: { call: CallSession; sdp: string }[] = [];
 
@@ -165,6 +170,8 @@ async function bringUp(
       onCallRenegotiateAnswer: (call, sdp) => renegotiationAnswers.push({ call, sdp }),
       onSplitView: (source, error) => splitViews.push({ source, error }),
       onProfileChange: (accountId) => profileChanges.push(accountId),
+      onReceipt: (accountId, kind, messageIds) => receipts.push({ accountId, kind, messageIds }),
+      onTyping: (accountId, typing_) => typing.push({ accountId, typing: typing_ }),
       onError: (error) => errors.push(error),
     },
   });
@@ -202,6 +209,8 @@ async function bringUp(
     renegotiationAnswers,
     splitViews,
     profileChanges,
+    receipts,
+    typing,
     member: () => ({ accountId, deviceId }),
   };
 }
@@ -366,7 +375,12 @@ describeIntegration('session manager', () => {
     expect(bobSide).not.toBeNull();
 
     expect(alice.store.messages.filter((m) => m.outgoing)).toHaveLength(1);
-    expect(alice.store.messages[0].state).toBe('sent');
+    // `sent` is no longer where an outgoing message stops. Bob acknowledges it
+    // on receipt, so this asserts the round trip rather than a snapshot taken
+    // before the receipt has had a chance to land — which is a race, and was
+    // one for exactly as long as it took to write the receipt path.
+    await waitFor(() => alice.store.messages[0].state === 'delivered');
+    expect(alice.store.messages[0].state).toBe('delivered');
     expect(bob.store.messages.filter((m) => !m.outgoing)).toHaveLength(1);
 
     alice.socket.close();
@@ -2516,6 +2530,155 @@ describeIntegration('recovering from a phrase', () => {
 // Reaching somebody who lost their sessions
 // ---------------------------------------------------------------------------
 
+describeIntegration('receipts and typing', () => {
+  it('marks a message delivered when it reaches the other end', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    try {
+      const sent = await alice.manager.sendMessage(bob.accountId, 'ulaştı mı');
+      await waitFor(() => bob.received.length > 0);
+
+      // The id in the receipt is the one Alice chose. That is the whole point
+      // of carrying it on the wire: the two stores generate different ids for
+      // the same message, so a receipt naming Bob's would key nothing.
+      await waitFor(() => alice.receipts.length > 0, 15_000);
+      expect(alice.receipts[0].kind).toBe('delivered');
+      expect(alice.receipts[0].messageIds).toContain(sent.id);
+      expect(alice.store.messages.find((m) => m.id === sent.id)!.state).toBe('delivered');
+    } finally {
+      alice.socket.close();
+      bob.socket.close();
+    }
+  }, 60_000);
+
+  it('marks it read when the other end opens the conversation', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    try {
+      const sent = await alice.manager.sendMessage(bob.accountId, 'okundu mu');
+      await waitFor(() => bob.received.length > 0);
+      await waitFor(() => alice.store.messages.find((m) => m.id === sent.id)!.state === 'delivered');
+
+      await bob.manager.sendReadReceipts(alice.accountId);
+      await waitFor(
+        () => alice.store.messages.find((m) => m.id === sent.id)!.state === 'read',
+        15_000,
+      );
+
+      // And Bob's own copy is read too, so reopening does not re-announce the
+      // same batch every time.
+      const bobCopy = bob.store.messages.find((m) => !m.outgoing)!;
+      expect(bobCopy.state).toBe('read');
+    } finally {
+      alice.socket.close();
+      bob.socket.close();
+    }
+  }, 60_000);
+
+  it('sends nothing when there is nothing new to acknowledge', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    try {
+      await alice.manager.sendMessage(bob.accountId, 'bir kere');
+      await waitFor(() => bob.received.length > 0);
+      await bob.manager.sendReadReceipts(alice.accountId);
+      await waitFor(() => alice.receipts.some((r) => r.kind === 'read'), 15_000);
+
+      const before = alice.receipts.length;
+      await bob.manager.sendReadReceipts(alice.accountId);
+      await bob.manager.sendReadReceipts(alice.accountId);
+      // Nothing to say, so nothing sent. Without the `state !== 'read'` filter
+      // every open of an old conversation would re-send the whole batch.
+      await new Promise((r) => setTimeout(r, 1_000));
+      expect(alice.receipts.length).toBe(before);
+    } finally {
+      alice.socket.close();
+      bob.socket.close();
+    }
+  }, 60_000);
+
+  it('does not acknowledge an acknowledgement', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    try {
+      await alice.manager.sendMessage(bob.accountId, 'yankı');
+      await waitFor(() => alice.receipts.length > 0, 15_000);
+      await new Promise((r) => setTimeout(r, 1_000));
+
+      // Bob acknowledged one message. If a receipt were itself acknowledged
+      // the two devices would trade them forever, and the count would climb
+      // rather than settle at one.
+      expect(alice.receipts).toHaveLength(1);
+      expect(bob.receipts).toHaveLength(0);
+      // And no receipt was ever rendered as a chat message on either side.
+      expect(bob.received).toEqual(['yankı']);
+      expect(alice.received).toEqual([]);
+    } finally {
+      alice.socket.close();
+      bob.socket.close();
+    }
+  }, 60_000);
+
+  it('carries composing state, and taking it back', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    try {
+      // A session has to exist first: typing is fire-and-forget, so it must
+      // not be the thing that establishes one.
+      await alice.manager.sendMessage(bob.accountId, 'merhaba');
+      await waitFor(() => bob.received.length > 0);
+
+      await alice.manager.sendTyping(bob.accountId, true);
+      await waitFor(() => bob.typing.length > 0, 15_000);
+      expect(bob.typing[0]).toEqual({ accountId: alice.accountId, typing: true });
+
+      await alice.manager.sendTyping(bob.accountId, false);
+      await waitFor(() => bob.typing.length > 1, 15_000);
+      expect(bob.typing[1]).toEqual({ accountId: alice.accountId, typing: false });
+
+      // Nothing about it reached the thread or the database.
+      expect(bob.received).toEqual(['merhaba']);
+      expect(bob.store.messages.filter((m) => !m.outgoing)).toHaveLength(1);
+    } finally {
+      alice.socket.close();
+      bob.socket.close();
+    }
+  }, 60_000);
+
+  it('does not tell a contact whose key changed that anybody is typing', async () => {
+    const alice = await bringUp('Alice');
+    const bob = await bringUp('Bob');
+    try {
+      await alice.manager.sendMessage(bob.accountId, 'önce');
+      await waitFor(() => bob.received.length > 0);
+
+      // The identity-change block covers what a user sends, and composing
+      // state is something they are sending. This is the third path to be
+      // caught missing it — see STATUS on calls.
+      //
+      // Flagged while keeping Bob's *real* key, which is the shape that
+      // matters and the one STATUS records as the trap: flagging adopts the
+      // new key, so `assertIdentityUnchanged` compares the stored key against
+      // the same key and passes. Only the flag itself stops this. Written the
+      // obvious way first — a random key — the negative control passed,
+      // because the key mismatch threw before the guard was ever reached.
+      const conversation = (await alice.store.getConversation(bob.accountId))!;
+      await alice.store.upsertConversation({
+        ...conversation,
+        identityKey: bob.identity.publicKey,
+        identityChanged: true,
+      });
+      await alice.manager.sendTyping(bob.accountId, true);
+
+      await new Promise((r) => setTimeout(r, 1_000));
+      expect(bob.typing).toEqual([]);
+    } finally {
+      alice.socket.close();
+      bob.socket.close();
+    }
+  }, 60_000);
+});
+
 describeIntegration('a contact whose session is gone', () => {
   /**
    * Rebuild a device the way recovery does: same account, same device, same
@@ -2567,6 +2730,17 @@ describeIntegration('a contact whose session is gone', () => {
     await waitFor(() => bob.received.length > 0);
     await bob.manager.sendMessage(alice.accountId, 'cevap');
     await waitFor(() => alice.received.length > 0);
+
+    // Drain the receipts before taking Bob's session away.
+    //
+    // Every received message now sends one back, and a receipt still in flight
+    // when the session is destroyed arrives at a device that cannot read it —
+    // which triggers the same self-repair a lost *message* does, only earlier.
+    // The scenario below depends on the repair happening after 'kayıp' is
+    // sent, so this waits for the traffic that would otherwise cause it. Both
+    // directions, because both ends received something.
+    await waitFor(() => bob.store.messages.find((m) => m.outgoing)?.state === 'delivered');
+    await waitFor(() => alice.store.messages.find((m) => m.outgoing)?.state === 'delivered');
     bob.socket.close();
 
     const recovered = await afterRecovery(bob);

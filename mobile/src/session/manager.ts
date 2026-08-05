@@ -40,17 +40,23 @@ import {
   ContentError,
   ContentType,
   MAX_DISPLAY_NAME_LENGTH,
+  MAX_RECEIPT_IDS,
   Profile,
+  ReceiptKind,
   attachmentContent,
   callSignalContent,
   gossipContent,
   decodeContent,
   decodeProfile,
+  decodeReceipt,
+  decodeTyping,
   encodeContent,
   profileContent,
+  receiptContent,
   sanitizeDisplayText,
   senderKeyContent,
   textContent,
+  typingContent,
 } from '../crypto/content';
 import {
   CallEndReason,
@@ -133,6 +139,8 @@ export interface SessionStore {
   flagIdentityChange(accountId: string, newIdentityKey: Uint8Array): Promise<void>;
   insertMessage(m: Message): Promise<void>;
   setMessageState(id: string, state: MessageState): Promise<void>;
+  advanceMessageState(id: string, state: MessageState): Promise<void>;
+  receiptableIncoming(conversationId: string, limit?: number): Promise<Message[]>;
   saveSession(s: StoredSession): Promise<void>;
   loadSession(accountId: string, deviceId: string): Promise<StoredSession | null>;
   loadSessionsFor(accountId: string): Promise<StoredSession[]>;
@@ -379,6 +387,19 @@ export interface ManagerEvents {
   onCallRenegotiateAnswer?: (call: CallSession, answerSdp: string) => void;
   /** Any change to the live call's phase, including it ending. */
   onCallChange?: (call: CallSession) => void;
+  /**
+   * An outgoing message reached the other end, or was read there. Carries the
+   * ids this device chose, because they are what the store already keys on.
+   */
+  onReceipt?: (accountId: string, kind: ReceiptKind, messageIds: string[]) => void;
+  /**
+   * The peer started or stopped composing.
+   *
+   * Ephemeral by construction: nothing is stored, and the UI is expected to
+   * expire it on its own clock rather than trust a "stopped" that may never
+   * arrive — the peer may simply have walked away or lost the network.
+   */
+  onTyping?: (accountId: string, typing: boolean) => void;
   onError?: (error: Error) => void;
 }
 
@@ -577,7 +598,12 @@ export class SessionManager {
         // the log has moved since we last told this device, so on quiet logs
         // this costs nothing.
         await this.gossipTo(accountId, device.deviceId, device.identityKey);
-        await this.sendToDevice(accountId, device.deviceId, device.identityKey, textContent(text));
+        await this.sendToDevice(
+          accountId,
+          device.deviceId,
+          device.identityKey,
+          textContent(text, message.id),
+        );
         delivered += 1;
       } catch (err) {
         if (err instanceof IdentityChangedError) {
@@ -600,7 +626,49 @@ export class SessionManager {
    * `retrying` guards the one automatic re-handshake below. Without it a
    * server that always answers 404 would spin.
    */
-  private async sendToDevice(
+  /**
+   * One send at a time per device.
+   *
+   * A send is read-modify-write on the ratchet: load the session, derive the
+   * next message key, save the advanced chain. Two of them interleaved both
+   * derive from the same chain link and the second `saveSession` discards the
+   * first's advance — so two ciphertexts go out claiming the same message
+   * number and the peer authenticates neither. It surfaces as
+   * "message body failed to authenticate" on the *other* device, which is as
+   * far from the cause as an error can land.
+   *
+   * Until receipts existed every caller awaited its send, so the invariant held
+   * by accident. Receipts are fired rather than awaited — the user is not
+   * waiting for them — and that put a second send on the same chain
+   * concurrently with whatever the user was doing. The queue makes the
+   * invariant explicit instead of relying on nobody ever writing `void`.
+   */
+  private readonly sendQueues = new Map<string, Promise<unknown>>();
+
+  private enqueueSend<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.sendQueues.get(key) ?? Promise.resolve();
+    // `then(task, task)` so a rejected predecessor does not cancel the queue:
+    // one failed send must not wedge every later one behind it.
+    const next = previous.then(task, task);
+    // Store a settled-either-way handle, or an unhandled rejection escapes
+    // here rather than at the caller that actually owns the failure.
+    this.sendQueues.set(key, next.then(undefined, () => undefined));
+    return next;
+  }
+
+  private sendToDevice(
+    accountId: string,
+    deviceId: string,
+    deviceIdentityKey: Uint8Array,
+    content: Content,
+    retrying = false,
+  ): Promise<void> {
+    return this.enqueueSend(`${accountId}/${deviceId}`, () =>
+      this.sendToDeviceLocked(accountId, deviceId, deviceIdentityKey, content, retrying),
+    );
+  }
+
+  private async sendToDeviceLocked(
     accountId: string,
     deviceId: string,
     deviceIdentityKey: Uint8Array,
@@ -660,7 +728,10 @@ export class SessionManager {
         new Error(`Tildra: ${accountId}/${deviceId} lost its session; handshaking again`),
       );
       await this.establishSession(accountId, deviceId, deviceIdentityKey);
-      return this.sendToDevice(accountId, deviceId, deviceIdentityKey, content, true);
+      // The locked body, not the queued entry point: this is already running
+      // inside this device's slot, so going back through the queue would wait
+      // for a slot that cannot finish until this returns.
+      return this.sendToDeviceLocked(accountId, deviceId, deviceIdentityKey, content, true);
     }
     await this.store.saveSession({ ...session, ratchet, pendingInit });
   }
@@ -740,10 +811,20 @@ export class SessionManager {
    * conversation too dangerous to send "hi" into could still be called.
    */
   private async assertNotFlagged(accountId: string): Promise<void> {
-    const conversation = await this.store.getConversation(accountId);
-    if (conversation?.identityChanged) {
-      throw new IdentityChangedError(accountId, conversation.identityKey, conversation.identityKey);
+    if (await this.isFlagged(accountId)) {
+      const conversation = await this.store.getConversation(accountId);
+      throw new IdentityChangedError(accountId, conversation!.identityKey, conversation!.identityKey);
     }
+  }
+
+  /**
+   * The same question `assertNotFlagged` asks, for the callers that want to
+   * fall silent rather than fail. Typing is one: a blocked contact should not
+   * see composing state, and there is no user action to report an error to.
+   */
+  private async isFlagged(accountId: string): Promise<boolean> {
+    const conversation = await this.store.getConversation(accountId);
+    return conversation?.identityChanged ?? false;
   }
 
   private async assertIdentityUnchanged(accountId: string, identityKey: Uint8Array): Promise<void> {
@@ -946,6 +1027,17 @@ export class SessionManager {
       }
       return null;
     }
+    if (decoded.type === ContentType.Receipt) {
+      await this.acceptReceipt(content.senderAccountId, decoded.payload!);
+      return null;
+    }
+    if (decoded.type === ContentType.Typing) {
+      // Nothing is stored and nothing is answered. A typing signal that
+      // produced a reply would double the traffic it costs, and the whole
+      // reason this is bounded is that it is traffic the server can count.
+      this.events.onTyping?.(content.senderAccountId, decodeTyping(decoded.payload!));
+      return null;
+    }
     if (decoded.type === ContentType.GroupRotation) {
       // The sender is about to publish a fresh chain; drop what we hold so a
       // stale key cannot be used to read past this point.
@@ -966,6 +1058,7 @@ export class SessionManager {
       outgoing: false,
       createdAt: Date.parse(envelope.serverTs) || this.now(),
       state: 'delivered',
+      remoteId: decoded.messageId,
     };
 
     if (decoded.type === ContentType.Attachment) {
@@ -980,8 +1073,115 @@ export class SessionManager {
 
     await this.store.insertMessage(message);
 
+    // Tell them it arrived. Best effort and deliberately not awaited into the
+    // caller's failure path: a receipt that will not send must not turn a
+    // message that did arrive into one this device never stored, which is what
+    // throwing from here would do — `receiveEnvelope` is the ack path, and an
+    // envelope that throws is redelivered forever.
+    if (decoded.messageId) {
+      void this.sendReceipt(content.senderAccountId, 'delivered', [decoded.messageId]).catch(
+        (err) => this.events.onError?.(err instanceof Error ? err : new Error(String(err))),
+      );
+    }
+
     this.events.onMessage?.(message, conversation);
     return message;
+  }
+
+  // -------------------------------------------------------------------------
+  // Receipts and typing
+  // -------------------------------------------------------------------------
+
+  /**
+   * Apply a receipt to our own outgoing messages.
+   *
+   * The ids in a receipt are ones this device chose, so they key the store
+   * directly — but they arrived over the network, so they are somebody else's
+   * claim about our database. `advanceMessageState` is what keeps that claim
+   * from doing damage: it can only move a message forward, and it matches on
+   * id, so a peer naming a message they were never sent updates nothing.
+   */
+  private async acceptReceipt(accountId: string, payload: Uint8Array): Promise<void> {
+    const receipt = decodeReceipt(payload);
+    for (const id of receipt.messageIds) {
+      await this.store.advanceMessageState(id, receipt.kind);
+    }
+    this.events.onReceipt?.(accountId, receipt.kind, receipt.messageIds);
+  }
+
+  private async sendReceipt(
+    accountId: string,
+    kind: ReceiptKind,
+    messageIds: string[],
+  ): Promise<void> {
+    if (messageIds.length === 0) return;
+    const devices = await this.client.listDevices(accountId);
+    for (const device of devices) {
+      // One device refusing a receipt is not worth failing the batch for, and
+      // certainly not worth surfacing: the user did not ask for this to happen.
+      await this.sendToDevice(
+        accountId,
+        device.deviceId,
+        device.identityKey,
+        receiptContent({ kind, messageIds }),
+      ).catch((err) => this.events.onError?.(err instanceof Error ? err : new Error(String(err))));
+    }
+  }
+
+  /**
+   * Acknowledge everything received in a conversation as read.
+   *
+   * Called when the user opens it. Only messages that carried a sender id can
+   * be named, and the batch is capped at what one receipt holds — an old
+   * conversation being opened for the first time should send one envelope, not
+   * a hundred.
+   */
+  async sendReadReceipts(accountId: string): Promise<void> {
+    const conversation = await this.store.getConversation(accountId);
+    if (!conversation) return;
+
+    const incoming = await this.store.receiptableIncoming(conversation.id, MAX_RECEIPT_IDS);
+    const ids = incoming
+      .filter((m) => m.state !== 'read')
+      .map((m) => m.remoteId!)
+      .slice(-MAX_RECEIPT_IDS);
+    if (ids.length === 0) return;
+
+    // Mark ours read before telling them, so that a send that fails leaves a
+    // conversation which is read locally rather than one that re-announces the
+    // same batch every time it is opened.
+    for (const message of incoming) {
+      if (message.state !== 'read') await this.store.advanceMessageState(message.id, 'read');
+    }
+    await this.sendReceipt(accountId, 'read', ids);
+  }
+
+  /**
+   * Tell a contact this device is composing, or has stopped.
+   *
+   * Rate limiting is the caller's job and is not optional — see
+   * `TYPING_THROTTLE_MS` in `state/app.ts`. Every call here is an envelope the
+   * server counts, and an unthrottled one would turn a keystroke stream into a
+   * traffic pattern that describes typing speed.
+   */
+  async sendTyping(accountId: string, typing: boolean): Promise<void> {
+    // Never to a contact whose key is in question: the identity-change block
+    // covers what a user sends, and "is typing" is something they are sending.
+    if (await this.isFlagged(accountId)) return;
+
+    const devices = await this.client.listDevices(accountId);
+    for (const device of devices) {
+      await this.sendToDevice(
+        accountId,
+        device.deviceId,
+        device.identityKey,
+        typingContent(typing),
+      ).catch(() => {
+        // Silent. A typing signal that failed is not something to tell the
+        // user about, and routing it to `onError` would put a banner on the
+        // screen because somebody paused mid-word on a flaky network.
+      });
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1050,7 +1250,7 @@ export class SessionManager {
           accountId,
           device.deviceId,
           device.identityKey,
-          attachmentContent(payload, caption),
+          attachmentContent(payload, caption, message.id),
         );
         delivered += 1;
       } catch (err) {

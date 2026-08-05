@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   KeyboardAvoidingView,
@@ -14,6 +14,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Avatar, Banner } from '../ui/components';
 import { AttachmentBubble } from '../ui/AttachmentBubble';
 import { VoiceBubble } from '../ui/VoiceBubble';
+import {
+  IconAlert,
+  IconCheck,
+  IconCheckDouble,
+  IconClock,
+  IconMic,
+  IconPhone,
+  IconPlus,
+  IconSend,
+  IconStop,
+  IconVideo,
+} from '../ui/icons';
+import { Strings } from '../i18n';
 import { palette, radius, spacing, typography } from '../ui/theme';
 import { Row, buildRows, formatAccountId, messageTime } from '../ui/format';
 import { useApp } from '../state/app';
@@ -51,6 +64,7 @@ export function ConversationScreen({
   const messages = useApp((s) => s.messages);
   const conversations = useApp((s) => s.conversations);
   const send = useApp((s) => s.send);
+  const notifyTyping = useApp((s) => s.notifyTyping);
   const sendPhoto = useApp((s) => s.sendPhoto);
   const startVoice = useApp((s) => s.startVoice);
   const finishVoice = useApp((s) => s.finishVoice);
@@ -60,6 +74,19 @@ export function ConversationScreen({
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const listRef = useRef<FlatList<Row>>(null);
+
+  // A typing signal expires on this device's clock rather than on a "stopped"
+  // that may never arrive, so the indicator needs something to re-render it
+  // when the deadline passes. A tick that runs only while somebody is actually
+  // typing costs nothing the rest of the time.
+  const typingDeadline = useApp((s) => s.typingUntil.get(accountId)) ?? 0;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (typingDeadline <= Date.now()) return;
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [typingDeadline]);
+  const peerTyping = typingDeadline > now;
 
   const rows = useMemo(
     () => buildRows(messages, t, Date.now(), locale),
@@ -106,9 +133,16 @@ export function ConversationScreen({
             <Text style={styles.headerName} numberOfLines={1}>
               {name ?? formatAccountId(accountId)}
             </Text>
-            <Text style={[styles.headerSub, conversation?.verified && styles.headerVerified]}>
-              {conversation?.verified ? `✓ ${t.verified}` : t.notVerified}
-            </Text>
+            {/* Composing replaces the verification state rather than sitting
+                beside it, so the subtitle never says two things at once. It
+                comes back the moment the signal lapses. */}
+            {peerTyping ? (
+              <Text style={[styles.headerSub, styles.headerTyping]}>{t.typing}</Text>
+            ) : (
+              <Text style={[styles.headerSub, conversation?.verified && styles.headerVerified]}>
+                {conversation?.verified ? `✓ ${t.verified}` : t.notVerified}
+              </Text>
+            )}
           </Pressable>
         )}
         {/* Disabled while the key is in question rather than hidden: a
@@ -127,7 +161,7 @@ export function ConversationScreen({
               onPress={() => onCall(false)}
               hitSlop={10}
             >
-              <Text style={[styles.headerAction, blocked && styles.headerActionOff]}>☎</Text>
+              <IconPhone color={blocked ? palette.textFaint : palette.accent} />
             </Pressable>
             <Pressable
               accessibilityRole="button"
@@ -136,7 +170,7 @@ export function ConversationScreen({
               onPress={() => onCall(true)}
               hitSlop={10}
             >
-              <Text style={[styles.headerAction, blocked && styles.headerActionOff]}>▣</Text>
+              <IconVideo color={blocked ? palette.textFaint : palette.accent} />
             </Pressable>
           </>
         )}
@@ -185,7 +219,7 @@ export function ConversationScreen({
                 message={item.message}
                 showTail={item.showTail}
                 locale={locale}
-                stateLabel={stateLabel(item.message, t)}
+                t={t}
                 senderName={
                   isGroup && !item.message.outgoing
                     ? senderName(item.message.senderAccountId)
@@ -205,12 +239,15 @@ export function ConversationScreen({
             disabled={blocked}
             style={[styles.attachButton, blocked && styles.sendButtonInert]}
           >
-            <Text style={styles.attachText}>+</Text>
+            <IconPlus color={palette.accent} size={24} />
           </Pressable>
           <TextInput
             style={styles.input}
             value={draft}
-            onChangeText={setDraft}
+            onChangeText={(next) => {
+              setDraft(next);
+              notifyTyping(next);
+            }}
             placeholder={blocked ? t.sendingBlocked : t.messagePlaceholder}
             placeholderTextColor={palette.textFaint}
             multiline
@@ -225,7 +262,7 @@ export function ConversationScreen({
               onPress={onSend}
               style={[styles.sendButton, blocked && styles.sendButtonInert]}
             >
-              <Text style={styles.sendText}>↑</Text>
+              <IconSend color={palette.onAccent} size={22} />
             </Pressable>
           ) : (
             // Hold to record, release to send, slide away to cancel. The
@@ -244,7 +281,11 @@ export function ConversationScreen({
                 blocked && styles.sendButtonInert,
               ]}
             >
-              <Text style={styles.sendText}>{recording ? '●' : '🎙'}</Text>
+              {recording ? (
+                <IconStop color={palette.onAccent} size={20} />
+              ) : (
+                <IconMic color={palette.onAccent} size={22} />
+              )}
             </Pressable>
           )}
         </View>
@@ -253,31 +294,61 @@ export function ConversationScreen({
   );
 }
 
-function stateLabel(message: Message, t: { sending: string; sent: string; delivered: string; failed: string }) {
+/**
+ * The ticks.
+ *
+ * One tick left this device, two ticks reached theirs, two accent ticks were
+ * read. Colour is not the only signal — `delivered` and `read` differ in hue,
+ * so the shape carries nothing there, and the accessibility label says which in
+ * words for anyone who cannot see the difference.
+ *
+ * Incoming messages get nothing. A tick beside a message somebody sent *you*
+ * tells you something you already know.
+ */
+function MessageStatus({ message, t }: { message: Message; t: Strings }) {
   if (!message.outgoing) return null;
-  switch (message.state) {
-    case 'pending':
-      return t.sending;
-    case 'sent':
-      return t.sent;
-    case 'delivered':
-      return t.delivered;
-    case 'failed':
-      return t.failed;
-  }
+
+  const label = {
+    pending: t.sending,
+    sent: t.sent,
+    delivered: t.delivered,
+    read: t.read,
+    failed: t.failed,
+  }[message.state];
+
+  const icon = () => {
+    switch (message.state) {
+      case 'pending':
+        return <IconClock color={palette.textFaint} size={13} />;
+      case 'sent':
+        return <IconCheck color={palette.textFaint} size={13} />;
+      case 'delivered':
+        return <IconCheckDouble color={palette.textFaint} size={13} />;
+      case 'read':
+        return <IconCheckDouble color={palette.accent} size={13} />;
+      case 'failed':
+        return <IconAlert color={palette.danger} size={13} />;
+    }
+  };
+
+  return (
+    <View accessibilityRole="image" accessibilityLabel={label} style={styles.bubbleStatus}>
+      {icon()}
+    </View>
+  );
 }
 
 function Bubble({
   message,
   showTail,
   locale,
-  stateLabel: label,
+  t,
   senderName,
 }: {
   message: Message;
   showTail: boolean;
   locale: string;
-  stateLabel: string | null;
+  t: Strings;
   /** Only in a group, where "the other one" is not an answer. */
   senderName?: string;
 }) {
@@ -306,9 +377,7 @@ function Bubble({
           <Text style={[styles.bubbleTime, outgoing && styles.bubbleTimeOut]}>
             {messageTime(message.createdAt, locale)}
           </Text>
-          {label ? (
-            <Text style={[styles.bubbleState, failed && styles.bubbleStateFailed]}>{label}</Text>
-          ) : null}
+          <MessageStatus message={message} t={t} />
         </View>
       </View>
     </View>
@@ -335,6 +404,7 @@ const styles = StyleSheet.create({
   headerName: { ...typography.bodyStrong, color: palette.text },
   headerSub: { ...typography.tiny, color: palette.textFaint },
   headerVerified: { color: palette.success },
+  headerTyping: { color: palette.accent },
 
   bannerWrap: { padding: spacing.lg },
   notice: {
@@ -376,8 +446,7 @@ const styles = StyleSheet.create({
   bubbleMeta: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, alignSelf: 'flex-end' },
   bubbleTime: { ...typography.tiny, color: palette.textFaint },
   bubbleTimeOut: { color: palette.textMuted },
-  bubbleState: { ...typography.tiny, color: palette.textFaint },
-  bubbleStateFailed: { color: palette.danger },
+  bubbleStatus: { justifyContent: 'center' },
 
   composer: {
     flexDirection: 'row',

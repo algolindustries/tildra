@@ -3,6 +3,7 @@ import { FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Avatar, Banner, Button, EmptyState, Field, ScreenTitle } from '../ui/components';
+import { IconPlus, IconUsers } from '../ui/icons';
 import { palette, radius, spacing, typography } from '../ui/theme';
 import { formatAccountId, relativeTime } from '../ui/format';
 import { useApp } from '../state/app';
@@ -86,7 +87,7 @@ export function ChatListScreen({
               onPress={onNewGroup}
               style={styles.newButton}
             >
-              <Text style={styles.newButtonText}>⁂</Text>
+              <IconUsers color={palette.accent} size={20} />
             </Pressable>
             <Pressable
               accessibilityRole="button"
@@ -94,7 +95,7 @@ export function ChatListScreen({
               onPress={() => setAdding(true)}
               style={styles.newButton}
             >
-              <Text style={styles.newButtonText}>+</Text>
+              <IconPlus color={palette.accent} size={22} />
             </Pressable>
             <Pressable
               accessibilityRole="button"

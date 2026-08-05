@@ -91,7 +91,10 @@ export interface Strings {
   sending: string;
   sent: string;
   delivered: string;
+  read: string;
   failed: string;
+  /** Shown in place of the subtitle while the other end is composing. */
+  typing: string;
   today: string;
   yesterday: string;
 
@@ -253,7 +256,9 @@ const en: Strings = {
   sending: 'Sending',
   sent: 'Sent',
   delivered: 'Delivered',
+  read: 'Read',
   failed: 'Not delivered',
+  typing: 'typing…',
   today: 'Today',
   yesterday: 'Yesterday',
 
@@ -421,7 +426,9 @@ const tr: Strings = {
   sending: 'Gönderiliyor',
   sent: 'Gönderildi',
   delivered: 'İletildi',
+  read: 'Okundu',
   failed: 'İletilemedi',
+  typing: 'yazıyor…',
   today: 'Bugün',
   yesterday: 'Dün',
 

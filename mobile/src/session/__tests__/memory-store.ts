@@ -6,7 +6,9 @@
  * and identity changes that stick until acknowledged.
  */
 
-import { Conversation, Message, MessageState, StoredSession } from '../../storage/db';
+import { Conversation, Message, StoredSession } from '../../storage/db';
+// Value import, so it must come from the module that has no native dependency.
+import { MESSAGE_STATE_ORDER, MessageState } from '../../storage/message-state';
 import { ReceiverKeyState, SenderKeyState } from '../../crypto/group';
 import { SessionStore, StoredGroup } from '../manager';
 
@@ -58,6 +60,20 @@ export class MemorySessionStore implements SessionStore {
   async setMessageState(id: string, state: MessageState): Promise<void> {
     const message = this.messages.find((m) => m.id === id);
     if (message) message.state = state;
+  }
+
+  /** Same monotonic rule as the SQLite CASE expression, or this double would
+   *  accept a reordering the real store rejects. */
+  async advanceMessageState(id: string, state: MessageState): Promise<void> {
+    const message = this.messages.find((m) => m.id === id);
+    if (!message) return;
+    if (MESSAGE_STATE_ORDER[message.state] < MESSAGE_STATE_ORDER[state]) message.state = state;
+  }
+
+  async receiptableIncoming(conversationId: string, limit = 256): Promise<Message[]> {
+    return this.messages
+      .filter((m) => m.conversationId === conversationId && !m.outgoing && m.remoteId)
+      .slice(-limit);
   }
 
   async saveSession(s: StoredSession): Promise<void> {

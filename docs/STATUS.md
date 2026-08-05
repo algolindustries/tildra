@@ -72,6 +72,9 @@ tested by running the real Go server and pushing real traffic through it.
 | The recovery phrase pinned to a recorded vector — a fixed phrase and the four values it must keep deriving, plus the same derivation rebuilt from the document's own literals | done |
 | §6's padding buckets parsed out of the document and checked against the code that rounds to them | done |
 | A server address that is not `https` refused unless it is loopback, on the client and the socket both | done |
+| Delivery and read receipts: ticks on the bubble, monotonic in the store, refused for a message we never sent | done |
+| Typing indicators: throttled, expiring on the receiver's clock, and blocked for a contact whose key changed | done |
+| The icon set: SVG rather than emoji, so a disabled button actually dims and the palette is ours | done |
 
 Counts at time of writing: **756 client tests across 33 files**, twelve Go
 packages clean under `-race`, both store implementations passing the same
@@ -87,6 +90,14 @@ own something that matters is to move it out rather than to shrug: `state/errors
 `storage/prekeys.ts` and now `media/playback.ts` all exist because logic that
 could not be tested inside a screen could be tested a file away. If a component
 holds an invariant, that is the signal.
+
+- **Receipts and typing have no off switch.** Both landed on 2026-08-05 and
+  both are on for everyone. `docs/THREAT_MODEL.md` now lists them under what we
+  do not defend against, because the disclosure is to the *contact* rather than
+  to the server: a read receipt says when you opened a conversation and a
+  typing indicator says when you were at the keyboard. Somebody who wants to
+  read a message without saying so cannot. The setting is the obvious next
+  thing to build, and until it exists this row is the honest description.
 
 ## Not done
 
@@ -192,6 +203,18 @@ holds an invariant, that is the signal.
 
 ## Needs a human, not code
 
+- **The repository went private on 2026-08-05.** It had no forks and no stars,
+  so nothing was mirrored outside it. `README.md`, `CONTRIBUTING.md` and
+  `SECURITY.md` were corrected in the same change, because all three described
+  an open project and two of them described a contribution process that had just
+  stopped being open to anyone. The licences are untouched and unaffected —
+  AGPL-3.0 governs distribution, and going private is a decision not to
+  distribute rather than a change of terms for anyone already holding a copy.
+  The organisation's avatar is still the generated default: GitHub's REST API
+  has no endpoint for it, so it has to be uploaded through the web UI, and
+  `mobile/assets/icon.png` is the 1024×1024 to use.
+
+
 - A domain. `tildra.chat` and `tildra.dev` were both free when the name was
   chosen; neither is registered.
 - A server deployment. The app defaults to `https://api.tildra.chat`, which does
@@ -208,6 +231,38 @@ holds an invariant, that is the signal.
   of them. The belief that they needed a toolchain this machine does not have
   was about *compiling* an `.ipa` and an `.aab`, which is a different thing and
   is still not started.
+- **A send is read-modify-write on the ratchet, and nothing enforced that.**
+  Load the session, derive the next message key, save the advanced chain. Every
+  caller happened to `await` its send, so the invariant held by accident for as
+  long as there was nothing that did not — and receipts are deliberately fired
+  rather than awaited, because the user is not waiting for them. Two sends on
+  one chain both derive from the same link and the second `saveSession`
+  discards the first's advance, so two ciphertexts claim the same message
+  number and the peer authenticates neither.
+
+  It surfaced as `message body failed to authenticate` **on the other device**,
+  in a test about delivery, with nothing in the sending device's own state
+  looking wrong. `sendToDevice` now runs through a per-device queue, so the
+  invariant is enforced rather than assumed. The negative control — calling the
+  unlocked body directly — turns the two-store delivery test red.
+
+  The retry inside that body calls the *unlocked* function on purpose: it is
+  already holding the slot, and going back through the queue would wait for a
+  slot that cannot finish until it returns.
+- **Every received message now sends one back.** A receipt is an envelope, so
+  the receive path produces traffic where it used to produce none. That broke a
+  test in a way worth recording rather than just fixing: the self-repair
+  scenario destroys a session and expects the *next* message to be the one that
+  is lost, and a receipt still in flight arrives at the dead session first,
+  triggering the repair early — so the message the test calls lost was
+  delivered. The test now drains the receipts before taking the session away.
+  Anything that adds automatic traffic will meet this again.
+- **A negative control that passes can mean the guard is redundant, or that the
+  test is wrong.** The typing identity-change test passed with the guard
+  deleted, because it flagged the contact with a *random* key and the key
+  comparison threw first. Flagged with the contact's real key — which is the
+  shape STATUS already records, since flagging adopts the new key — the control
+  goes red and the guard is load-bearing. The first version proved nothing.
 - **The store conformance suite fails rather than skips in CI.** If you add a
   method to `store.Store`, add it to the suite too, or Postgres and memory are
   free to drift.

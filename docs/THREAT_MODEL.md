@@ -158,6 +158,28 @@ isn't there:
   would take to get the graph back is a blinded registration and a delivery
   token, neither of which exists. `docs/PROTOCOL.md` §5 and §11 carry the same
   correction; the sending half was fixed there first and this half was left.
+- **Read receipts, and typing indicators, telling a contact about you.** Both
+  are new, both are on, and neither is a protocol weakness — the server sees a
+  sealed envelope like any other. What they cost is disclosure *to the person
+  you are talking to*, which is a real cost and one the user did not opt into:
+  a read receipt says when you opened the conversation, and a typing indicator
+  says when you were at the keyboard and when you stopped. Someone who wants to
+  read a message without saying so cannot, and there is no setting to turn
+  either off. That setting is the obvious next thing to build.
+
+  There is a second cost, to the operator rather than the contact. Both are
+  envelopes, so both are traffic the server can count and time. A receipt is
+  bounded — one per message received, one batch per conversation opened — but
+  an unthrottled typing indicator would be a *keystroke-rate* signal, which is
+  a far better fingerprint than message timing. It is capped at one signal per
+  five seconds of continuous composing for that reason, and the cap is a
+  privacy budget rather than a UI preference. What survives the cap is still
+  real: the server learns that two accounts exchanged small envelopes shortly
+  before a message, which is one more correlation than it had.
+
+  Groups get neither, and that is deliberate: a group read receipt tells every
+  member when each of the others opened it, and §4's fanout makes it one
+  envelope per member per open.
 - **A certificate authority the platform trusts.** There is no certificate
   pinning, so an adversary with a trusted certificate reads the transport —
   not the messages, which are sealed underneath it, but the token and the

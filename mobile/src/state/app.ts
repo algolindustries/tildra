@@ -112,6 +112,16 @@ export interface AppState {
   conversations: (Conversation & { id: string })[];
   activeAccountId: string | null;
   messages: Message[];
+  /**
+   * Account id → the moment its composing signal stops meaning anything.
+   *
+   * An expiry rather than a boolean, because "stopped typing" is a message
+   * that may never arrive: the peer can lose the network, background the app
+   * or close it mid-word, and a flag set by the last packet to get through
+   * would leave "typing…" on screen forever. Readers compare against the
+   * clock; nothing has to fire for it to lapse.
+   */
+  typingUntil: Map<string, number>;
   safetyNumber: string | null;
   safetyQr: string | null;
 
@@ -163,8 +173,18 @@ export interface AppState {
   confirmLink: () => Promise<void>;
   cancelLinking: () => void;
   openConversation: (accountId: string) => Promise<void>;
+  /** Repaint the open thread from the database — see the implementation. */
+  refreshMessages: () => Promise<void>;
   closeConversation: () => void;
   send: (text: string) => Promise<void>;
+  /**
+   * The composer changed. Throttled, and a no-op for groups.
+   *
+   * Takes the draft rather than a boolean so the decision of what counts as
+   * composing lives in one place: an empty box is not typing, and clearing it
+   * says so immediately rather than letting the indicator time out.
+   */
+  notifyTyping: (draft: string) => void;
   sendPhoto: () => Promise<void>;
   startVoice: () => Promise<void>;
   finishVoice: (send: boolean) => Promise<void>;
@@ -279,6 +299,32 @@ let activeCall: CallDriver | null = null;
 let activePeer: WebRtcPeer | null = null;
 
 /**
+ * How long a received "typing" means anything, and how rarely one is sent.
+ *
+ * These are a privacy budget, not a UI preference. Every signal is an envelope
+ * the server counts, so an unthrottled indicator would turn a keystroke stream
+ * into a traffic pattern that describes how fast somebody types and when they
+ * paused. One envelope per five seconds of continuous composing is enough for
+ * the indicator to feel live and coarse enough that the pattern says little.
+ *
+ * The expiry is deliberately longer than the throttle: at exactly the throttle
+ * interval the indicator would flicker between refreshes on any latency at all.
+ */
+export const TYPING_THROTTLE_MS = 5_000;
+export const TYPING_EXPIRY_MS = 8_000;
+
+/** Whom we last told we were composing, so it can be taken back. */
+let typingActiveFor: string | null = null;
+let typingThrottledUntil = 0;
+
+function stopTyping(accountId: string): void {
+  typingThrottledUntil = 0;
+  if (typingActiveFor !== accountId) return;
+  typingActiveFor = null;
+  void runtime?.manager.sendTyping(accountId, false).catch(() => undefined);
+}
+
+/**
  * How the driver reaches the media stack.
  *
  * `react-native-webrtc` is imported lazily so that touching a native module
@@ -327,6 +373,7 @@ export const useApp = create<AppState>((set, get) => ({
   conversations: [],
   activeAccountId: null,
   messages: [],
+  typingUntil: new Map(),
   safetyNumber: null,
   safetyQr: null,
   pendingLink: null,
@@ -465,12 +512,46 @@ export const useApp = create<AppState>((set, get) => ({
     set({ conversations: await runtime.db.listConversations() });
   },
 
+  /**
+   * Re-read the open conversation's messages and nothing else.
+   *
+   * `openConversation` is the wrong tool for a receipt: it derives the safety
+   * number and its QR, loads the group list, and marks the thread read, none of
+   * which a tick changes. Worse, it writes all of that in one `set` at the end,
+   * so two overlapping calls can finish out of order and the later-resolving
+   * *older* one wins — with a receipt arriving per message per device, that
+   * stopped being theoretical and left the message list a version behind until
+   * something else happened to refresh it.
+   */
+  async refreshMessages() {
+    const accountId = get().activeAccountId;
+    if (!runtime?.db || !accountId) return;
+    const conversation = await runtime.db.getConversation(accountId);
+    if (!conversation) return;
+    // Still guarded: the active conversation can change while this awaits.
+    if (get().activeAccountId !== accountId) return;
+    set({ messages: await runtime.db.listMessages(conversation.id) });
+  },
+
   async openConversation(accountId) {
     if (!runtime?.db || !runtime.manager) return;
     const conversation = await runtime.db.getConversation(accountId);
     if (!conversation) return;
 
     await runtime.db.markRead(conversation.id);
+    // Opening a conversation is what "read" means, so this is where the
+    // receipt goes out. Fired rather than awaited: the screen must open at
+    // the speed of the local database, not at the speed of the network, and a
+    // receipt that cannot be sent is not a reason to fail to show messages
+    // that are already on this device.
+    //
+    // Groups are excluded. A read receipt in a group tells every member when
+    // each of the others opened it, which is a different and much larger
+    // disclosure than the pairwise one, and §4's fanout would make it N
+    // envelopes per open.
+    if (!groupIdFromConversationKey(accountId)) {
+      void runtime.manager.sendReadReceipts(accountId).catch(() => undefined);
+    }
     // A group has no single other end, so there is no safety number to show.
     // Leaving a stale one on screen would be worse than none.
     const group = groupIdFromConversationKey(accountId);
@@ -485,12 +566,41 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   closeConversation() {
+    // Leaving the screen stops composing, whatever is left in the box. Without
+    // this the peer keeps "typing…" until it expires, which is the app telling
+    // them something that is no longer true.
+    const accountId = get().activeAccountId;
+    if (accountId) stopTyping(accountId);
     set({ activeAccountId: null, messages: [], safetyNumber: null, safetyQr: null, activeGroup: null });
+  },
+
+  notifyTyping(draft) {
+    const accountId = get().activeAccountId;
+    if (!runtime?.manager || !accountId) return;
+    // Groups do not get one. It would be one envelope per member per
+    // keystroke burst, and it tells everybody in the room who is drafting.
+    if (groupIdFromConversationKey(accountId)) return;
+
+    if (!draft.trim()) {
+      stopTyping(accountId);
+      return;
+    }
+
+    const now = Date.now();
+    if (now < typingThrottledUntil) return;
+    typingThrottledUntil = now + TYPING_THROTTLE_MS;
+    typingActiveFor = accountId;
+    void runtime.manager.sendTyping(accountId, true).catch(() => undefined);
   },
 
   async send(text) {
     const accountId = get().activeAccountId;
     if (!runtime?.manager || !accountId || !text.trim()) return;
+
+    // The message itself says composing is over. Sending "stopped" as well
+    // would be a second envelope carrying no information the first does not.
+    typingActiveFor = null;
+    typingThrottledUntil = 0;
 
     try {
       // A group is a conversation whose account id says so, which is what
@@ -1095,6 +1205,18 @@ async function startSession(
       },
       onIdentityChange: () => {
         void get().refreshConversations();
+      },
+      onReceipt: (accountId) => {
+        // Only the open conversation is re-read, and only its messages. A
+        // receipt for a chat nobody is looking at has already been applied to
+        // the database, and reloading it would be work with nothing to show.
+        if (get().activeAccountId === accountId) void get().refreshMessages();
+      },
+      onTyping: (accountId, typing) => {
+        const next = new Map(get().typingUntil);
+        if (typing) next.set(accountId, Date.now() + TYPING_EXPIRY_MS);
+        else next.delete(accountId);
+        set({ typingUntil: next });
       },
       onIncomingCall: (call, offerSdp) => {
         // The offer's fingerprint was verified against the caller's identity
