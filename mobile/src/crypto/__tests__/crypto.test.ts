@@ -525,8 +525,16 @@ describe('mailboxes', () => {
     expect(published).toContain(deliveryMailbox(secret, at));
     // A sender whose clock is two seconds fast targets tomorrow's mailbox,
     // which must already be registered.
-    const skewed = new Date('2026-03-16T00:00:00Z');
-    expect(published).toContain(deliveryMailbox(secret, skewed));
+    const fast = new Date('2026-03-16T00:00:00Z');
+    expect(published).toContain(deliveryMailbox(secret, fast));
+
+    // And the other direction, which the set's length implied rather than
+    // stated: a recipient whose clock has just ticked over is still listening
+    // on the day a slow sender is addressing. Skew has two signs and only one
+    // of them was written down.
+    const justAfterMidnight = currentMailboxes(secret, new Date('2026-03-16T00:00:02Z'));
+    const slow = new Date('2026-03-15T23:59:58Z');
+    expect(justAfterMidnight).toContain(deliveryMailbox(secret, slow));
   });
 
   it('computes the day number in UTC', () => {

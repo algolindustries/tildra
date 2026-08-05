@@ -1116,6 +1116,9 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async signOut() {
+    // Before the network calls below, so a slow or hanging logout cannot let
+    // the interval fire once more against a session being torn down.
+    stopAuditorChecks();
     // Order matters: revoke the token first, then destroy the keys. Doing it
     // the other way round leaves a live session nobody can revoke.
     // Unconditional, and not guarded on the client: this also dismisses the
@@ -1367,11 +1370,31 @@ async function startSession(
 let auditorTimer: ReturnType<typeof setInterval> | null = null;
 
 function startAuditorChecks(get: () => AppState): void {
-  if (auditorTimer) clearInterval(auditorTimer);
+  stopAuditorChecks();
   void get().checkAuditors().catch(() => undefined);
   auditorTimer = setInterval(() => {
     void get().checkAuditors().catch(() => undefined);
   }, AUDITOR_CHECK_INTERVAL_MS);
+}
+
+/**
+ * Stop the interval a session started.
+ *
+ * Today this is hygiene and not a leak: signing out sets `runtime` to null and
+ * `checkAuditors` returns on that, so the timer wakes up to do nothing and a
+ * later sign-in replaces it rather than adding a second. It is cleared anyway,
+ * because "the callback happens to be a no-op" is a property of the callback
+ * rather than of the timer, and the next person to give it work would inherit
+ * a signed-out app making requests on a six-hour interval.
+ */
+function stopAuditorChecks(): void {
+  if (auditorTimer) clearInterval(auditorTimer);
+  auditorTimer = null;
+}
+
+/** Test-only view of the timer, so "it was cleared" is observable. */
+export function auditorChecksRunning(): boolean {
+  return auditorTimer !== null;
 }
 
 /**

@@ -469,6 +469,20 @@ describeOnline('a device with no network', () => {
     expect(useApp.getState().displayName).toBe('Ayşe');
   });
 
+  it('stops the auditor interval when the account is signed out', async () => {
+    // A timer that outlives the session it belongs to. It is a no-op today —
+    // `checkAuditors` returns on a null runtime — but that is a property of
+    // the callback, and the next person to give it work would inherit a
+    // signed-out app waking up every six hours.
+    const app = await boot(newDevice('auditor-timer'));
+    await app.useApp.getState().bootstrap({ serverUrl: BASE_URL });
+    await app.useApp.getState().createAccount('Phone', 'Ayşe');
+    expect(app.auditorChecksRunning()).toBe(true);
+
+    await app.useApp.getState().signOut();
+    expect(app.auditorChecksRunning()).toBe(false);
+  }, 90_000);
+
   it('says it is not reachable rather than pretending it is', async () => {
     // Starting anyway is right. Doing it silently is not: until the addresses
     // are registered nobody can send to this device, and the user is the only
