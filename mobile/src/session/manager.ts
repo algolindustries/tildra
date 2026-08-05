@@ -139,7 +139,7 @@ export interface SessionStore {
   flagIdentityChange(accountId: string, newIdentityKey: Uint8Array): Promise<void>;
   insertMessage(m: Message): Promise<void>;
   setMessageState(id: string, state: MessageState): Promise<void>;
-  advanceMessageState(id: string, state: MessageState): Promise<void>;
+  advanceMessageState(id: string, state: MessageState, conversationId: string): Promise<void>;
   receiptableIncoming(conversationId: string, limit?: number): Promise<Message[]>;
   saveSession(s: StoredSession): Promise<void>;
   loadSession(accountId: string, deviceId: string): Promise<StoredSession | null>;
@@ -1127,19 +1127,26 @@ export class SessionManager {
    *
    * The ids in a receipt are ones this device chose, so they key the store
    * directly — but they arrived over the network, so they are somebody else's
-   * claim about our database. `advanceMessageState` is what keeps that claim
-   * from doing damage: it can only move a message forward, and it matches on
-   * id, so a peer naming a message they were never sent updates nothing.
+   * claim about our database. Two things bound it: `advanceMessageState` can
+   * only move a message forward, and it is scoped to the conversation this
+   * receipt arrived over, so a contact cannot mark a message sent to somebody
+   * else. The ids being unguessable made that unlikely; it did not make it
+   * false.
    */
   private async acceptReceipt(accountId: string, payload: Uint8Array): Promise<void> {
     const receipt = decodeReceipt(payload);
+    // The conversation the receipt arrived from. Without it the ids are the
+    // only thing standing between a contact and a message sent to somebody
+    // else, and unguessable is not the same as checked.
+    const conversation = await this.store.getConversation(accountId);
+    if (!conversation) return;
     // The reciprocal half. A device that does not send "read" does not show
     // it either — see `PrivacySettings`. `delivered` is unaffected, because it
     // is not a claim about anybody's attention.
     if (receipt.kind === 'read' && !(await this.getPrivacy()).readReceipts) return;
 
     for (const id of receipt.messageIds) {
-      await this.store.advanceMessageState(id, receipt.kind);
+      await this.store.advanceMessageState(id, receipt.kind, conversation.id);
     }
     this.events.onReceipt?.(accountId, receipt.kind, receipt.messageIds);
   }
@@ -1188,7 +1195,9 @@ export class SessionManager {
     // conversation which is read locally rather than one that re-announces the
     // same batch every time it is opened.
     for (const message of incoming) {
-      if (message.state !== 'read') await this.store.advanceMessageState(message.id, 'read');
+      if (message.state !== 'read') {
+        await this.store.advanceMessageState(message.id, 'read', conversation.id);
+      }
     }
     await this.sendReceipt(accountId, 'read', ids);
   }

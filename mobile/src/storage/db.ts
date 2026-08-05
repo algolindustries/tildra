@@ -447,16 +447,29 @@ export class Database {
    * `failed` is the exception and is applied unconditionally by the send path:
    * it is this device's own observation that nothing went out, not a claim
    * from the other end.
+   *
+   * **Scoped to the conversation the receipt came from.** The ids are
+   * unguessable — sixteen random bytes — so a contact naming a message sent to
+   * somebody else is not a practical attack, and that is a property of the
+   * identifier rather than of any check. Matching on the conversation as well
+   * makes it a property of the code: ownership comes from the store, never
+   * from the sender's claim, which is the same rule the server's hub applies
+   * to a mailbox ack.
    */
-  async advanceMessageState(id: string, state: MessageState): Promise<void> {
+  async advanceMessageState(
+    id: string,
+    state: MessageState,
+    conversationId: string,
+  ): Promise<void> {
     await this.db.runAsync(
       `UPDATE messages SET state = ?
         WHERE id = ?
+          AND conversation_id = ?
           AND CASE state
                 WHEN 'failed' THEN -1 WHEN 'pending' THEN 0 WHEN 'sent' THEN 1
                 WHEN 'delivered' THEN 2 WHEN 'read' THEN 3 ELSE 0
               END < ?`,
-      [state, id, MESSAGE_STATE_ORDER[state]],
+      [state, id, conversationId, MESSAGE_STATE_ORDER[state]],
     );
   }
 

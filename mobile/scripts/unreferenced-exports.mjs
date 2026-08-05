@@ -35,6 +35,10 @@ const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const ALLOWED = new Map([
   ['currentRuntime', 'a debugging escape hatch, deliberately not reachable from any screen'],
   [
+    'auditorChecksRunning',
+    'the auditor interval has no other observable state; without it "signOut cleared it" can only be argued, not asserted',
+  ],
+  [
     'createWebRtcPeer',
     'reached through a dynamic import in state/app.ts, so that only calls need a dev build',
   ],

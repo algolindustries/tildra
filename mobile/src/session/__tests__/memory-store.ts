@@ -64,8 +64,12 @@ export class MemorySessionStore implements SessionStore {
 
   /** Same monotonic rule as the SQLite CASE expression, or this double would
    *  accept a reordering the real store rejects. */
-  async advanceMessageState(id: string, state: MessageState): Promise<void> {
-    const message = this.messages.find((m) => m.id === id);
+  async advanceMessageState(
+    id: string,
+    state: MessageState,
+    conversationId: string,
+  ): Promise<void> {
+    const message = this.messages.find((m) => m.id === id && m.conversationId === conversationId);
     if (!message) return;
     if (MESSAGE_STATE_ORDER[message.state] < MESSAGE_STATE_ORDER[state]) message.state = state;
   }

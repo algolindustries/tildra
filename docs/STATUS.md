@@ -225,6 +225,20 @@ holds an invariant, that is the signal.
   of them. The belief that they needed a toolchain this machine does not have
   was about *compiling* an `.ipa` and an `.aab`, which is a different thing and
   is still not started.
+- **A receipt was applied by id alone, and the comment said that was fine.**
+  Written the same day as the receipts themselves, and caught by re-reading my
+  own code rather than by a test: `acceptReceipt` looked the message up by the
+  id in the receipt and nothing checked that the message belonged to the
+  conversation the receipt arrived over. The comment above it said "a peer
+  naming a message they were never sent updates nothing", which is true only
+  because the ids are sixteen random bytes — a property of the identifier, not
+  a check.
+
+  Scoped to the conversation now, which is the rule the server's hub already
+  states for a mailbox ack: ownership comes from the store, never from the
+  sender's claim. The test asserts both halves — the other conversation cannot
+  advance it, and the right one still can, or the fix would be a way to break
+  receipts rather than to scope them.
 - **The `meta` table named every contact in the clear.** `db.ts` opens by
   claiming that every column which would tell a reader who this device talks to
   is encrypted, and `meta` was neither encrypted nor thought about:

@@ -390,19 +390,19 @@ describe('messages', () => {
 
   it('advances a message state but never rewinds it', async () => {
     await send({ id: 'm2', state: 'sent' });
-    await db.advanceMessageState('m2', 'delivered');
+    await db.advanceMessageState('m2', 'delivered', id);
     expect((await db.listMessages(id))[0].state).toBe('delivered');
 
-    await db.advanceMessageState('m2', 'read');
+    await db.advanceMessageState('m2', 'read', id);
     expect((await db.listMessages(id))[0].state).toBe('read');
 
     // The one that matters. Receipts cross the network independently, so a
     // `delivered` can land after the `read` it precedes — and taking it would
     // flip a message that has been read back to two grey ticks, which reads to
     // the user as the network having lost something.
-    await db.advanceMessageState('m2', 'delivered');
+    await db.advanceMessageState('m2', 'delivered', id);
     expect((await db.listMessages(id))[0].state).toBe('read');
-    await db.advanceMessageState('m2', 'sent');
+    await db.advanceMessageState('m2', 'sent', id);
     expect((await db.listMessages(id))[0].state).toBe('read');
   });
 
@@ -411,7 +411,7 @@ describe('messages', () => {
     // claim from the other end. A peer that could assert it would be able to
     // tell somebody their sent messages had not gone anywhere.
     await send({ id: 'm3', state: 'delivered' });
-    await db.advanceMessageState('m3', 'failed');
+    await db.advanceMessageState('m3', 'failed', id);
     expect((await db.listMessages(id))[0].state).toBe('delivered');
   });
 
@@ -420,10 +420,30 @@ describe('messages', () => {
     // claim about this database. Naming a message that was never sent to them,
     // or never existed, has to change nothing rather than create anything.
     await send({ id: 'm4', state: 'sent' });
-    await db.advanceMessageState('bilinmeyen', 'read');
+    await db.advanceMessageState('bilinmeyen', 'read', id);
     const messages = await db.listMessages(id);
     expect(messages).toHaveLength(1);
     expect(messages[0].state).toBe('sent');
+  });
+
+  it('will not let one conversation acknowledge another conversation\'s message', async () => {
+    // The ids are sixteen random bytes, so a contact naming a message sent to
+    // somebody else is not a practical attack — and that is a property of the
+    // identifier, not a check. Ownership comes from the store, never from the
+    // sender's claim, which is the rule the server's hub already applies to a
+    // mailbox ack.
+    const other = await db.upsertConversation(
+      contact({ accountId: 'OTHER456789ABCDEFGHJKMNPQR', handle: 'baris' }),
+    );
+    await send({ id: 'mine', state: 'sent' });
+
+    await db.advanceMessageState('mine', 'read', other);
+    expect((await db.listMessages(id))[0].state).toBe('sent');
+
+    // And the real conversation still can, or the check would be a way to
+    // break receipts rather than to scope them.
+    await db.advanceMessageState('mine', 'read', id);
+    expect((await db.listMessages(id))[0].state).toBe('read');
   });
 
   it('keeps the sender id of an incoming message so it can be acknowledged', async () => {
