@@ -11,7 +11,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/model"
+	"github.com/algolindustries/tildra/server/internal/model"
 )
 
 var (

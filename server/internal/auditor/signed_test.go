@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/auditor"
-	"github.com/tildra/tildra/server/internal/transparency"
+	"github.com/algolindustries/tildra/server/internal/auditor"
+	"github.com/algolindustries/tildra/server/internal/transparency"
 )
 
 func testCheckpoint() auditor.Checkpoint {

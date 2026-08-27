@@ -18,16 +18,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/algolindustries/tildra/server/internal/auth"
+	"github.com/algolindustries/tildra/server/internal/config"
+	"github.com/algolindustries/tildra/server/internal/gateway"
+	"github.com/algolindustries/tildra/server/internal/id"
+	"github.com/algolindustries/tildra/server/internal/model"
+	"github.com/algolindustries/tildra/server/internal/push"
+	"github.com/algolindustries/tildra/server/internal/store"
+	"github.com/algolindustries/tildra/server/internal/transparency"
+	"github.com/algolindustries/tildra/server/internal/turn"
 	"github.com/coder/websocket"
-	"github.com/tildra/tildra/server/internal/auth"
-	"github.com/tildra/tildra/server/internal/config"
-	"github.com/tildra/tildra/server/internal/gateway"
-	"github.com/tildra/tildra/server/internal/id"
-	"github.com/tildra/tildra/server/internal/model"
-	"github.com/tildra/tildra/server/internal/push"
-	"github.com/tildra/tildra/server/internal/store"
-	"github.com/tildra/tildra/server/internal/transparency"
-	"github.com/tildra/tildra/server/internal/turn"
 )
 
 // Server wires the store, authenticator, hub, notifier and transparency log

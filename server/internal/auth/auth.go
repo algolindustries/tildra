@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/id"
-	"github.com/tildra/tildra/server/internal/store"
+	"github.com/algolindustries/tildra/server/internal/id"
+	"github.com/algolindustries/tildra/server/internal/store"
 )
 
 var (

@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/algolindustries/tildra/server/internal/model"
+	"github.com/algolindustries/tildra/server/internal/store"
 	"github.com/coder/websocket"
-	"github.com/tildra/tildra/server/internal/model"
-	"github.com/tildra/tildra/server/internal/store"
 )
 
 // Hub tracks which live connections are listening to which mailboxes.

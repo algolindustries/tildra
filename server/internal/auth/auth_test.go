@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/auth"
-	"github.com/tildra/tildra/server/internal/model"
-	"github.com/tildra/tildra/server/internal/store/memory"
+	"github.com/algolindustries/tildra/server/internal/auth"
+	"github.com/algolindustries/tildra/server/internal/model"
+	"github.com/algolindustries/tildra/server/internal/store/memory"
 )
 
 // The authentication package, which had no tests of its own.

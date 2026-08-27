@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/auditor"
-	"github.com/tildra/tildra/server/internal/transparency"
+	"github.com/algolindustries/tildra/server/internal/auditor"
+	"github.com/algolindustries/tildra/server/internal/transparency"
 )
 
 // fakeLog is a log the test can manipulate, including in ways an honest server

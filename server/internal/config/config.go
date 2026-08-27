@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/turn"
+	"github.com/algolindustries/tildra/server/internal/turn"
 )
 
 type Config struct {

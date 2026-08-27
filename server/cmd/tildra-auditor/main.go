@@ -37,7 +37,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/auditor"
+	"github.com/algolindustries/tildra/server/internal/auditor"
 )
 
 func main() {

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/model"
-	"github.com/tildra/tildra/server/internal/push"
+	"github.com/algolindustries/tildra/server/internal/model"
+	"github.com/algolindustries/tildra/server/internal/push"
 )
 
 // token carries the identifiers a careless payload would leak. None of them

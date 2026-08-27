@@ -7,7 +7,7 @@
 End-to-end encrypted by default — every chat, every group.
 Post-quantum key agreement. No phone number. Fully self-hostable server.
 
-[![CI](https://github.com/tildra/tildra/actions/workflows/ci.yml/badge.svg)](https://github.com/tildra/tildra/actions/workflows/ci.yml)
+[![CI](https://github.com/algolindustries/tildra/actions/workflows/ci.yml/badge.svg)](https://github.com/algolindustries/tildra/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Go 1.25](https://img.shields.io/badge/go-1.25-00ADD8.svg?logo=go&logoColor=white)](server/go.mod)
 [![React Native](https://img.shields.io/badge/react%20native-Expo%20SDK%2057-000020.svg?logo=expo&logoColor=white)](mobile/package.json)

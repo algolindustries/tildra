@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/transparency"
+	"github.com/algolindustries/tildra/server/internal/transparency"
 )
 
 // HTTPSource reads a live server's transparency endpoints.

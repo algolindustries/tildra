@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/tildra/tildra/server/internal/store"
+	"github.com/algolindustries/tildra/server/internal/store"
 )
 
 // The rule this file exists to enforce is already written down, in

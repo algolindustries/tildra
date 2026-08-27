@@ -5,7 +5,7 @@
 Please **do not** open a public issue for a security bug.
 
 Use GitHub's private reporting: **Security → Report a vulnerability** on
-[github.com/tildra/tildra](https://github.com/tildra/tildra/security/advisories/new).
+[github.com/algolindustries/tildra](https://github.com/algolindustries/tildra/security/advisories/new).
 
 The repository has been private since 2026-08-05, so that form is reachable only
 with access to it. Nothing else here changes: the scope below, the bar for what

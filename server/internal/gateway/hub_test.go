@@ -13,9 +13,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/tildra/tildra/server/internal/gateway"
-	"github.com/tildra/tildra/server/internal/model"
-	"github.com/tildra/tildra/server/internal/store/memory"
+	"github.com/algolindustries/tildra/server/internal/gateway"
+	"github.com/algolindustries/tildra/server/internal/model"
+	"github.com/algolindustries/tildra/server/internal/store/memory"
 )
 
 // The real-time delivery layer, which had no tests of its own — only whatever

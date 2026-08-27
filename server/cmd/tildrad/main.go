@@ -18,16 +18,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/api"
-	"github.com/tildra/tildra/server/internal/auth"
-	"github.com/tildra/tildra/server/internal/config"
-	"github.com/tildra/tildra/server/internal/gateway"
-	"github.com/tildra/tildra/server/internal/model"
-	"github.com/tildra/tildra/server/internal/push"
-	"github.com/tildra/tildra/server/internal/store"
-	"github.com/tildra/tildra/server/internal/store/memory"
-	"github.com/tildra/tildra/server/internal/store/postgres"
-	"github.com/tildra/tildra/server/internal/transparency"
+	"github.com/algolindustries/tildra/server/internal/api"
+	"github.com/algolindustries/tildra/server/internal/auth"
+	"github.com/algolindustries/tildra/server/internal/config"
+	"github.com/algolindustries/tildra/server/internal/gateway"
+	"github.com/algolindustries/tildra/server/internal/model"
+	"github.com/algolindustries/tildra/server/internal/push"
+	"github.com/algolindustries/tildra/server/internal/store"
+	"github.com/algolindustries/tildra/server/internal/store/memory"
+	"github.com/algolindustries/tildra/server/internal/store/postgres"
+	"github.com/algolindustries/tildra/server/internal/transparency"
 )
 
 func main() {

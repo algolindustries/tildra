@@ -3,9 +3,9 @@ package memory_test
 import (
 	"testing"
 
-	"github.com/tildra/tildra/server/internal/store"
-	"github.com/tildra/tildra/server/internal/store/memory"
-	"github.com/tildra/tildra/server/internal/store/storetest"
+	"github.com/algolindustries/tildra/server/internal/store"
+	"github.com/algolindustries/tildra/server/internal/store/memory"
+	"github.com/algolindustries/tildra/server/internal/store/storetest"
 )
 
 func TestConformance(t *testing.T) {

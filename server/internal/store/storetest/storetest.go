@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/model"
-	"github.com/tildra/tildra/server/internal/store"
+	"github.com/algolindustries/tildra/server/internal/model"
+	"github.com/algolindustries/tildra/server/internal/store"
 )
 
 // Factory builds a fresh, empty store for one test.

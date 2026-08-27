@@ -10,9 +10,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/tildra/tildra/server/internal/store"
-	"github.com/tildra/tildra/server/internal/store/postgres"
-	"github.com/tildra/tildra/server/internal/store/storetest"
+	"github.com/algolindustries/tildra/server/internal/store"
+	"github.com/algolindustries/tildra/server/internal/store/postgres"
+	"github.com/algolindustries/tildra/server/internal/store/storetest"
 )
 
 // TestConformance runs the same suite as the in-memory store.

@@ -23,7 +23,7 @@ number of people makes that more likely to happen again, not less.
 ## Getting set up
 
 ```bash
-git clone https://github.com/tildra/tildra
+git clone https://github.com/algolindustries/tildra
 cd tildra
 
 # Server

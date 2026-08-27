@@ -27,7 +27,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/transparency"
+	"github.com/algolindustries/tildra/server/internal/transparency"
 )
 
 // Finding is something the auditor wants a human to look at.

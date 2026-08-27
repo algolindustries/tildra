@@ -1,4 +1,4 @@
-module github.com/tildra/tildra/server
+module github.com/algolindustries/tildra/server
 
 go 1.25.0
 

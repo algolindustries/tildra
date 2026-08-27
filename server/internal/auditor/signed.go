@@ -30,7 +30,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/transparency"
+	"github.com/algolindustries/tildra/server/internal/transparency"
 )
 
 // CheckpointContext domain-separates the signature. A signature made over an

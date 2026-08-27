@@ -83,7 +83,7 @@ check "ios NSPhotoLibraryUsageDescription" "$INFO_PLIST" "NSPhotoLibraryUsageDes
 
 # A placeholder identifier means two people generating from the same source
 # get different apps.
-check "ios bundle identifier" "$COPY/app.json" "chat.tildra.app"
+check "ios bundle identifier" "$COPY/app.json" "com.algolindustries.tildra"
 if grep -q "com.anonymous" "$COPY/app.json"; then
   echo "MISSING   the bundle identifier is still a generated placeholder"
   status=1

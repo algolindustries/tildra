@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/model"
+	"github.com/algolindustries/tildra/server/internal/model"
 )
 
 // Notifier delivers a content-free wake signal to one device.

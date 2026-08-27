@@ -19,8 +19,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/tildra/tildra/server/internal/model"
-	"github.com/tildra/tildra/server/internal/store"
+	"github.com/algolindustries/tildra/server/internal/model"
+	"github.com/algolindustries/tildra/server/internal/store"
 )
 
 //go:embed migrations/*.sql

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/config"
+	"github.com/algolindustries/tildra/server/internal/config"
 )
 
 // Configuration loading, which had no tests.

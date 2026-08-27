@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tildra/tildra/server/internal/model"
-	"github.com/tildra/tildra/server/internal/store"
-	"github.com/tildra/tildra/server/internal/store/memory"
-	"github.com/tildra/tildra/server/internal/transparency"
+	"github.com/algolindustries/tildra/server/internal/model"
+	"github.com/algolindustries/tildra/server/internal/store"
+	"github.com/algolindustries/tildra/server/internal/store/memory"
+	"github.com/algolindustries/tildra/server/internal/transparency"
 )
 
 // logStorage adapts the production Store to the log's narrow storage
